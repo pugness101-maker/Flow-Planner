@@ -426,6 +426,65 @@ input {
   background: #f7f7f7;
 }
 
+.block-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 7px;
+  border-radius: 20px;
+  margin-bottom: 4px;
+}
+
+.block-tag-routine {
+  background: #e8f0fe;
+  color: #1a56db;
+}
+
+.block-tag-social {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.block-type-routine {
+  border-left: 3px solid #1a56db;
+  padding-left: 9px;
+}
+
+.block-type-social {
+  border-left: 3px solid #16a34a;
+  padding-left: 9px;
+}
+
+.block-type-task {
+  border-left: 3px solid #d1d5db;
+  padding-left: 9px;
+}
+
+.free-slots-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
+
+.slot-chip {
+  padding: 5px 10px;
+  font-size: 12px;
+  background: #f0f7ff;
+  border: 1px solid #93c5fd;
+  color: #1d4ed8;
+  border-radius: 20px;
+  margin-top: 0;
+  width: auto;
+}
+
+.slot-chip:hover {
+  background: #dbeafe;
+}
+
 .timeline-block {
   padding: 12px 0;
   border-bottom: 1px solid #eee;

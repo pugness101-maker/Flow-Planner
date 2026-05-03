@@ -115,6 +115,7 @@ scheduleData.blocks.forEach(block => {
   if (typeof block.completed !== "boolean") block.completed = false;
   if (!Array.isArray(block.tasks)) block.tasks = [];
   block.tasks = block.tasks.map(normalizeTask);
+  if (!block.type) block.type = block.routineId ? "routine" : "task";
 });
 
 scheduleData.routines.forEach(routine => {
@@ -410,7 +411,8 @@ const pages = {
         </button>
         <div class="${hangoutFormOpen ? "" : "hidden"}">
           <input id="hangoutActivity" placeholder="Activity">
-          <input id="hangoutDate" type="date">
+          <input id="hangoutDate" type="date" onchange="renderHangoutFreeSlots()">
+          <div id="hangoutFreeSlots"></div>
           <input id="hangoutTime" type="time">
           <input id="hangoutLocation" placeholder="Place/location">
           <input id="hangoutFriendSearch" placeholder="Search friends to pick" oninput="populateHangoutPeopleSelect()">
@@ -593,6 +595,7 @@ function addTimeBlock() {
     end,
     category,
     notes,
+    type: "task",
     completed: false,
     tasks: []
   });
@@ -642,8 +645,9 @@ function renderTimeBlocks() {
 
   box.innerHTML = blocks.length
     ? blocks.map(({ block, index }) => `
-      <div class="timeline-block draggable-plan" draggable="true" data-index="${index}">
+      <div class="timeline-block draggable-plan block-type-${block.type || "task"}" draggable="true" data-index="${index}">
         <strong>${escapeHTML(block.start)} - ${escapeHTML(block.end)} | ${escapeHTML(block.title)}</strong>
+        ${block.type && block.type !== "task" ? `<span class="block-tag block-tag-${block.type}">${block.type}</span>` : ""}
         <p>${escapeHTML(block.category)}</p>
         <p>${escapeHTML(block.notes || "")}</p>
 
@@ -955,10 +959,38 @@ function saveRoutine() {
   }
 
   editingRoutineIndex = null;
+  autoInsertRoutineBlocks(routine);
   saveScheduleData();
   activePlannerSection = "Routines";
   main.innerHTML = getPageHTML("Planner");
   renderPlanner();
+}
+
+function autoInsertRoutineBlocks(routine) {
+  const today = getTodayISO();
+  for (let offset = 0; offset < 7; offset++) {
+    const date = getDateOffset(today, offset);
+    const dayIndex = new Date(date + "T00:00:00").getDay();
+    if (!routine.repeatDays.includes(dayIndex)) continue;
+    const alreadyAdded = scheduleData.blocks.some(b =>
+      b.date === date && b.routineId === routine.id
+    );
+    if (alreadyAdded) continue;
+    const times = getRoutineTimeForDay(routine, dayIndex);
+    scheduleData.blocks.push({
+      id: createId("block"),
+      routineId: routine.id,
+      title: routine.name,
+      date,
+      start: times.start,
+      end: times.end,
+      category: routine.type,
+      notes: routine.notes || "",
+      type: "routine",
+      completed: false,
+      tasks: routine.tasks.map(task => ({ text: task, completed: false }))
+    });
+  }
 }
 
 function renderRoutines() {
@@ -1115,6 +1147,7 @@ function autoFillToday() {
       end: times.end,
       category: routine.type,
       notes: routine.notes || "",
+      type: "routine",
       completed: false,
       tasks: routine.tasks.map(task => ({
         text: task,
@@ -1184,8 +1217,9 @@ function renderWeeklyView() {
 
 function renderWeeklyBlock(block, index, weekDates) {
   return `
-    <div class="week-block ${block.isBuffer ? "buffer-block" : ""}">
+    <div class="week-block ${block.isBuffer ? "buffer-block" : ""} block-type-${block.type || "task"}">
       <strong>${escapeHTML(block.start)} ${escapeHTML(block.title)}</strong>
+      ${block.type && block.type !== "task" ? `<span class="block-tag block-tag-${block.type}">${block.type}</span>` : ""}
       <small>${escapeHTML(block.end)} • ${escapeHTML(block.category)}</small>
       <select onchange="moveBlockToDate(${index}, this.value)">
         ${weekDates.map(day => `<option value="${day.iso}" ${block.date === day.iso ? "selected" : ""}>Move to ${day.label}</option>`).join("")}
@@ -1885,22 +1919,37 @@ function renderHomeSuggestions() {
   const box = document.getElementById("homeSuggestions");
   if (!box) return;
   const today = getTodayISO();
+  const todayDay = new Date().getDay();
+
   const unfinishedTask = scheduleData.blocks
     .filter(block => block.date === today && !block.isBuffer)
     .flatMap(block => block.tasks.map(task => ({ task, block })))
     .find(item => !item.task.completed);
+
   const unfinishedHabit = systemsData.habits.find(habit =>
     !habit.completions.includes(today)
   );
+
   const friendSuggestion = getFriendSuggestions().find(item => {
     const daysSince = getDaysSince(item.friend.lastSeen);
     return daysSince === null || daysSince >= 21;
   });
+
   const upcomingHangout = socialData.hangouts
     .filter(hangout => !hangout.completed && hangout.date && hangout.date >= today)
     .sort((a, b) => a.date.localeCompare(b.date))[0];
 
+  const freeSlots = getFreeSlots(today, 30);
+  const nextFreeSlot = freeSlots[0] || null;
+
+  const pendingRoutine = scheduleData.routines.find(routine =>
+    routine.repeatDays.includes(todayDay) &&
+    !scheduleData.blocks.some(b => b.date === today && b.routineId === routine.id)
+  );
+
   const suggestions = [
+    nextFreeSlot ? `Next free time: ${nextFreeSlot.start}–${nextFreeSlot.end}` : "",
+    pendingRoutine ? `Routine not started: ${pendingRoutine.name}` : "",
     unfinishedTask ? `Finish: ${unfinishedTask.task.text} (${unfinishedTask.block.title})` : "",
     unfinishedHabit ? `Complete habit: ${unfinishedHabit.name}` : "",
     friendSuggestion ? `Reach out: ${friendSuggestion.friend.name} (${friendSuggestion.reason})` : "",
@@ -2315,12 +2364,98 @@ function saveHangout() {
     socialData.hangouts[editingHangoutIndex] = hangout;
   }
 
+  if (date && time && editingHangoutIndex === null) {
+    const endTime = minutesToTime(timeToMinutes(time) + 60);
+    const overlaps = getBlocksOnDate(date).filter(b =>
+      !b.isBuffer && blocksOverlap(b.start, b.end, time, endTime)
+    );
+    const alreadySynced = scheduleData.blocks.some(b =>
+      b.date === date && b.type === "social" && b.title === activity
+    );
+    if (!alreadySynced) {
+      if (overlaps.length) {
+        alert(`Note: This hangout overlaps with "${overlaps[0].title}" in your Planner. It has been added anyway.`);
+      }
+      scheduleData.blocks.push({
+        id: createId("block"),
+        title: activity,
+        date,
+        start: time,
+        end: endTime,
+        category: "Social",
+        notes: `With: ${people.join(", ")}${location ? " at " + location : ""}`,
+        type: "social",
+        completed: false,
+        tasks: []
+      });
+      addBufferBlocksForDate(date);
+      saveScheduleData();
+    }
+  }
+
   editingHangoutIndex = null;
   hangoutFormOpen = false;
   saveSocialData();
   activeSocialSection = "Hangouts";
   main.innerHTML = getPageHTML("Social");
   renderSocial();
+}
+
+function getFreeSlots(date, minDuration = 30) {
+  const dayStart = timeToMinutes("06:00");
+  const dayEnd = timeToMinutes("23:00");
+  const blocks = scheduleData.blocks
+    .filter(b => b.date === date && !b.isBuffer)
+    .sort((a, b) => timeToMinutes(a.start) - timeToMinutes(b.start));
+  const slots = [];
+  let cursor = dayStart;
+  for (const block of blocks) {
+    const bStart = timeToMinutes(block.start);
+    const bEnd = timeToMinutes(block.end);
+    if (bStart - cursor >= minDuration) {
+      slots.push({ start: minutesToTime(cursor), end: minutesToTime(bStart) });
+    }
+    cursor = Math.max(cursor, bEnd);
+  }
+  if (dayEnd - cursor >= minDuration) {
+    slots.push({ start: minutesToTime(cursor), end: minutesToTime(dayEnd) });
+  }
+  return slots;
+}
+
+function getBlocksOnDate(date) {
+  return scheduleData.blocks.filter(b => b.date === date);
+}
+
+function blocksOverlap(aStart, aEnd, bStart, bEnd) {
+  return timeToMinutes(aStart) < timeToMinutes(bEnd) &&
+    timeToMinutes(aEnd) > timeToMinutes(bStart);
+}
+
+function renderHangoutFreeSlots() {
+  const box = document.getElementById("hangoutFreeSlots");
+  if (!box) return;
+  const dateInput = document.getElementById("hangoutDate");
+  const date = dateInput ? dateInput.value : "";
+  if (!date) { box.innerHTML = ""; return; }
+  const slots = getFreeSlots(date, 30);
+  if (!slots.length) {
+    box.innerHTML = "<p class='muted-text'>No free slots found for that day.</p>";
+    return;
+  }
+  box.innerHTML = `
+    <p class="muted-text" style="margin-bottom:4px">Free slots on this day:</p>
+    <div class="free-slots-row">
+      ${slots.map(s => `
+        <button class="slot-chip" onclick="applyFreeSlot('${s.start}','${s.end}')">${s.start}–${s.end}</button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function applyFreeSlot(start, end) {
+  const timeInput = document.getElementById("hangoutTime");
+  if (timeInput) timeInput.value = start;
 }
 
 function renderHangouts() {
