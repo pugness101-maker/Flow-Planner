@@ -51,11 +51,26 @@ socialData.ideas = socialData.ideas.map(idea => ({
 
 let systemsData = JSON.parse(localStorage.getItem("flowSystemsData")) || {
   habits: [],
-  logs: []
+  logs: [],
+  trackers: []
 };
 
 if (!Array.isArray(systemsData.habits)) systemsData.habits = [];
 if (!Array.isArray(systemsData.logs)) systemsData.logs = [];
+if (!Array.isArray(systemsData.trackers)) systemsData.trackers = [];
+
+systemsData.trackers = systemsData.trackers.map(tracker => ({
+  id: tracker.id || createId("tracker"),
+  name: tracker.name || "",
+  type: tracker.type || "Custom",
+  startValue: tracker.startValue ?? "",
+  currentValue: tracker.currentValue ?? "",
+  targetValue: tracker.targetValue ?? "",
+  unit: tracker.unit || "",
+  startDate: tracker.startDate || "",
+  targetDate: tracker.targetDate || "",
+  notes: tracker.notes || ""
+}));
 
 systemsData.habits = systemsData.habits.map(habit => ({
   id: habit.id || createId("habit"),
@@ -119,6 +134,7 @@ let editingHangoutIndex = null;
 let editingRoutineIndex = null;
 let editingIdeaIndex = null;
 let editingHabitIndex = null;
+let editingTrackerIndex = null;
 let activePlannerSection = "Day";
 let activeSystemsSection = "Habits";
 let activeSocialSection = "Friends";
@@ -264,7 +280,7 @@ const pages = {
   `,
 
   Systems: () => `
-    ${renderSubTabs("Systems", ["Habits", "Logs", "Insights"], activeSystemsSection)}
+    ${renderSubTabs("Systems", ["Habits", "Logs", "Trackers", "Insights"], activeSystemsSection)}
     ${activeSystemsSection === "Habits" ? `
       <div class="card">
         <h3>Add Habit</h3>
@@ -306,6 +322,32 @@ const pages = {
       <div class="card">
         <h3>Log List</h3>
         <div id="systemsLogsList"></div>
+      </div>
+    ` : ""}
+    ${activeSystemsSection === "Trackers" ? `
+      <div class="card">
+        <h3>Add Tracker</h3>
+        <input id="trackerName" placeholder="Tracker name">
+        <select id="trackerType">
+          <option>Weight</option>
+          <option>Taper</option>
+          <option>Spending</option>
+          <option>Study</option>
+          <option>Custom</option>
+        </select>
+        <input id="trackerUnit" placeholder="Unit (lb, kg, $, hrs, etc.)">
+        <input id="trackerStartValue" type="number" placeholder="Start value">
+        <input id="trackerCurrentValue" type="number" placeholder="Current value">
+        <input id="trackerTargetValue" type="number" placeholder="Target value">
+        <input id="trackerStartDate" type="date">
+        <input id="trackerTargetDate" type="date">
+        <textarea id="trackerNotes" placeholder="Notes"></textarea>
+        <button id="trackerSaveButton" onclick="saveTracker()">Save Tracker</button>
+        <button class="secondary-btn" onclick="resetTrackerForm()">Clear Form</button>
+      </div>
+      <div class="card">
+        <h3>Tracker List</h3>
+        <div id="trackersList"></div>
       </div>
     ` : ""}
     ${activeSystemsSection === "Insights" ? `
@@ -1348,9 +1390,11 @@ function formatMinutes(minutes) {
 
 function renderSystems() {
   fillEditingHabitForm();
+  fillEditingTrackerForm();
   renderSystemsDashboard();
   renderHabitsList();
   renderSystemsLogsList();
+  renderTrackersList();
   fillDefaultLogDate();
 }
 
@@ -1523,13 +1567,35 @@ function renderSystemsDashboard() {
   const bestStreak = systemsData.habits.reduce((best, habit) =>
     Math.max(best, getHabitStreak(habit)), 0);
 
+  const trackerProgresses = systemsData.trackers.map(t => getTrackerProgress(t));
+  const avgProgress = trackerProgresses.length
+    ? Math.round(trackerProgresses.reduce((s, p) => s + p, 0) / trackerProgresses.length)
+    : 0;
+  const onTrack = systemsData.trackers.filter(t => getTrackerProgress(t) >= 50).length;
+
+  const recentLogs = [...systemsData.logs]
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+    .slice(0, 3);
+
   box.innerHTML = `
     <div class="summary-grid">
       <div><strong>${systemsData.habits.length}</strong><span>Active habits</span></div>
       <div><strong>${completedToday}</strong><span>Done today</span></div>
       <div><strong>${bestStreak}</strong><span>Best streak</span></div>
       <div><strong>${systemsData.logs.length}</strong><span>Total logs</span></div>
+      <div><strong>${systemsData.trackers.length}</strong><span>Trackers</span></div>
+      <div><strong>${onTrack}/${systemsData.trackers.length}</strong><span>On track</span></div>
+      <div><strong>${avgProgress}%</strong><span>Avg progress</span></div>
     </div>
+    ${recentLogs.length ? `
+      <p style="margin-top:12px;font-weight:600;font-size:14px;">Recent Logs</p>
+      ${recentLogs.map(log => `
+        <div class="home-list-item">
+          <strong>${escapeHTML(log.title || log.type)}</strong>
+          <p>${escapeHTML(log.date || "")} • ${escapeHTML(log.value || "")} ${escapeHTML(log.unit || "")}</p>
+        </div>
+      `).join("")}
+    ` : ""}
   `;
 }
 
@@ -1580,6 +1646,154 @@ function renderSystemsLogsList() {
       `;
     }).join("")
     : "<p>No logs saved yet.</p>";
+}
+
+function getTrackerProgress(tracker) {
+  const start = Number(tracker.startValue);
+  const current = Number(tracker.currentValue);
+  const target = Number(tracker.targetValue);
+  if (isNaN(start) || isNaN(current) || isNaN(target)) return 0;
+  if (start === target) return current >= target ? 100 : 0;
+  let pct;
+  if (tracker.type === "Weight" || tracker.type === "Taper") {
+    pct = ((start - current) / (start - target)) * 100;
+  } else {
+    pct = (current / target) * 100;
+  }
+  return Math.min(100, Math.max(0, Math.round(pct)));
+}
+
+function saveTracker() {
+  const name = document.getElementById("trackerName").value.trim();
+  const type = document.getElementById("trackerType").value;
+  const unit = document.getElementById("trackerUnit").value.trim();
+  const startValue = document.getElementById("trackerStartValue").value;
+  const currentValue = document.getElementById("trackerCurrentValue").value;
+  const targetValue = document.getElementById("trackerTargetValue").value;
+  const startDate = document.getElementById("trackerStartDate").value;
+  const targetDate = document.getElementById("trackerTargetDate").value;
+  const notes = document.getElementById("trackerNotes").value.trim();
+
+  if (!name || startValue === "" || targetValue === "") {
+    alert("Add a tracker name, start value, and target value.");
+    return;
+  }
+
+  const tracker = {
+    id: editingTrackerIndex === null
+      ? createId("tracker")
+      : systemsData.trackers[editingTrackerIndex].id,
+    name, type, unit, startValue, currentValue, targetValue,
+    startDate, targetDate, notes
+  };
+
+  if (editingTrackerIndex === null) {
+    systemsData.trackers.push(tracker);
+  } else {
+    systemsData.trackers[editingTrackerIndex] = tracker;
+  }
+
+  editingTrackerIndex = null;
+  saveSystemsData();
+  activeSystemsSection = "Trackers";
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function renderTrackersList() {
+  const box = document.getElementById("trackersList");
+  if (!box) return;
+
+  box.innerHTML = systemsData.trackers.length
+    ? systemsData.trackers.map((tracker, index) => {
+        const pct = getTrackerProgress(tracker);
+        const remaining = (Number(tracker.targetValue) - Number(tracker.currentValue)).toFixed(2);
+        const unit = escapeHTML(tracker.unit || "");
+        return `
+          <div class="system-item">
+            <div class="item-title">
+              <strong>${escapeHTML(tracker.name)}</strong>
+              <span>${escapeHTML(tracker.type)}</span>
+            </div>
+            <p>${escapeHTML(String(tracker.currentValue))} ${unit} → ${escapeHTML(String(tracker.targetValue))} ${unit}</p>
+            <div class="tracker-progress-bar">
+              <div class="tracker-progress-fill" style="width:${pct}%"></div>
+            </div>
+            <p class="tracker-pct">${pct}% complete • ${Math.abs(Number(remaining))} ${unit} remaining</p>
+            ${tracker.targetDate ? `<p>Target: ${escapeHTML(tracker.targetDate)}</p>` : ""}
+            ${tracker.notes ? `<p>${escapeHTML(tracker.notes)}</p>` : ""}
+            <div class="button-row">
+              <button onclick="logTrackerValue(${index})">Log Value</button>
+              <button onclick="editTracker(${index})">Edit</button>
+              <button class="danger-btn" onclick="deleteTracker(${index})">Delete</button>
+            </div>
+          </div>
+        `;
+      }).join("")
+    : "<p>No trackers saved yet.</p>";
+}
+
+function logTrackerValue(index) {
+  const tracker = systemsData.trackers[index];
+  if (!tracker) return;
+  const raw = prompt(`Log new value for "${tracker.name}" (${tracker.unit || "unit"}):`);
+  if (raw === null || raw.trim() === "") return;
+  const value = raw.trim();
+  tracker.currentValue = value;
+  systemsData.logs.push({
+    id: createId("log"),
+    title: tracker.name,
+    type: tracker.type,
+    value,
+    unit: tracker.unit,
+    date: getTodayISO(),
+    notes: "",
+    linkedHabitId: "",
+    linkedPlannerBlockId: "",
+    trackerId: tracker.id
+  });
+  saveSystemsData();
+  renderSystems();
+}
+
+function editTracker(index) {
+  editingTrackerIndex = index;
+  activeSystemsSection = "Trackers";
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function fillEditingTrackerForm() {
+  if (editingTrackerIndex === null) return;
+  if (!document.getElementById("trackerName")) return;
+  const tracker = systemsData.trackers[editingTrackerIndex];
+  if (!tracker) return;
+
+  document.getElementById("trackerName").value = tracker.name;
+  document.getElementById("trackerType").value = tracker.type;
+  document.getElementById("trackerUnit").value = tracker.unit;
+  document.getElementById("trackerStartValue").value = tracker.startValue;
+  document.getElementById("trackerCurrentValue").value = tracker.currentValue;
+  document.getElementById("trackerTargetValue").value = tracker.targetValue;
+  document.getElementById("trackerStartDate").value = tracker.startDate;
+  document.getElementById("trackerTargetDate").value = tracker.targetDate;
+  document.getElementById("trackerNotes").value = tracker.notes;
+  document.getElementById("trackerSaveButton").textContent = "Update Tracker";
+}
+
+function resetTrackerForm() {
+  editingTrackerIndex = null;
+  activeSystemsSection = "Trackers";
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function deleteTracker(index) {
+  if (!confirm("Delete this tracker?")) return;
+  if (editingTrackerIndex === index) editingTrackerIndex = null;
+  systemsData.trackers.splice(index, 1);
+  saveSystemsData();
+  renderSystems();
 }
 
 function getHabitStreak(habit) {

@@ -1,0 +1,130 @@
+Upgrade the Systems tab so it actually has a clear purpose (tracking progress, not just habits).
+
+Problem:
+Systems currently only has:
+- Habits
+- Logs
+- Insights
+
+It feels empty and unclear.
+
+Goal:
+Systems = tracking + progress + measurable improvement.
+
+1. Add new sub-tab:
+Trackers
+
+Final Systems tabs:
+Habits | Logs | Trackers | Insights
+
+2. Create Trackers feature
+
+Each tracker should support:
+- name
+- type (Weight, Taper, Spending, Study, Custom)
+- startValue
+- currentValue
+- targetValue
+- unit
+- startDate
+- targetDate
+- notes
+
+Store in:
+systemsData.trackers = []
+
+3. Add Add Tracker form
+
+Fields:
+- Tracker Name
+- Type (dropdown)
+- Start Value
+- Current Value
+- Target Value
+- Unit (lb, kg, $, hrs, etc.)
+- Start Date
+- Target Date
+- Notes
+
+Button:
+Save Tracker
+
+4. Display Tracker List
+
+Each tracker card shows:
+- name
+- type
+- current value → target value
+- progress %
+- remaining amount
+- buttons:
+  - Log Value
+  - Edit
+  - Delete
+
+5. Add progress calculation
+
+function getTrackerProgress(tracker) {
+  const start = Number(tracker.startValue);
+  const current = Number(tracker.currentValue);
+  const target = Number(tracker.targetValue);
+
+  if (tracker.type === "Weight" || tracker.type === "Taper") {
+    return ((start - current) / (start - target)) * 100;
+  } else {
+    return (current / target) * 100;
+  }
+}
+
+Clamp between 0–100.
+
+6. Add Log Value feature
+
+When user logs a value:
+- update tracker.currentValue
+- save to systemsData.logs
+- log format:
+{
+  title: tracker.name,
+  type: tracker.type,
+  value,
+  unit,
+  date,
+  trackerId
+}
+
+7. Connect to Insights
+
+In Systems Insights:
+Add:
+- total trackers
+- trackers on track vs behind
+- average progress %
+- recent logs
+
+8. Keep structure clean
+
+Do NOT mix with Planner.
+Planner = schedule.
+Systems = data.
+
+9. Update UI
+
+Make Trackers tab look like Habits:
+- Add form at top
+- List below
+- Clean cards
+
+10. Keep localStorage
+
+Extend existing:
+flowSystemsData
+
+Structure:
+{
+  habits: [],
+  logs: [],
+  trackers: []
+}
+
+If trackers missing, initialize as empty array.
