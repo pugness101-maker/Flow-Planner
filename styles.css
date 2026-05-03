@@ -205,6 +205,35 @@ input {
   margin-top: 0;
 }
 
+#dayTimesSection {
+  margin-top: 12px;
+}
+
+#dayTimesSection p {
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.day-time-row {
+  display: grid;
+  grid-template-columns: 48px 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.day-time-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+}
+
+.day-time-row input[type="time"] {
+  margin-top: 0;
+  padding: 8px;
+  font-size: 13px;
+}
+
 .routine-item {
   padding: 12px 0;
   border-bottom: 1px solid #eee;

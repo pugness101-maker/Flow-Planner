@@ -1,0 +1,71 @@
+Fix Planner > Week view and upgrade Routines with per-day times.
+
+1. Fix Weekly View
+Problem: Weekly View only shows the card title and no schedule content.
+
+In renderPlanner(), make sure renderWeeklyView() runs when Planner tab is open and Week sub-tab is active.
+
+In the Week HTML, keep:
+<div id="weeklyView"></div>
+
+Then render:
+- 7 day columns/cards: Sun–Sat
+- date label
+- blocks for that day sorted by start time
+- routine blocks
+- tasks inside blocks
+- workload summary:
+  - total blocks
+  - planned time
+  - unfinished tasks
+
+If no blocks for a day, show "No blocks."
+
+2. Add per-day routine times
+Right now one routine has one start/end time for all selected days.
+
+Upgrade routine data to support:
+routine.dayTimes = {
+  "0": { start: "10:00", end: "10:40" },
+  "1": { start: "08:00", end: "08:40" },
+  ...
+}
+
+In Add Routine form:
+After repeat day checkboxes, show a "Times by Day" section.
+
+For each checked day, show:
+- day name
+- start time
+- end time
+
+If a day is unchecked, hide/disable its time row.
+
+Keep the main start/end time as default times.
+When user checks a day, auto-fill that day with the main start/end time.
+
+3. Save routine with dayTimes
+Update saveRoutine() so it stores dayTimes for selected repeatDays.
+
+4. Edit routine should refill dayTimes
+When editing an existing routine:
+- check selected days
+- fill each selected day’s start/end times
+- fallback to routine.start/routine.end if dayTimes missing
+
+5. Auto-fill Today should use today’s custom time
+Update autoFillToday():
+- get today day index
+- if routine.dayTimes[todayDay] exists, use that start/end
+- otherwise use routine.start/routine.end
+
+6. Weekly View should show routine blocks correctly
+If routine blocks were auto-filled, show them in the correct day column with their custom time.
+
+7. Add helper function:
+function getRoutineTimeForDay(routine, dayIndex) {
+  return routine.dayTimes?.[dayIndex] || { start: routine.start, end: routine.end };
+}
+
+Do not rebuild the whole app.
+Keep existing localStorage and migrate old routines by adding dayTimes if missing.

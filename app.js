@@ -106,6 +106,7 @@ scheduleData.routines.forEach(routine => {
   if (!routine.id) routine.id = createId("routine");
   if (!Array.isArray(routine.repeatDays)) routine.repeatDays = [];
   if (!Array.isArray(routine.tasks)) routine.tasks = [];
+  if (!routine.dayTimes || typeof routine.dayTimes !== "object") routine.dayTimes = {};
 });
 
 function saveScheduleData() {
@@ -237,13 +238,17 @@ const pages = {
         <input id="routineStart" type="time">
         <input id="routineEnd" type="time">
         <div class="repeat-days">
-          <label><input type="checkbox" name="routineDay" value="0"> Sun</label>
-          <label><input type="checkbox" name="routineDay" value="1"> Mon</label>
-          <label><input type="checkbox" name="routineDay" value="2"> Tue</label>
-          <label><input type="checkbox" name="routineDay" value="3"> Wed</label>
-          <label><input type="checkbox" name="routineDay" value="4"> Thu</label>
-          <label><input type="checkbox" name="routineDay" value="5"> Fri</label>
-          <label><input type="checkbox" name="routineDay" value="6"> Sat</label>
+          <label><input type="checkbox" name="routineDay" value="0" onchange="updateDayTimesSection()"> Sun</label>
+          <label><input type="checkbox" name="routineDay" value="1" onchange="updateDayTimesSection()"> Mon</label>
+          <label><input type="checkbox" name="routineDay" value="2" onchange="updateDayTimesSection()"> Tue</label>
+          <label><input type="checkbox" name="routineDay" value="3" onchange="updateDayTimesSection()"> Wed</label>
+          <label><input type="checkbox" name="routineDay" value="4" onchange="updateDayTimesSection()"> Thu</label>
+          <label><input type="checkbox" name="routineDay" value="5" onchange="updateDayTimesSection()"> Fri</label>
+          <label><input type="checkbox" name="routineDay" value="6" onchange="updateDayTimesSection()"> Sat</label>
+        </div>
+        <div id="dayTimesSection" style="display:none">
+          <p><strong>Times by Day</strong></p>
+          <div id="dayTimeRows"></div>
         </div>
         <textarea id="routineTasks" placeholder="Tasks/steps, one per line"></textarea>
         <textarea id="routineNotes" placeholder="Notes"></textarea>
@@ -875,6 +880,16 @@ function saveRoutine() {
     return;
   }
 
+  const dayTimes = {};
+  repeatDays.forEach(dayIndex => {
+    const startEl = document.getElementById(`dayStart_${dayIndex}`);
+    const endEl = document.getElementById(`dayEnd_${dayIndex}`);
+    dayTimes[dayIndex] = {
+      start: startEl ? startEl.value || start : start,
+      end: endEl ? endEl.value || end : end
+    };
+  });
+
   const routine = {
     id: editingRoutineIndex === null
       ? createId("routine")
@@ -884,6 +899,7 @@ function saveRoutine() {
     start,
     end,
     repeatDays,
+    dayTimes,
     tasks,
     notes
   };
@@ -949,6 +965,16 @@ function fillEditingRoutineForm() {
     input.checked = routine.repeatDays.includes(Number(input.value));
   });
   document.getElementById("routineSaveButton").textContent = "Update Routine";
+
+  updateDayTimesSection();
+
+  routine.repeatDays.forEach(dayIndex => {
+    const times = getRoutineTimeForDay(routine, dayIndex);
+    const startEl = document.getElementById(`dayStart_${dayIndex}`);
+    const endEl = document.getElementById(`dayEnd_${dayIndex}`);
+    if (startEl) startEl.value = times.start;
+    if (endEl) endEl.value = times.end;
+  });
 }
 
 function resetRoutineForm() {
@@ -964,6 +990,53 @@ function deleteRoutine(index) {
   if (editingRoutineIndex === index) editingRoutineIndex = null;
   saveScheduleData();
   renderPlanner();
+}
+
+function getRoutineTimeForDay(routine, dayIndex) {
+  return (routine.dayTimes && routine.dayTimes[dayIndex])
+    ? routine.dayTimes[dayIndex]
+    : { start: routine.start, end: routine.end };
+}
+
+function updateDayTimesSection() {
+  const section = document.getElementById("dayTimesSection");
+  const rowsBox = document.getElementById("dayTimeRows");
+  if (!section || !rowsBox) return;
+
+  const checkedInputs = [...document.querySelectorAll("input[name='routineDay']:checked")];
+  const defaultStart = document.getElementById("routineStart") ? document.getElementById("routineStart").value : "";
+  const defaultEnd = document.getElementById("routineEnd") ? document.getElementById("routineEnd").value : "";
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  if (!checkedInputs.length) {
+    section.style.display = "none";
+    return;
+  }
+
+  section.style.display = "";
+
+  const existingValues = {};
+  [0, 1, 2, 3, 4, 5, 6].forEach(i => {
+    const s = document.getElementById(`dayStart_${i}`);
+    const e = document.getElementById(`dayEnd_${i}`);
+    if (s) existingValues[i] = { start: s.value, end: e ? e.value : "" };
+  });
+
+  rowsBox.innerHTML = checkedInputs
+    .sort((a, b) => Number(a.value) - Number(b.value))
+    .map(input => {
+      const d = Number(input.value);
+      const prev = existingValues[d];
+      const s = prev ? prev.start : defaultStart;
+      const e = prev ? prev.end : defaultEnd;
+      return `
+        <div class="day-time-row">
+          <span class="day-time-label">${dayNames[d]}</span>
+          <input type="time" id="dayStart_${d}" value="${s}">
+          <input type="time" id="dayEnd_${d}" value="${e}">
+        </div>
+      `;
+    }).join("");
 }
 
 function autoFillToday() {
@@ -987,13 +1060,15 @@ function autoFillToday() {
 
     if (alreadyAdded) return;
 
+    const times = getRoutineTimeForDay(routine, todayDay);
+
     scheduleData.blocks.push({
       id: createId("block"),
       routineId: routine.id,
       title: routine.name,
       date: today,
-      start: routine.start,
-      end: routine.end,
+      start: times.start,
+      end: times.end,
       category: routine.type,
       notes: routine.notes || "",
       completed: false,
