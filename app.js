@@ -123,6 +123,10 @@ scheduleData.routines.forEach(routine => {
   if (!Array.isArray(routine.repeatDays)) routine.repeatDays = [];
   if (!Array.isArray(routine.tasks)) routine.tasks = [];
   if (!routine.dayTimes || typeof routine.dayTimes !== "object") routine.dayTimes = {};
+  if (!routine.completions || typeof routine.completions !== "object") routine.completions = {};
+  if (!Array.isArray(routine.completedDates)) routine.completedDates = [];
+  if (typeof routine.streak !== "number") routine.streak = 0;
+  if (typeof routine.autoAdd !== "boolean") routine.autoAdd = false;
 });
 
 function saveScheduleData() {
@@ -269,6 +273,10 @@ const pages = {
         </div>
         <textarea id="routineTasks" placeholder="Tasks/steps, one per line"></textarea>
         <textarea id="routineNotes" placeholder="Notes"></textarea>
+        <label class="inline-check">
+          <input type="checkbox" id="routineAutoAdd">
+          Auto-add to planner daily
+        </label>
         <button id="routineSaveButton" onclick="saveRoutine()">Save Routine</button>
         <button class="secondary-btn" onclick="resetRoutineForm()">Clear Routine Form</button>
         <button onclick="autoFillToday()">Auto-fill Today</button>
@@ -563,6 +571,7 @@ document.querySelectorAll(".bottom-nav button").forEach(btn => {
   });
 });
 
+dailyAutoInsert();
 main.innerHTML = getPageHTML("Home");
 setActiveBottomNav("Home");
 renderHome();
@@ -950,10 +959,11 @@ function saveRoutine() {
     };
   });
 
+  const autoAdd = document.getElementById("routineAutoAdd")?.checked || false;
+  const existing = editingRoutineIndex !== null ? scheduleData.routines[editingRoutineIndex] : null;
+
   const routine = {
-    id: editingRoutineIndex === null
-      ? createId("routine")
-      : scheduleData.routines[editingRoutineIndex].id,
+    id: existing ? existing.id : createId("routine"),
     name,
     type,
     start,
@@ -961,7 +971,11 @@ function saveRoutine() {
     repeatDays,
     dayTimes,
     tasks,
-    notes
+    notes,
+    autoAdd,
+    completions: existing ? (existing.completions || {}) : {},
+    completedDates: existing ? (existing.completedDates || []) : [],
+    streak: existing ? (existing.streak || 0) : 0
   };
 
   if (editingRoutineIndex === null) {
@@ -1009,25 +1023,126 @@ function renderRoutines() {
   const box = document.getElementById("routinesList");
   if (!box) return;
 
+  const today = getTodayISO();
+
   box.innerHTML = scheduleData.routines.length
-    ? scheduleData.routines.map((routine, index) => `
-      <div class="routine-item">
-        <strong>${escapeHTML(routine.name)}</strong>
-        <p>${escapeHTML(routine.type)} • ${escapeHTML(routine.start)} - ${escapeHTML(routine.end)}</p>
-        <p>${routine.repeatDays.map(getDayName).join(", ")}</p>
-        ${
-          routine.tasks.length
-            ? `<ul>${routine.tasks.map(task => `<li>${escapeHTML(task)}</li>`).join("")}</ul>`
-            : "<p>No tasks added.</p>"
-        }
-        <p>${escapeHTML(routine.notes || "")}</p>
-        <div class="button-row">
-          <button onclick="editRoutine(${index})">Edit</button>
-          <button class="danger-btn" onclick="deleteRoutine(${index})">Delete</button>
-        </div>
-      </div>
-    `).join("")
+    ? scheduleData.routines.map((routine, index) => {
+        const todayCompletions = routine.completions[today] || {};
+        const stepsTotal = routine.tasks.length;
+        const stepsCompleted = routine.tasks.filter((_, ti) => todayCompletions[ti]).length;
+        const isCompletedToday = routine.completedDates.includes(today);
+        const streak = routine.streak || 0;
+
+        return `
+          <div class="routine-item ${isCompletedToday ? "routine-done" : ""}">
+            <div class="item-title">
+              <strong>${escapeHTML(routine.name)}</strong>
+              <span class="streak-badge">🔥 ${streak} day${streak === 1 ? "" : "s"}</span>
+            </div>
+            <p>${escapeHTML(routine.type)} • ${escapeHTML(routine.start)}–${escapeHTML(routine.end)}</p>
+            <p>${routine.repeatDays.map(getDayName).join(", ")}</p>
+            ${routine.autoAdd ? `<span class="auto-add-badge">Auto-add on</span>` : ""}
+            ${stepsTotal ? `
+              <div class="routine-steps">
+                <p class="steps-label"><strong>Today's steps</strong> <span class="muted-text">${stepsCompleted}/${stepsTotal}</span></p>
+                ${routine.tasks.map((task, ti) => `
+                  <label class="routine-step ${todayCompletions[ti] ? "step-done" : ""}">
+                    <input type="checkbox" ${todayCompletions[ti] ? "checked" : ""} onchange="toggleRoutineStep(${index}, ${ti})">
+                    ${escapeHTML(task)}
+                  </label>
+                `).join("")}
+              </div>
+            ` : "<p>No tasks added.</p>"}
+            ${routine.notes ? `<p>${escapeHTML(routine.notes)}</p>` : ""}
+            <div class="button-row">
+              ${isCompletedToday
+                ? `<span class="done-label">✓ Completed today</span>`
+                : `<button onclick="completeRoutineDay(${index})">Mark Complete</button>`}
+              <button onclick="editRoutine(${index})">Edit</button>
+              <button class="danger-btn" onclick="deleteRoutine(${index})">Delete</button>
+            </div>
+          </div>
+        `;
+      }).join("")
     : "<p>No routines saved yet.</p>";
+}
+
+function toggleRoutineStep(routineIndex, stepIndex) {
+  const routine = scheduleData.routines[routineIndex];
+  if (!routine) return;
+  const today = getTodayISO();
+  if (!routine.completions) routine.completions = {};
+  if (!routine.completions[today]) routine.completions[today] = {};
+  routine.completions[today][stepIndex] = !routine.completions[today][stepIndex];
+  const allDone = routine.tasks.length > 0 &&
+    routine.tasks.every((_, ti) => routine.completions[today][ti]);
+  if (allDone) {
+    completeRoutineDay(routineIndex, true);
+  } else {
+    saveScheduleData();
+    renderRoutines();
+  }
+}
+
+function completeRoutineDay(routineIndex, silent) {
+  const routine = scheduleData.routines[routineIndex];
+  if (!routine) return;
+  const today = getTodayISO();
+  if (!routine.completedDates) routine.completedDates = [];
+  if (!routine.completedDates.includes(today)) {
+    routine.completedDates.push(today);
+  }
+  routine.streak = getRoutineStreak(routine);
+  saveScheduleData();
+  renderRoutines();
+  if (!silent) {
+    alert(`"${routine.name}" marked complete! Streak: ${routine.streak} day${routine.streak === 1 ? "" : "s"} 🔥`);
+  }
+}
+
+function getRoutineStreak(routine) {
+  if (!routine.completedDates || !routine.completedDates.length) return 0;
+  const today = getTodayISO();
+  let streak = 0;
+  let check = today;
+  while (routine.completedDates.includes(check)) {
+    streak++;
+    check = getDateOffset(check, -1);
+  }
+  return streak;
+}
+
+function dailyAutoInsert() {
+  const today = getTodayISO();
+  const todayDay = new Date().getDay();
+  let inserted = false;
+  scheduleData.routines.forEach(routine => {
+    if (!routine.autoAdd) return;
+    if (!routine.repeatDays.includes(todayDay)) return;
+    const alreadyAdded = scheduleData.blocks.some(b =>
+      b.date === today && b.routineId === routine.id
+    );
+    if (alreadyAdded) return;
+    const times = getRoutineTimeForDay(routine, todayDay);
+    scheduleData.blocks.push({
+      id: createId("block"),
+      routineId: routine.id,
+      title: routine.name,
+      date: today,
+      start: times.start,
+      end: times.end,
+      category: routine.type,
+      notes: routine.notes || "",
+      type: "routine",
+      completed: false,
+      tasks: routine.tasks.map(task => ({ text: task, completed: false }))
+    });
+    inserted = true;
+  });
+  if (inserted) {
+    addBufferBlocksForDate(today);
+    saveScheduleData();
+  }
 }
 
 function editRoutine(index) {
@@ -1049,6 +1164,8 @@ function fillEditingRoutineForm() {
   document.getElementById("routineEnd").value = routine.end;
   document.getElementById("routineTasks").value = routine.tasks.join("\n");
   document.getElementById("routineNotes").value = routine.notes || "";
+  const autoAddEl = document.getElementById("routineAutoAdd");
+  if (autoAddEl) autoAddEl.checked = routine.autoAdd || false;
   document.querySelectorAll("input[name='routineDay']").forEach(input => {
     input.checked = routine.repeatDays.includes(Number(input.value));
   });
