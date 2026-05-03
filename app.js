@@ -2282,6 +2282,7 @@ function saveIdea() {
 
 function renderIdeas() {
   const box = document.getElementById("ideasList");
+  if (!box) return;
 
   box.innerHTML = socialData.ideas.length
     ? socialData.ideas.map((idea, i) => `
