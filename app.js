@@ -468,6 +468,18 @@ const pages = {
         <div id="friendSuggestions"></div>
       </div>
       <div class="card">
+        <h3>People You're Neglecting</h3>
+        <div id="neglectedFriends"></div>
+      </div>
+      <div class="card">
+        <h3>Most Seen This Month</h3>
+        <div id="mostSeenMonth"></div>
+      </div>
+      <div class="card">
+        <h3>Social Balance</h3>
+        <div id="socialBalance"></div>
+      </div>
+      <div class="card">
         <h3>Social Insights</h3>
         <div id="socialInsights"></div>
       </div>
@@ -2149,6 +2161,9 @@ function renderSocial() {
   populateHangoutPeopleSelect();
   renderSelectedHangoutPeopleChips();
   renderFriendSuggestions();
+  renderNeglectedFriends();
+  renderMostSeenMonth();
+  renderSocialBalance();
   renderSocialInsights();
   renderIdeas();
   renderFriends();
@@ -2749,16 +2764,24 @@ function renderSocialInsights() {
     return counts;
   }, {});
 
+  const scores = socialData.friends.map(f => computeFriendScore(f).score);
+  const avgScore = scores.length
+    ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+    : 0;
+  const topFriend = getFriendSuggestions()[0];
+
   box.innerHTML = `
     <div class="summary-grid">
       <div><strong>${completedThisMonth.length}</strong><span>Hangouts this month</span></div>
       <div><strong>${friendsSeenThisMonth.length}</strong><span>Friends seen this month</span></div>
       <div><strong>${socialData.hangouts.length}</strong><span>Total hangouts</span></div>
-      <div><strong>${notSeenRecently.length}</strong><span>Not seen recently</span></div>
+      <div><strong>${notSeenRecently.length}</strong><span>Neglected friends</span></div>
+      <div><strong>${avgScore}</strong><span>Avg friend score</span></div>
+      <div><strong>${socialData.friends.length}</strong><span>Total friends</span></div>
     </div>
-    <p>Not seen recently: ${notSeenRecently.length ? notSeenRecently.map(escapeHTML).join(", ") : "Everyone is current."}</p>
-    <p>Priority balance: High ${priorityCounts.High || 0}, Medium ${priorityCounts.Medium || 0}, Low ${priorityCounts.Low || 0}</p>
-    <p>Hangout frequency: ${getHangoutFrequencyText()}</p>
+    <p><strong>Top suggestion:</strong> ${topFriend ? `${escapeHTML(topFriend.friend.name)} (score ${topFriend.score})` : "Add friends to get suggestions."}</p>
+    <p><strong>Priority balance:</strong> High ${priorityCounts.High || 0} · Medium ${priorityCounts.Medium || 0} · Low ${priorityCounts.Low || 0}</p>
+    <p><strong>Hangout frequency:</strong> ${getHangoutFrequencyText()}</p>
   `;
 }
 
@@ -2766,38 +2789,116 @@ function renderFriendSuggestions() {
   const box = document.getElementById("friendSuggestions");
   if (!box) return;
 
-  const suggestions = getFriendSuggestions().slice(0, 3);
+  const suggestions = getFriendSuggestions().slice(0, 5);
 
   box.innerHTML = suggestions.length
-    ? suggestions.map(item => `
-      <div class="suggestion-item">
-        <strong>${escapeHTML(item.friend.name)}</strong>
-        <p>${escapeHTML(item.reason)}</p>
-      </div>
-    `).join("")
+    ? suggestions.map(item => {
+        const { score } = computeFriendScore(item.friend);
+        return `
+          <div class="suggestion-item">
+            <div class="item-title">
+              <strong>${escapeHTML(item.friend.name)}</strong>
+              <span class="score-badge">Score ${score}</span>
+            </div>
+            <p>${escapeHTML(item.reason)}</p>
+          </div>
+        `;
+      }).join("")
     : "<p>Add friends to get suggestions.</p>";
 }
 
-function getFriendSuggestions() {
-  const priorityScore = {
-    High: 60,
-    Medium: 35,
-    Low: 15
-  };
+function renderNeglectedFriends() {
+  const box = document.getElementById("neglectedFriends");
+  if (!box) return;
 
+  const sorted = socialData.friends
+    .map(friend => ({ friend, daysSince: getDaysSince(friend.lastSeen) }))
+    .sort((a, b) => {
+      if (a.daysSince === null && b.daysSince === null) return 0;
+      if (a.daysSince === null) return -1;
+      if (b.daysSince === null) return 1;
+      return b.daysSince - a.daysSince;
+    })
+    .slice(0, 5);
+
+  box.innerHTML = sorted.length
+    ? sorted.map(({ friend, daysSince }) => `
+        <div class="social-item-row">
+          <strong>${escapeHTML(friend.name)}</strong>
+          <span class="muted-text">${daysSince === null ? "Never seen" : `${daysSince} days ago`}</span>
+        </div>
+      `).join("")
+    : "<p>No friends added yet.</p>";
+}
+
+function renderMostSeenMonth() {
+  const box = document.getElementById("mostSeenMonth");
+  if (!box) return;
+
+  const monthPrefix = getTodayISO().slice(0, 7);
+  const counts = {};
+  socialData.hangouts
+    .filter(h => h.completed && h.date && h.date.startsWith(monthPrefix))
+    .forEach(h => h.people.forEach(p => { counts[p] = (counts[p] || 0) + 1; }));
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  box.innerHTML = sorted.length
+    ? sorted.map(([name, count]) => `
+        <div class="social-item-row">
+          <strong>${escapeHTML(name)}</strong>
+          <span class="muted-text">${count} hangout${count === 1 ? "" : "s"}</span>
+        </div>
+      `).join("")
+    : "<p>No completed hangouts logged this month.</p>";
+}
+
+function renderSocialBalance() {
+  const box = document.getElementById("socialBalance");
+  if (!box) return;
+
+  const counts = {};
+  socialData.friends.forEach(f => { counts[f.name] = 0; });
+  socialData.hangouts
+    .filter(h => h.completed)
+    .forEach(h => h.people.forEach(p => {
+      if (Object.prototype.hasOwnProperty.call(counts, p)) counts[p]++;
+    }));
+
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const max = sorted.length ? sorted[0][1] : 1;
+
+  box.innerHTML = sorted.length
+    ? sorted.map(([name, count]) => `
+        <div class="balance-row">
+          <span class="balance-name">${escapeHTML(name)}</span>
+          <div class="balance-bar-bg">
+            <div class="balance-bar-fill" style="width:${max ? Math.round((count / max) * 100) : 0}%"></div>
+          </div>
+          <span class="balance-count muted-text">${count}</span>
+        </div>
+      `).join("")
+    : "<p>No friends added yet.</p>";
+}
+
+function computeFriendScore(friend) {
+  const priorityPoints = { High: 60, Medium: 35, Low: 15 }[friend.priority] || 25;
+  const daysSince = getDaysSince(friend.lastSeen);
+  const recencyPoints = daysSince === null ? 90 : Math.min(daysSince, 90);
+  const score = priorityPoints + recencyPoints;
+  const reasonDays = daysSince === null
+    ? "never seen"
+    : `${daysSince}d ago`;
+  return { score, priorityPoints, recencyPoints, daysSince, reasonDays };
+}
+
+function getFriendSuggestions() {
   return socialData.friends
     .map(friend => {
-      const daysSince = getDaysSince(friend.lastSeen);
-      const recencyScore = daysSince === null ? 90 : Math.min(daysSince, 90);
-      const score = (priorityScore[friend.priority] || 25) + recencyScore;
-      const reasonDays = daysSince === null
-        ? "not seen yet"
-        : `not seen in ${daysSince} day${daysSince === 1 ? "" : "s"}`;
-
+      const { score, reasonDays } = computeFriendScore(friend);
       return {
         friend,
         score,
-        reason: `${friend.priority} priority and ${reasonDays}`
+        reason: `${friend.priority} priority · ${reasonDays}`
       };
     })
     .sort((a, b) => b.score - a.score);
