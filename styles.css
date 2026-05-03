@@ -825,3 +825,47 @@ input {
   color: #888;
   text-decoration: line-through;
 }
+
+.goal-item {
+  border-left: 3px solid #d1d5db;
+  padding-left: 10px;
+}
+
+.goal-status-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 20px;
+  text-transform: capitalize;
+}
+
+.goal-status-complete {
+  background: #f0fdf4;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.goal-status-on\ track {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+.goal-status-behind {
+  background: #fff7ed;
+  color: #c2410c;
+  border: 1px solid #fed7aa;
+}
+
+.goal-progress-fill-complete {
+  background: #16a34a;
+}
+
+.goal-progress-fill-on\ track {
+  background: #1a56db;
+}
+
+.goal-progress-fill-behind {
+  background: #ea580c;
+}

@@ -52,12 +52,28 @@ socialData.ideas = socialData.ideas.map(idea => ({
 let systemsData = JSON.parse(localStorage.getItem("flowSystemsData")) || {
   habits: [],
   logs: [],
-  trackers: []
+  trackers: [],
+  goals: []
 };
 
 if (!Array.isArray(systemsData.habits)) systemsData.habits = [];
 if (!Array.isArray(systemsData.logs)) systemsData.logs = [];
 if (!Array.isArray(systemsData.trackers)) systemsData.trackers = [];
+if (!Array.isArray(systemsData.goals)) systemsData.goals = [];
+
+systemsData.goals = systemsData.goals.map(goal => ({
+  id: goal.id || createId("goal"),
+  name: goal.name || "",
+  category: goal.category || "Custom",
+  targetValue: goal.targetValue ?? "",
+  currentValue: goal.currentValue ?? "",
+  unit: goal.unit || "",
+  startDate: goal.startDate || "",
+  deadline: goal.deadline || "",
+  linkedTrackerId: goal.linkedTrackerId || "",
+  linkedHabitId: goal.linkedHabitId || "",
+  notes: goal.notes || ""
+}));
 
 systemsData.trackers = systemsData.trackers.map(tracker => ({
   id: tracker.id || createId("tracker"),
@@ -140,6 +156,7 @@ let editingRoutineIndex = null;
 let editingIdeaIndex = null;
 let editingHabitIndex = null;
 let editingTrackerIndex = null;
+let editingGoalIndex = null;
 let activePlannerSection = "Day";
 let activeSystemsSection = "Habits";
 let activeSocialSection = "Friends";
@@ -289,7 +306,7 @@ const pages = {
   `,
 
   Systems: () => `
-    ${renderSubTabs("Systems", ["Habits", "Logs", "Trackers", "Insights"], activeSystemsSection)}
+    ${renderSubTabs("Systems", ["Habits", "Logs", "Trackers", "Goals", "Insights"], activeSystemsSection)}
     ${activeSystemsSection === "Habits" ? `
       <div class="card">
         <h3>Add Habit</h3>
@@ -357,6 +374,42 @@ const pages = {
       <div class="card">
         <h3>Tracker List</h3>
         <div id="trackersList"></div>
+      </div>
+    ` : ""}
+    ${activeSystemsSection === "Goals" ? `
+      <div class="card">
+        <h3>Add Goal</h3>
+        <input id="goalName" placeholder="Goal name">
+        <select id="goalCategory">
+          <option>Weight</option>
+          <option>Taper</option>
+          <option>Fitness</option>
+          <option>Study</option>
+          <option>Spending</option>
+          <option>Routine</option>
+          <option>Social</option>
+          <option>Custom</option>
+        </select>
+        <input id="goalCurrentValue" type="number" placeholder="Current value">
+        <input id="goalTargetValue" type="number" placeholder="Target value">
+        <input id="goalUnit" placeholder="Unit (lb, hrs, $, etc.)">
+        <input id="goalStartDate" type="date">
+        <input id="goalDeadline" type="date">
+        <select id="goalLinkedTracker">
+          <option value="">No linked tracker</option>
+          ${systemsData.trackers.map(t => `<option value="${t.id}">${escapeHTML(t.name)}</option>`).join("")}
+        </select>
+        <select id="goalLinkedHabit">
+          <option value="">No linked habit</option>
+          ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
+        </select>
+        <textarea id="goalNotes" placeholder="Notes"></textarea>
+        <button id="goalSaveButton" onclick="saveGoal()">Save Goal</button>
+        <button class="secondary-btn" onclick="resetGoalForm()">Clear Form</button>
+      </div>
+      <div class="card">
+        <h3>Goals</h3>
+        <div id="goalsList"></div>
       </div>
     ` : ""}
     ${activeSystemsSection === "Insights" ? `
@@ -1554,10 +1607,12 @@ function formatMinutes(minutes) {
 function renderSystems() {
   fillEditingHabitForm();
   fillEditingTrackerForm();
+  fillEditingGoalForm();
   renderSystemsDashboard();
   renderHabitsList();
   renderSystemsLogsList();
   renderTrackersList();
+  renderGoalsList();
   fillDefaultLogDate();
 }
 
@@ -1957,6 +2012,206 @@ function deleteTracker(index) {
   systemsData.trackers.splice(index, 1);
   saveSystemsData();
   renderSystems();
+}
+
+// ---------------- GOALS ----------------
+
+function saveGoal() {
+  const name = document.getElementById("goalName").value.trim();
+  const category = document.getElementById("goalCategory").value;
+  const currentValue = document.getElementById("goalCurrentValue").value;
+  const targetValue = document.getElementById("goalTargetValue").value;
+  const unit = document.getElementById("goalUnit").value.trim();
+  const startDate = document.getElementById("goalStartDate").value;
+  const deadline = document.getElementById("goalDeadline").value;
+  const linkedTrackerId = document.getElementById("goalLinkedTracker").value;
+  const linkedHabitId = document.getElementById("goalLinkedHabit").value;
+  const notes = document.getElementById("goalNotes").value.trim();
+
+  if (!name || targetValue === "") {
+    alert("Add a goal name and target value.");
+    return;
+  }
+
+  const goal = {
+    id: editingGoalIndex === null
+      ? createId("goal")
+      : systemsData.goals[editingGoalIndex].id,
+    name, category, currentValue, targetValue,
+    unit, startDate, deadline,
+    linkedTrackerId, linkedHabitId, notes
+  };
+
+  if (editingGoalIndex === null) {
+    systemsData.goals.push(goal);
+  } else {
+    systemsData.goals[editingGoalIndex] = goal;
+  }
+
+  editingGoalIndex = null;
+  saveSystemsData();
+  activeSystemsSection = "Goals";
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function resetGoalForm() {
+  editingGoalIndex = null;
+  activeSystemsSection = "Goals";
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function editGoal(index) {
+  editingGoalIndex = index;
+  activeSystemsSection = "Goals";
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function deleteGoal(index) {
+  if (!confirm("Delete this goal?")) return;
+  if (editingGoalIndex === index) editingGoalIndex = null;
+  systemsData.goals.splice(index, 1);
+  saveSystemsData();
+  renderSystems();
+}
+
+function fillEditingGoalForm() {
+  if (editingGoalIndex === null) return;
+  const el = id => document.getElementById(id);
+  if (!el("goalName")) return;
+  const goal = systemsData.goals[editingGoalIndex];
+  if (!goal) return;
+
+  el("goalName").value = goal.name;
+  el("goalCategory").value = goal.category;
+  el("goalCurrentValue").value = goal.currentValue;
+  el("goalTargetValue").value = goal.targetValue;
+  el("goalUnit").value = goal.unit;
+  el("goalStartDate").value = goal.startDate;
+  el("goalDeadline").value = goal.deadline;
+  el("goalLinkedTracker").value = goal.linkedTrackerId;
+  el("goalLinkedHabit").value = goal.linkedHabitId;
+  el("goalNotes").value = goal.notes;
+  el("goalSaveButton").textContent = "Update Goal";
+}
+
+function getGoalCurrentValue(goal) {
+  if (goal.linkedTrackerId) {
+    const tracker = systemsData.trackers.find(t => t.id === goal.linkedTrackerId);
+    if (tracker) return Number(tracker.currentValue);
+  }
+  return Number(goal.currentValue);
+}
+
+function getGoalTargetValue(goal) {
+  if (goal.linkedTrackerId) {
+    const tracker = systemsData.trackers.find(t => t.id === goal.linkedTrackerId);
+    if (tracker) return Number(tracker.targetValue);
+  }
+  return Number(goal.targetValue);
+}
+
+function getGoalProgress(goal) {
+  const current = getGoalCurrentValue(goal);
+  const target = getGoalTargetValue(goal);
+  if (!target) return 0;
+  return Math.min(Math.round((current / target) * 100), 100);
+}
+
+function getGoalStatus(goal) {
+  const pct = getGoalProgress(goal);
+  if (pct >= 100) return "complete";
+  if (!goal.deadline || !goal.startDate) return "on track";
+  const today = getTodayISO();
+  if (today > goal.deadline) return "behind";
+  const totalDays = Math.max(
+    (new Date(goal.deadline) - new Date(goal.startDate)) / 86400000, 1
+  );
+  const elapsed = Math.max(
+    (new Date(today) - new Date(goal.startDate)) / 86400000, 0
+  );
+  const expectedPct = Math.min((elapsed / totalDays) * 100, 100);
+  return pct >= expectedPct ? "on track" : "behind";
+}
+
+function logGoalProgress(index) {
+  const goal = systemsData.goals[index];
+  if (!goal) return;
+  const unit = goal.unit || "units";
+  const raw = prompt(`Log current value for "${goal.name}" (${unit}):`);
+  if (raw === null || raw.trim() === "") return;
+  const value = raw.trim();
+  goal.currentValue = value;
+  if (goal.linkedTrackerId) {
+    const tracker = systemsData.trackers.find(t => t.id === goal.linkedTrackerId);
+    if (tracker) {
+      tracker.currentValue = value;
+      systemsData.logs.push({
+        id: createId("log"),
+        title: goal.name,
+        type: goal.category,
+        value,
+        unit: goal.unit,
+        date: getTodayISO(),
+        notes: `Goal: ${goal.name}`,
+        linkedHabitId: goal.linkedHabitId || "",
+        linkedPlannerBlockId: "",
+        trackerId: goal.linkedTrackerId
+      });
+    }
+  }
+  saveSystemsData();
+  renderSystems();
+}
+
+function renderGoalsList() {
+  const box = document.getElementById("goalsList");
+  if (!box) return;
+
+  if (!systemsData.goals.length) {
+    box.innerHTML = "<p>No goals saved yet.</p>";
+    return;
+  }
+
+  box.innerHTML = systemsData.goals.map((goal, index) => {
+    const current = getGoalCurrentValue(goal);
+    const target = getGoalTargetValue(goal);
+    const pct = getGoalProgress(goal);
+    const status = getGoalStatus(goal);
+    const unit = escapeHTML(goal.unit || "");
+    const linkedTracker = goal.linkedTrackerId
+      ? systemsData.trackers.find(t => t.id === goal.linkedTrackerId)
+      : null;
+    const linkedHabit = goal.linkedHabitId
+      ? systemsData.habits.find(h => h.id === goal.linkedHabitId)
+      : null;
+
+    return `
+      <div class="system-item goal-item">
+        <div class="item-title">
+          <strong>${escapeHTML(goal.name)}</strong>
+          <span class="goal-status-badge goal-status-${status}">${status}</span>
+        </div>
+        <p class="muted-text">${escapeHTML(goal.category)}</p>
+        <p>${current} ${unit} → ${target} ${unit}</p>
+        <div class="tracker-progress-bar">
+          <div class="tracker-progress-fill goal-progress-fill-${status}" style="width:${pct}%"></div>
+        </div>
+        <p class="tracker-pct">${pct}% complete</p>
+        ${goal.deadline ? `<p>Deadline: <strong>${escapeHTML(goal.deadline)}</strong></p>` : ""}
+        ${linkedTracker ? `<p class="muted-text">Linked tracker: ${escapeHTML(linkedTracker.name)}</p>` : ""}
+        ${linkedHabit ? `<p class="muted-text">Linked habit: ${escapeHTML(linkedHabit.name)}</p>` : ""}
+        ${goal.notes ? `<p>${escapeHTML(goal.notes)}</p>` : ""}
+        <div class="button-row">
+          <button onclick="logGoalProgress(${index})">Log Progress</button>
+          <button onclick="editGoal(${index})">Edit</button>
+          <button class="danger-btn" onclick="deleteGoal(${index})">Delete</button>
+        </div>
+      </div>
+    `;
+  }).join("");
 }
 
 function getHabitStreak(habit) {
