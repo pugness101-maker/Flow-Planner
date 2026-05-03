@@ -590,6 +590,7 @@ function getTodayISO() {
 
 function renderTimeBlocks() {
   const box = document.getElementById("timeBlocksList");
+  if (!box) return;
   const today = getTodayISO();
 
   const blocks = scheduleData.blocks
@@ -689,6 +690,7 @@ function deleteTimeBlock(index) {
 
 function renderFreeTime() {
   const box = document.getElementById("freeTimeBox");
+  if (!box) return;
   const today = getTodayISO();
 
   const blocks = scheduleData.blocks.filter(b => b.date === today && !b.isBuffer);
