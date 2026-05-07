@@ -65,8 +65,9 @@ systemsData.goals = systemsData.goals.map(goal => ({
   id: goal.id || createId("goal"),
   name: goal.name || "",
   category: goal.category || "Custom",
-  targetValue: goal.targetValue ?? "",
+  startValue: goal.startValue ?? "",
   currentValue: goal.currentValue ?? "",
+  targetValue: goal.targetValue ?? "",
   unit: goal.unit || "",
   startDate: goal.startDate || "",
   deadline: goal.deadline || "",
@@ -390,6 +391,7 @@ const pages = {
           <option>Social</option>
           <option>Custom</option>
         </select>
+        <input id="goalStartValue" type="number" placeholder="Start value (e.g. 166 lb)">
         <input id="goalCurrentValue" type="number" placeholder="Current value">
         <input id="goalTargetValue" type="number" placeholder="Target value">
         <input id="goalUnit" placeholder="Unit (lb, hrs, $, etc.)">
@@ -2019,6 +2021,7 @@ function deleteTracker(index) {
 function saveGoal() {
   const name = document.getElementById("goalName").value.trim();
   const category = document.getElementById("goalCategory").value;
+  const startValue = document.getElementById("goalStartValue").value;
   const currentValue = document.getElementById("goalCurrentValue").value;
   const targetValue = document.getElementById("goalTargetValue").value;
   const unit = document.getElementById("goalUnit").value.trim();
@@ -2037,7 +2040,7 @@ function saveGoal() {
     id: editingGoalIndex === null
       ? createId("goal")
       : systemsData.goals[editingGoalIndex].id,
-    name, category, currentValue, targetValue,
+    name, category, startValue, currentValue, targetValue,
     unit, startDate, deadline,
     linkedTrackerId, linkedHabitId, notes
   };
@@ -2086,6 +2089,7 @@ function fillEditingGoalForm() {
 
   el("goalName").value = goal.name;
   el("goalCategory").value = goal.category;
+  if (el("goalStartValue")) el("goalStartValue").value = goal.startValue || "";
   el("goalCurrentValue").value = goal.currentValue;
   el("goalTargetValue").value = goal.targetValue;
   el("goalUnit").value = goal.unit;
@@ -2113,11 +2117,41 @@ function getGoalTargetValue(goal) {
   return Number(goal.targetValue);
 }
 
+function getGoalStartValue(goal) {
+  if (goal.linkedTrackerId) {
+    const tracker = systemsData.trackers.find(t => t.id === goal.linkedTrackerId);
+    if (tracker && tracker.startValue !== "") return Number(tracker.startValue);
+  }
+  if (goal.startValue !== undefined && goal.startValue !== "") return Number(goal.startValue);
+  return null;
+}
+
 function getGoalProgress(goal) {
   const current = getGoalCurrentValue(goal);
   const target = getGoalTargetValue(goal);
+  const start = getGoalStartValue(goal);
+
+  if (isNaN(current) || isNaN(target)) return 0;
+
+  const isDecreasing = (goal.category === "Weight" || goal.category === "Taper") && target < (start !== null ? start : current);
+
+  if (isDecreasing) {
+    const startVal = start !== null ? start : current;
+    const range = startVal - target;
+    if (range <= 0) return current <= target ? 100 : 0;
+    const pct = ((startVal - current) / range) * 100;
+    return Math.min(100, Math.max(0, Math.round(pct)));
+  }
+
+  if (start !== null) {
+    const range = target - start;
+    if (range <= 0) return current >= target ? 100 : 0;
+    const pct = ((current - start) / range) * 100;
+    return Math.min(100, Math.max(0, Math.round(pct)));
+  }
+
   if (!target) return 0;
-  return Math.min(Math.round((current / target) * 100), 100);
+  return Math.min(100, Math.max(0, Math.round((current / target) * 100)));
 }
 
 function getGoalStatus(goal) {
