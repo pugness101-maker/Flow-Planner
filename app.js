@@ -613,7 +613,7 @@ function openSocialSection(section) {
 // NAV
 document.querySelectorAll(".bottom-nav button").forEach(btn => {
   btn.addEventListener("click", () => {
-    const tab = btn.innerText;
+    const tab = btn.dataset.tab;
     setActiveBottomNav(tab);
     main.innerHTML = getPageHTML(tab);
 
@@ -631,7 +631,7 @@ renderHome();
 
 function setActiveBottomNav(tab) {
   document.querySelectorAll(".bottom-nav button").forEach(button => {
-    button.classList.toggle("active", button.innerText === tab);
+    button.classList.toggle("active", button.dataset.tab === tab);
   });
 }
 
