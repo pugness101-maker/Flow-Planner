@@ -1028,3 +1028,49 @@ textarea:focus {
 .goal-progress-fill-behind {
   background: #ea580c;
 }
+
+.metric-type-pill {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.metric-type-numeric  { background: #eff6ff; color: #1d4ed8; }
+.metric-type-progress { background: #f0fdf4; color: #166534; }
+.metric-type-counter  { background: #fef9ee; color: #92400e; }
+.metric-type-boolean,
+.metric-type-daily    { background: #fdf4ff; color: #7c3aed; }
+.metric-type-time     { background: #fff7ed; color: #c2410c; }
+.metric-type-milestone{ background: #f8fafc; color: #475569; }
+
+@media (prefers-color-scheme: dark) {
+  .metric-type-numeric  { background: #1e3a5f; color: #93c5fd; }
+  .metric-type-progress { background: #14301f; color: #86efac; }
+  .metric-type-counter  { background: #3d2e00; color: #fcd34d; }
+  .metric-type-boolean,
+  .metric-type-daily    { background: #2e1a4d; color: #c4b5fd; }
+  .metric-type-time     { background: #3d1a00; color: #fdba74; }
+  .metric-type-milestone{ background: #1e2530; color: #94a3b8; }
+}
+
+.metric-counter-value {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -1px;
+  margin: 6px 0 4px;
+  color: var(--text);
+}
+
+.habit-meta-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.habit-meta-row select {
+  margin-top: 0;
+}

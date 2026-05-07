@@ -60,6 +60,7 @@ if (!Array.isArray(systemsData.habits)) systemsData.habits = [];
 if (!Array.isArray(systemsData.logs)) systemsData.logs = [];
 if (!Array.isArray(systemsData.trackers)) systemsData.trackers = [];
 if (!Array.isArray(systemsData.goals)) systemsData.goals = [];
+if (!Array.isArray(systemsData.metrics)) systemsData.metrics = [];
 
 systemsData.goals = systemsData.goals.map(goal => ({
   id: goal.id || createId("goal"),
@@ -89,12 +90,29 @@ systemsData.trackers = systemsData.trackers.map(tracker => ({
   notes: tracker.notes || ""
 }));
 
+systemsData.metrics = systemsData.metrics.map(metric => ({
+  id: metric.id || createId("metric"),
+  name: metric.name || "",
+  type: metric.type || "Counter",
+  unit: metric.unit || "",
+  startValue: metric.startValue ?? "",
+  currentValue: metric.currentValue ?? "0",
+  targetValue: metric.targetValue ?? "",
+  startDate: metric.startDate || "",
+  deadline: metric.deadline || "",
+  linkedHabitId: metric.linkedHabitId || "",
+  notes: metric.notes || "",
+  entries: Array.isArray(metric.entries) ? metric.entries : []
+}));
+
 systemsData.habits = systemsData.habits.map(habit => ({
   id: habit.id || createId("habit"),
   name: habit.name || "",
   category: habit.category || "",
   frequency: habit.frequency || "Daily",
   target: habit.target || "",
+  unit: habit.unit || "",
+  linkedGoalId: habit.linkedGoalId || "",
   notes: habit.notes || "",
   completions: Array.isArray(habit.completions) ? habit.completions : []
 }));
@@ -158,6 +176,7 @@ let editingIdeaIndex = null;
 let editingHabitIndex = null;
 let editingTrackerIndex = null;
 let editingGoalIndex = null;
+let editingMetricIndex = null;
 let activePlannerSection = "Day";
 let activeSystemsSection = "Habits";
 let activeSocialSection = "Friends";
@@ -307,19 +326,53 @@ const pages = {
   `,
 
   Systems: () => `
-    ${renderSubTabs("Systems", ["Habits", "Logs", "Trackers", "Goals", "Insights"], activeSystemsSection)}
+    ${renderSubTabs("Systems", ["Habits", "Logs", "Metrics", "Insights"], activeSystemsSection)}
     ${activeSystemsSection === "Habits" ? `
       <div class="card">
         <h3>Add Habit</h3>
         <input id="habitName" placeholder="Habit name">
-        <input id="habitCategory" placeholder="Category">
+        <select id="habitCategory">
+          <option value="">Category</option>
+          <option>Health</option>
+          <option>Fitness</option>
+          <option>Learning</option>
+          <option>Mindfulness</option>
+          <option>Productivity</option>
+          <option>Social</option>
+          <option>Finance</option>
+          <option>Sleep</option>
+          <option>School</option>
+          <option>Work</option>
+          <option>Personal</option>
+          <option>Gym</option>
+          <option>Custom</option>
+        </select>
         <select id="habitFrequency">
           <option>Daily</option>
           <option>Weekdays</option>
           <option>Weekly</option>
           <option>Custom</option>
         </select>
-        <input id="habitTarget" placeholder="Target">
+        <input id="habitTarget" placeholder="Target (e.g. 30, 8 glasses)">
+        <div class="habit-meta-row">
+          <select id="habitUnit">
+            <option value="">Unit</option>
+            <option>times</option>
+            <option>minutes</option>
+            <option>hours</option>
+            <option>pages</option>
+            <option>miles</option>
+            <option>reps</option>
+            <option>glasses</option>
+            <option>calories</option>
+            <option>steps</option>
+            <option>Custom</option>
+          </select>
+          <select id="habitLinkedGoalId">
+            <option value="">Link to goal</option>
+            ${systemsData.goals.map(g => `<option value="${g.id}">${escapeHTML(g.name)}</option>`).join("")}
+          </select>
+        </div>
         <textarea id="habitNotes" placeholder="Notes"></textarea>
         <button id="habitSaveButton" onclick="saveHabit()">Save Habit</button>
         <button class="secondary-btn" onclick="resetHabitForm()">Clear Habit Form</button>
@@ -351,67 +404,35 @@ const pages = {
         <div id="systemsLogsList"></div>
       </div>
     ` : ""}
-    ${activeSystemsSection === "Trackers" ? `
+    ${activeSystemsSection === "Metrics" ? `
       <div class="card">
-        <h3>Add Tracker</h3>
-        <input id="trackerName" placeholder="Tracker name">
-        <select id="trackerType">
-          <option>Weight</option>
-          <option>Taper</option>
-          <option>Spending</option>
-          <option>Study</option>
-          <option>Custom</option>
+        <h3>Add Metric</h3>
+        <input id="metricName" placeholder="Name">
+        <select id="metricType">
+          <option value="Numeric">Numeric Tracker</option>
+          <option value="Progress">Progress Goal</option>
+          <option value="Counter">Counter</option>
+          <option value="Boolean">Daily Check-in</option>
+          <option value="Time">Time Tracker</option>
+          <option value="Milestone">Milestone Goal</option>
         </select>
-        <input id="trackerUnit" placeholder="Unit (lb, kg, $, hrs, etc.)">
-        <input id="trackerStartValue" type="number" placeholder="Start value">
-        <input id="trackerCurrentValue" type="number" placeholder="Current value">
-        <input id="trackerTargetValue" type="number" placeholder="Target value">
-        <input id="trackerStartDate" type="date">
-        <input id="trackerTargetDate" type="date">
-        <textarea id="trackerNotes" placeholder="Notes"></textarea>
-        <button id="trackerSaveButton" onclick="saveTracker()">Save Tracker</button>
-        <button class="secondary-btn" onclick="resetTrackerForm()">Clear Form</button>
-      </div>
-      <div class="card">
-        <h3>Tracker List</h3>
-        <div id="trackersList"></div>
-      </div>
-    ` : ""}
-    ${activeSystemsSection === "Goals" ? `
-      <div class="card">
-        <h3>Add Goal</h3>
-        <input id="goalName" placeholder="Goal name">
-        <select id="goalCategory">
-          <option>Weight</option>
-          <option>Taper</option>
-          <option>Fitness</option>
-          <option>Study</option>
-          <option>Spending</option>
-          <option>Routine</option>
-          <option>Social</option>
-          <option>Custom</option>
-        </select>
-        <input id="goalStartValue" type="number" placeholder="Start value (e.g. 166 lb)">
-        <input id="goalCurrentValue" type="number" placeholder="Current value">
-        <input id="goalTargetValue" type="number" placeholder="Target value">
-        <input id="goalUnit" placeholder="Unit (lb, hrs, $, etc.)">
-        <input id="goalStartDate" type="date">
-        <input id="goalDeadline" type="date">
-        <select id="goalLinkedTracker">
-          <option value="">No linked tracker</option>
-          ${systemsData.trackers.map(t => `<option value="${t.id}">${escapeHTML(t.name)}</option>`).join("")}
-        </select>
-        <select id="goalLinkedHabit">
+        <input id="metricUnit" placeholder="Unit (lb, hrs, $, reps...)">
+        <input id="metricStartValue" type="number" placeholder="Start value">
+        <input id="metricCurrentValue" type="number" placeholder="Current value">
+        <input id="metricTargetValue" type="number" placeholder="Target value">
+        <input id="metricStartDate" type="date">
+        <input id="metricDeadline" type="date">
+        <select id="metricLinkedHabit">
           <option value="">No linked habit</option>
           ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
         </select>
-        <textarea id="goalNotes" placeholder="Notes"></textarea>
-        <button id="goalSaveButton" onclick="saveGoal()">Save Goal</button>
-        <button class="secondary-btn" onclick="resetGoalForm()">Clear Form</button>
+        <textarea id="metricNotes" placeholder="Notes"></textarea>
+        <button id="metricSaveButton" onclick="saveMetric()">Save Metric</button>
+        <button class="secondary-btn" onclick="resetMetricForm()">Clear Form</button>
       </div>
       <div class="card">
-        <h3>Goals</h3>
-        <div id="goalsList"></div>
+        <h3>Metrics</h3>
+        <div id="metricsList"></div>
       </div>
     ` : ""}
     ${activeSystemsSection === "Insights" ? `
@@ -1610,11 +1631,11 @@ function renderSystems() {
   fillEditingHabitForm();
   fillEditingTrackerForm();
   fillEditingGoalForm();
+  fillEditingMetricForm();
   renderSystemsDashboard();
   renderHabitsList();
   renderSystemsLogsList();
-  renderTrackersList();
-  renderGoalsList();
+  renderMetricsList();
   fillDefaultLogDate();
 }
 
@@ -1625,9 +1646,11 @@ function saveHabit() {
   const habit = {
     id: editingHabitIndex === null ? createId("habit") : systemsData.habits[editingHabitIndex].id,
     name,
-    category: document.getElementById("habitCategory").value.trim(),
+    category: document.getElementById("habitCategory").value,
     frequency: document.getElementById("habitFrequency").value,
     target: document.getElementById("habitTarget").value.trim(),
+    unit: document.getElementById("habitUnit")?.value || "",
+    linkedGoalId: document.getElementById("habitLinkedGoalId")?.value || "",
     notes: document.getElementById("habitNotes").value.trim(),
     completions: editingHabitIndex === null ? [] : systemsData.habits[editingHabitIndex].completions
   };
@@ -1652,9 +1675,13 @@ function fillEditingHabitForm() {
   if (!habit) return;
 
   document.getElementById("habitName").value = habit.name;
-  document.getElementById("habitCategory").value = habit.category;
+  document.getElementById("habitCategory").value = habit.category || "";
   document.getElementById("habitFrequency").value = habit.frequency;
   document.getElementById("habitTarget").value = habit.target;
+  const habitUnitEl = document.getElementById("habitUnit");
+  if (habitUnitEl) habitUnitEl.value = habit.unit || "";
+  const habitGoalEl = document.getElementById("habitLinkedGoalId");
+  if (habitGoalEl) habitGoalEl.value = habit.linkedGoalId || "";
   document.getElementById("habitNotes").value = habit.notes;
   document.getElementById("habitSaveButton").textContent = "Update Habit";
 }
@@ -1915,7 +1942,7 @@ function saveTracker() {
 
   editingTrackerIndex = null;
   saveSystemsData();
-  activeSystemsSection = "Trackers";
+  activeSystemsSection = "Metrics";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
 }
@@ -1978,32 +2005,22 @@ function logTrackerValue(index) {
 
 function editTracker(index) {
   editingTrackerIndex = index;
-  activeSystemsSection = "Trackers";
+  editingGoalIndex = null;
+  editingMetricIndex = null;
+  activeSystemsSection = "Metrics";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
 }
 
 function fillEditingTrackerForm() {
-  if (editingTrackerIndex === null) return;
-  if (!document.getElementById("trackerName")) return;
-  const tracker = systemsData.trackers[editingTrackerIndex];
-  if (!tracker) return;
-
-  document.getElementById("trackerName").value = tracker.name;
-  document.getElementById("trackerType").value = tracker.type;
-  document.getElementById("trackerUnit").value = tracker.unit;
-  document.getElementById("trackerStartValue").value = tracker.startValue;
-  document.getElementById("trackerCurrentValue").value = tracker.currentValue;
-  document.getElementById("trackerTargetValue").value = tracker.targetValue;
-  document.getElementById("trackerStartDate").value = tracker.startDate;
-  document.getElementById("trackerTargetDate").value = tracker.targetDate;
-  document.getElementById("trackerNotes").value = tracker.notes;
-  document.getElementById("trackerSaveButton").textContent = "Update Tracker";
+  // Handled by fillEditingMetricForm — tracker form elements no longer in DOM
 }
 
 function resetTrackerForm() {
   editingTrackerIndex = null;
-  activeSystemsSection = "Trackers";
+  editingGoalIndex = null;
+  editingMetricIndex = null;
+  activeSystemsSection = "Metrics";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
 }
@@ -2053,21 +2070,25 @@ function saveGoal() {
 
   editingGoalIndex = null;
   saveSystemsData();
-  activeSystemsSection = "Goals";
+  activeSystemsSection = "Metrics";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
 }
 
 function resetGoalForm() {
   editingGoalIndex = null;
-  activeSystemsSection = "Goals";
+  editingTrackerIndex = null;
+  editingMetricIndex = null;
+  activeSystemsSection = "Metrics";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
 }
 
 function editGoal(index) {
   editingGoalIndex = index;
-  activeSystemsSection = "Goals";
+  editingTrackerIndex = null;
+  editingMetricIndex = null;
+  activeSystemsSection = "Metrics";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
 }
@@ -2081,24 +2102,7 @@ function deleteGoal(index) {
 }
 
 function fillEditingGoalForm() {
-  if (editingGoalIndex === null) return;
-  const el = id => document.getElementById(id);
-  if (!el("goalName")) return;
-  const goal = systemsData.goals[editingGoalIndex];
-  if (!goal) return;
-
-  el("goalName").value = goal.name;
-  el("goalCategory").value = goal.category;
-  if (el("goalStartValue")) el("goalStartValue").value = goal.startValue || "";
-  el("goalCurrentValue").value = goal.currentValue;
-  el("goalTargetValue").value = goal.targetValue;
-  el("goalUnit").value = goal.unit;
-  el("goalStartDate").value = goal.startDate;
-  el("goalDeadline").value = goal.deadline;
-  el("goalLinkedTracker").value = goal.linkedTrackerId;
-  el("goalLinkedHabit").value = goal.linkedHabitId;
-  el("goalNotes").value = goal.notes;
-  el("goalSaveButton").textContent = "Update Goal";
+  // Handled by fillEditingMetricForm — goal form elements no longer in DOM
 }
 
 function getGoalCurrentValue(goal) {
@@ -2133,7 +2137,9 @@ function getGoalProgress(goal) {
 
   if (isNaN(current) || isNaN(target)) return 0;
 
-  const isDecreasing = (goal.category === "Weight" || goal.category === "Taper") && target < (start !== null ? start : current);
+  const isDecreasing = start !== null
+    ? target < start
+    : (goal.category === "Weight" || goal.category === "Taper") && target < current;
 
   if (isDecreasing) {
     const startVal = start !== null ? start : current;
@@ -2246,6 +2252,350 @@ function renderGoalsList() {
       </div>
     `;
   }).join("");
+}
+
+// ---------------- METRICS ----------------
+
+function saveMetric() {
+  const name = document.getElementById("metricName")?.value.trim();
+  const type = document.getElementById("metricType")?.value;
+  if (!name) { alert("Add a metric name."); return; }
+  const unit = document.getElementById("metricUnit")?.value.trim() || "";
+  const startValue = document.getElementById("metricStartValue")?.value || "";
+  const currentValue = document.getElementById("metricCurrentValue")?.value || "0";
+  const targetValue = document.getElementById("metricTargetValue")?.value || "";
+  const startDate = document.getElementById("metricStartDate")?.value || "";
+  const deadline = document.getElementById("metricDeadline")?.value || "";
+  const linkedHabitId = document.getElementById("metricLinkedHabit")?.value || "";
+  const notes = document.getElementById("metricNotes")?.value.trim() || "";
+
+  if (editingTrackerIndex !== null) {
+    const orig = systemsData.trackers[editingTrackerIndex];
+    systemsData.trackers[editingTrackerIndex] = {
+      id: orig.id, name, type: orig.type, unit, startValue, currentValue,
+      targetValue, startDate, targetDate: deadline, notes
+    };
+    editingTrackerIndex = null;
+  } else if (editingGoalIndex !== null) {
+    const orig = systemsData.goals[editingGoalIndex];
+    systemsData.goals[editingGoalIndex] = {
+      id: orig.id, name, category: orig.category, startValue, currentValue,
+      targetValue, unit, startDate, deadline,
+      linkedTrackerId: orig.linkedTrackerId || "", linkedHabitId, notes
+    };
+    editingGoalIndex = null;
+  } else if (editingMetricIndex !== null) {
+    const orig = systemsData.metrics[editingMetricIndex];
+    systemsData.metrics[editingMetricIndex] = {
+      ...orig, name, type, unit, startValue, currentValue,
+      targetValue, startDate, deadline, linkedHabitId, notes
+    };
+    editingMetricIndex = null;
+  } else if (type === "Numeric") {
+    systemsData.trackers.push({
+      id: createId("tracker"), name, type: "Custom", unit,
+      startValue, currentValue, targetValue, startDate, targetDate: deadline, notes
+    });
+  } else if (type === "Progress") {
+    systemsData.goals.push({
+      id: createId("goal"), name, category: "Custom", startValue, currentValue,
+      targetValue, unit, startDate, deadline, linkedTrackerId: "", linkedHabitId, notes
+    });
+  } else {
+    systemsData.metrics.push({
+      id: createId("metric"), name, type, unit,
+      startValue, currentValue: type === "Counter" ? "0" : currentValue,
+      targetValue, startDate, deadline, linkedHabitId, notes, entries: []
+    });
+  }
+
+  saveSystemsData();
+  activeSystemsSection = "Metrics";
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function resetMetricForm() {
+  editingMetricIndex = null;
+  editingTrackerIndex = null;
+  editingGoalIndex = null;
+  activeSystemsSection = "Metrics";
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function editMetric(index) {
+  editingMetricIndex = index;
+  editingTrackerIndex = null;
+  editingGoalIndex = null;
+  activeSystemsSection = "Metrics";
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function deleteMetric(index) {
+  if (!confirm("Delete this metric?")) return;
+  systemsData.metrics.splice(index, 1);
+  saveSystemsData();
+  renderSystems();
+}
+
+function fillEditingMetricForm() {
+  const el = id => document.getElementById(id);
+  if (!el("metricName")) return;
+  if (editingTrackerIndex !== null) {
+    const t = systemsData.trackers[editingTrackerIndex];
+    if (!t) return;
+    el("metricName").value = t.name;
+    el("metricType").value = "Numeric";
+    el("metricUnit").value = t.unit;
+    el("metricStartValue").value = t.startValue;
+    el("metricCurrentValue").value = t.currentValue;
+    el("metricTargetValue").value = t.targetValue;
+    el("metricStartDate").value = t.startDate;
+    el("metricDeadline").value = t.targetDate;
+    if (el("metricLinkedHabit")) el("metricLinkedHabit").value = "";
+    el("metricNotes").value = t.notes;
+    el("metricSaveButton").textContent = "Update Tracker";
+  } else if (editingGoalIndex !== null) {
+    const g = systemsData.goals[editingGoalIndex];
+    if (!g) return;
+    el("metricName").value = g.name;
+    el("metricType").value = "Progress";
+    el("metricUnit").value = g.unit;
+    el("metricStartValue").value = g.startValue || "";
+    el("metricCurrentValue").value = g.currentValue;
+    el("metricTargetValue").value = g.targetValue;
+    el("metricStartDate").value = g.startDate;
+    el("metricDeadline").value = g.deadline;
+    if (el("metricLinkedHabit")) el("metricLinkedHabit").value = g.linkedHabitId;
+    el("metricNotes").value = g.notes;
+    el("metricSaveButton").textContent = "Update Goal";
+  } else if (editingMetricIndex !== null) {
+    const m = systemsData.metrics[editingMetricIndex];
+    if (!m) return;
+    el("metricName").value = m.name;
+    el("metricType").value = m.type;
+    el("metricUnit").value = m.unit;
+    el("metricStartValue").value = m.startValue;
+    el("metricCurrentValue").value = m.currentValue;
+    el("metricTargetValue").value = m.targetValue;
+    el("metricStartDate").value = m.startDate;
+    el("metricDeadline").value = m.deadline;
+    if (el("metricLinkedHabit")) el("metricLinkedHabit").value = m.linkedHabitId;
+    el("metricNotes").value = m.notes;
+    el("metricSaveButton").textContent = "Update Metric";
+  }
+}
+
+function incrementCounter(index) {
+  const metric = systemsData.metrics[index];
+  if (!metric) return;
+  metric.currentValue = String((Number(metric.currentValue) || 0) + 1);
+  if (!Array.isArray(metric.entries)) metric.entries = [];
+  const today = getTodayISO();
+  const todayEntry = metric.entries.find(e => e.date === today);
+  if (todayEntry) {
+    todayEntry.value = String(Number(todayEntry.value || 0) + 1);
+  } else {
+    metric.entries.push({ date: today, value: "1" });
+  }
+  saveSystemsData();
+  renderSystems();
+}
+
+function resetCounter(index) {
+  const metric = systemsData.metrics[index];
+  if (!metric) return;
+  if (!confirm("Reset counter to 0?")) return;
+  metric.currentValue = "0";
+  saveSystemsData();
+  renderSystems();
+}
+
+function toggleBoolean(index) {
+  const metric = systemsData.metrics[index];
+  if (!metric) return;
+  const today = getTodayISO();
+  if (!Array.isArray(metric.entries)) metric.entries = [];
+  const existing = metric.entries.find(e => e.date === today);
+  if (existing) {
+    existing.value = existing.value === "1" ? "0" : "1";
+  } else {
+    metric.entries.push({ date: today, value: "1" });
+  }
+  saveSystemsData();
+  renderSystems();
+}
+
+function logMetricTime(index) {
+  const metric = systemsData.metrics[index];
+  if (!metric) return;
+  const raw = prompt(`Log minutes for "${metric.name}":`);
+  if (raw === null || raw.trim() === "") return;
+  const minutes = Number(raw.trim());
+  if (isNaN(minutes) || minutes <= 0) return;
+  if (!Array.isArray(metric.entries)) metric.entries = [];
+  metric.entries.push({ date: getTodayISO(), value: String(minutes) });
+  saveSystemsData();
+  renderSystems();
+}
+
+function logNewMetricValue(index) {
+  const metric = systemsData.metrics[index];
+  if (!metric) return;
+  const raw = prompt(`New value for "${metric.name}" (${metric.unit || "unit"}):`);
+  if (raw === null || raw.trim() === "") return;
+  metric.currentValue = raw.trim();
+  if (!Array.isArray(metric.entries)) metric.entries = [];
+  metric.entries.push({ date: getTodayISO(), value: raw.trim() });
+  saveSystemsData();
+  renderSystems();
+}
+
+function renderMetricsList() {
+  const box = document.getElementById("metricsList");
+  if (!box) return;
+  const trackerItems = systemsData.trackers.map((t, i) => renderMetricTrackerRow(t, i));
+  const goalItems = systemsData.goals.map((g, i) => renderMetricGoalRow(g, i));
+  const metricItems = systemsData.metrics.map((m, i) => renderMetricRow(m, i));
+  const all = [...trackerItems, ...goalItems, ...metricItems];
+  box.innerHTML = all.length
+    ? all.join("")
+    : `<p class="empty-state">No metrics yet. Add one above.</p>`;
+}
+
+function renderMetricTrackerRow(tracker, index) {
+  const pct = getTrackerProgress(tracker);
+  const unit = escapeHTML(tracker.unit || "");
+  return `
+    <div class="system-item">
+      <div class="item-title">
+        <strong>${escapeHTML(tracker.name)}</strong>
+        <span class="metric-type-pill metric-type-numeric">Numeric</span>
+      </div>
+      <p>${escapeHTML(String(tracker.currentValue))} ${unit} → ${escapeHTML(String(tracker.targetValue))} ${unit}</p>
+      <div class="tracker-progress-bar">
+        <div class="tracker-progress-fill" style="width:${pct}%"></div>
+      </div>
+      <p class="tracker-pct">${pct}% complete</p>
+      ${tracker.targetDate ? `<p>Target: ${escapeHTML(tracker.targetDate)}</p>` : ""}
+      ${tracker.notes ? `<p>${escapeHTML(tracker.notes)}</p>` : ""}
+      <div class="button-row three-actions">
+        <button onclick="logTrackerValue(${index})">Log</button>
+        <button onclick="editTracker(${index})">Edit</button>
+        <button class="danger-btn" onclick="deleteTracker(${index})">Delete</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderMetricGoalRow(goal, index) {
+  const pct = getGoalProgress(goal);
+  const status = getGoalStatus(goal);
+  const current = getGoalCurrentValue(goal);
+  const target = getGoalTargetValue(goal);
+  const unit = escapeHTML(goal.unit || "");
+  return `
+    <div class="system-item goal-item">
+      <div class="item-title">
+        <strong>${escapeHTML(goal.name)}</strong>
+        <span class="metric-type-pill metric-type-progress">Goal</span>
+      </div>
+      <p>${current} ${unit} → ${target} ${unit}</p>
+      <div class="tracker-progress-bar">
+        <div class="tracker-progress-fill goal-progress-fill-${status}" style="width:${pct}%"></div>
+      </div>
+      <p class="tracker-pct">${pct}% • <span class="goal-status-badge goal-status-${status}">${status}</span></p>
+      ${goal.deadline ? `<p>Deadline: ${escapeHTML(goal.deadline)}</p>` : ""}
+      ${goal.notes ? `<p>${escapeHTML(goal.notes)}</p>` : ""}
+      <div class="button-row three-actions">
+        <button onclick="logGoalProgress(${index})">Log</button>
+        <button onclick="editGoal(${index})">Edit</button>
+        <button class="danger-btn" onclick="deleteGoal(${index})">Delete</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderMetricRow(metric, index) {
+  const type = metric.type;
+  const unit = escapeHTML(metric.unit || "");
+  const typeLabels = { Counter: "Counter", Boolean: "Daily", Time: "Time", Milestone: "Milestone" };
+  const typeLabel = typeLabels[type] || type;
+  const typeCls = (type || "").toLowerCase();
+  let body = "";
+  let actions = "";
+
+  if (type === "Counter") {
+    const count = Number(metric.currentValue) || 0;
+    body = `<p class="metric-counter-value">${count}${unit ? " " + unit : ""}</p>`;
+    actions = `
+      <div class="button-row">
+        <button onclick="incrementCounter(${index})">+1</button>
+        <button class="secondary-btn" onclick="resetCounter(${index})">Reset</button>
+      </div>
+      <div class="button-row">
+        <button onclick="editMetric(${index})">Edit</button>
+        <button class="danger-btn" onclick="deleteMetric(${index})">Delete</button>
+      </div>`;
+  } else if (type === "Boolean") {
+    const today = getTodayISO();
+    const entry = (metric.entries || []).find(e => e.date === today);
+    const done = entry && entry.value === "1";
+    body = `<p>${done ? "Done today" : "Not done yet"}</p>`;
+    actions = `
+      <div class="button-row three-actions">
+        <button onclick="toggleBoolean(${index})">${done ? "Undo" : "Mark Done"}</button>
+        <button onclick="editMetric(${index})">Edit</button>
+        <button class="danger-btn" onclick="deleteMetric(${index})">Delete</button>
+      </div>`;
+  } else if (type === "Time") {
+    const totalMin = (metric.entries || []).reduce((s, e) => s + Number(e.value || 0), 0);
+    const target = Number(metric.targetValue) || 0;
+    const pct = target > 0 ? Math.min(100, Math.round((totalMin / target) * 100)) : 0;
+    body = `
+      <p>${totalMin} / ${target || "?"} ${unit || "min"}</p>
+      ${target > 0 ? `<div class="tracker-progress-bar"><div class="tracker-progress-fill" style="width:${pct}%"></div></div><p class="tracker-pct">${pct}%</p>` : ""}`;
+    actions = `
+      <div class="button-row three-actions">
+        <button onclick="logMetricTime(${index})">Log Time</button>
+        <button onclick="editMetric(${index})">Edit</button>
+        <button class="danger-btn" onclick="deleteMetric(${index})">Delete</button>
+      </div>`;
+  } else if (type === "Milestone") {
+    body = metric.notes ? `<p>${escapeHTML(metric.notes)}</p>` : "";
+    actions = `
+      <div class="button-row">
+        <button onclick="editMetric(${index})">Edit</button>
+        <button class="danger-btn" onclick="deleteMetric(${index})">Delete</button>
+      </div>`;
+  } else {
+    const pct = metric.targetValue
+      ? Math.min(100, Math.max(0, Math.round((Number(metric.currentValue) / Number(metric.targetValue)) * 100)))
+      : 0;
+    body = `
+      <p>${escapeHTML(String(metric.currentValue || 0))} ${unit}</p>
+      ${metric.targetValue ? `<div class="tracker-progress-bar"><div class="tracker-progress-fill" style="width:${pct}%"></div></div><p class="tracker-pct">${pct}%</p>` : ""}`;
+    actions = `
+      <div class="button-row three-actions">
+        <button onclick="logNewMetricValue(${index})">Log</button>
+        <button onclick="editMetric(${index})">Edit</button>
+        <button class="danger-btn" onclick="deleteMetric(${index})">Delete</button>
+      </div>`;
+  }
+
+  return `
+    <div class="system-item">
+      <div class="item-title">
+        <strong>${escapeHTML(metric.name)}</strong>
+        <span class="metric-type-pill metric-type-${typeCls}">${typeLabel}</span>
+      </div>
+      ${body}
+      ${metric.deadline ? `<p>Deadline: ${escapeHTML(metric.deadline)}</p>` : ""}
+      ${actions}
+    </div>
+  `;
 }
 
 function getHabitStreak(habit) {
