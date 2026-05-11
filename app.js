@@ -19,13 +19,21 @@ if (!Array.isArray(socialData.ideas)) socialData.ideas = [];
 
 socialData.friends = socialData.friends.map(friend => ({
   name: friend.name || "",
+  birthday: friend.birthday || "",
+  phoneHandle: friend.phoneHandle || friend.contactNotes || "",
+  favoriteFood: friend.favoriteFood || "",
+  giftIdeas: friend.giftIdeas || "",
+  importantNotes: friend.importantNotes || friend.notes || "",
+  relationshipType: friend.relationshipType || "Friend",
   priority: friend.priority || "Medium",
   interests: friend.interests || "",
   details: friend.details || "",
   notes: friend.notes || "",
   favoriteActivities: friend.favoriteActivities || "",
   contactNotes: friend.contactNotes || "",
-  lastSeen: friend.lastSeen || friend.lastHangout || ""
+  lastContacted: friend.lastContacted || "",
+  lastSeen: friend.lastSeen || friend.lastHangout || "",
+  preferredHangoutStyle: friend.preferredHangoutStyle || ""
 }));
 
 socialData.hangouts = socialData.hangouts.map(hangout => ({
@@ -37,6 +45,11 @@ socialData.hangouts = socialData.hangouts.map(hangout => ({
     ? hangout.people
     : (hangout.friend ? [hangout.friend] : []),
   cost: hangout.cost || "",
+  checklist: hangout.checklist || "",
+  moodAfter: hangout.moodAfter || "",
+  rating: hangout.rating || "",
+  memories: hangout.memories || "",
+  followUpReminder: hangout.followUpReminder || "",
   notes: hangout.notes || "",
   completed: Boolean(hangout.completed)
 }));
@@ -67,6 +80,8 @@ systemsData.goals = systemsData.goals.map(goal => ({
   id: goal.id || createId("goal"),
   name: goal.name || "",
   category: goal.category || "Custom",
+  goalType: goal.goalType || goal.category || "Increase toward target",
+  resetCycle: goal.resetCycle || "weekly",
   startValue: goal.startValue ?? "",
   currentValue: goal.currentValue ?? "",
   targetValue: goal.targetValue ?? "",
@@ -136,6 +151,9 @@ systemsData.logs = systemsData.logs.map(log => ({
   date: log.date || "",
   notes: log.notes || "",
   linkedHabitId: log.linkedHabitId || "",
+  linkedItemType: log.linkedItemType || (log.linkedMetricId ? "metric" : log.linkedGoalId ? "goal" : log.linkedHabitId ? "habit" : ""),
+  linkedMetricId: log.linkedMetricId || "",
+  linkedGoalId: log.linkedGoalId || "",
   linkedPlannerBlockId: log.linkedPlannerBlockId || ""
 }));
 
@@ -178,6 +196,7 @@ scheduleData.routines.forEach(routine => {
 
 function saveScheduleData() {
   localStorage.setItem("flowScheduleData", JSON.stringify(scheduleData));
+  syncSupabaseData();
 }
 
 let editingPlanIndex = null;
@@ -191,9 +210,10 @@ let editingTrackerIndex = null;
 let editingGoalIndex = null;
 let editingMetricIndex = null;
 let activePlannerSection = "Day";
-let activeSystemsSection = "Dashboard";
+let activeSystemsSection = "Overview";
 let activeSocialSection = "Friends";
 let activeSystemsForm = null;
+let systemsAddMenuOpen = false;
 let friendFormOpen = false;
 let hangoutFormOpen = false;
 let viewingFriendIndex = null;
@@ -205,14 +225,26 @@ let pendingSocialImport = null;
 // SAVE
 function savePlannerData() {
   localStorage.setItem("flowPlannerData", JSON.stringify(plannerData));
+  syncSupabaseData();
 }
 
 function saveSocialData() {
   localStorage.setItem("flowSocialData", JSON.stringify(socialData));
+  syncSupabaseData();
 }
 
 function saveSystemsData() {
   localStorage.setItem("flowSystemsData", JSON.stringify(systemsData));
+  syncSupabaseData();
+}
+
+function syncSupabaseData() {
+  window.flowSupabaseStorage?.saveAll?.({
+    plannerData,
+    scheduleData,
+    systemsData,
+    socialData
+  });
 }
 
 // PAGES
@@ -276,19 +308,10 @@ const pages = {
   `,
 
   Planner: () => `
+    ${renderPlannerNav()}
     ${renderSubTabs("Planner", ["Day", "Week", "Month", "Routines"], activePlannerSection)}
     ${activePlannerSection === "Day" ? `
       ${renderPlannerBlockSheet()}
-      <div class="card">
-        <h3>Templates</h3>
-        <div class="template-grid">
-          ${getPlannerTemplates().map(template => `<button class="secondary-btn" onclick="addPlannerTemplate('${template.id}')">${escapeHTML(template.name)}</button>`).join("")}
-        </div>
-      </div>
-      <div class="card">
-        <h3>Workload Analytics</h3>
-        <div id="plannerAnalytics"></div>
-      </div>
       <div class="card">
         <div class="planner-day-header">
           <div>
@@ -299,16 +322,35 @@ const pages = {
         </div>
         <div id="timeBlocksList"></div>
       </div>
+      <div class="planner-action-grid">
+        <div class="card">
+          <h3>Quick Actions</h3>
+          <div class="quick-add-grid">
+            <button onclick="openTimeBlockModal()">Add Block</button>
+            <button class="secondary-btn" onclick="addBuffersForToday()">Add Buffers</button>
+            <button class="secondary-btn" onclick="moveUnfinishedToTomorrow()">Move Unfinished</button>
+            <button class="secondary-btn" onclick="setPlannerSection('Routines')">Routines</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Templates</h3>
+          <div class="template-grid">
+            ${getPlannerTemplates().map(template => `<button class="secondary-btn" onclick="addPlannerTemplate('${template.id}')">${escapeHTML(template.name)}</button>`).join("")}
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Today Snapshot</h3>
+        <div id="plannerAnalytics"></div>
+      </div>
       <div class="card">
         <h3>Free Time</h3>
         <div id="freeTimeBox"></div>
       </div>
       <div class="card">
-        <h3>Overlap Warnings</h3>
+        <h3>Planning Tools</h3>
         <input id="bufferMinutesInput" type="number" min="0" max="120" placeholder="Default buffer minutes">
         <button onclick="saveBufferSetting()">Save Buffer Setting</button>
-        <button onclick="addBuffersForToday()">Auto-add Buffer Time</button>
-        <button onclick="moveUnfinishedToTomorrow()">Move unfinished to tomorrow</button>
         <div id="overlapWarnings"></div>
       </div>
       <div class="card">
@@ -371,20 +413,21 @@ const pages = {
   `,
 
   Systems: () => `
-    ${renderSubTabs("Systems", ["Dashboard", "Habits", "Logs", "Metrics", "Goals", "Insights"], activeSystemsSection)}
+    ${renderSubTabs("Systems", ["Overview", "Habits", "Metrics", "Logs"], activeSystemsSection)}
     ${renderSystemsSheet()}
+    ${systemsAddMenuOpen ? renderSystemsAddMenu() : ""}
     <div class="systems-hero card">
       <div>
         <p class="eyebrow">Systems</p>
         <h2>Life Analytics</h2>
         <p class="muted-text">Habits, logs, metrics, goals, and planner blocks now work together.</p>
       </div>
-      <button onclick="openSystemsFormForSection()">+ Add</button>
+      <button onclick="openSystemsAddMenu()">+ Add</button>
     </div>
-    ${activeSystemsSection === "Dashboard" ? `
+    ${activeSystemsSection === "Overview" ? `
       <div class="systems-dashboard-grid">
         <div class="card wide-card">
-          <h3>Growth Dashboard</h3>
+          <h3>Overview</h3>
           <div id="systemsDashboard"></div>
         </div>
         <div class="card">
@@ -407,11 +450,24 @@ const pages = {
       </div>
       <div id="habitsList"></div>
     ` : ""}
+    ${activeSystemsSection === "Metrics" ? `
+      <div class="section-toolbar card">
+        <div>
+          <h3>Metrics</h3>
+          <p class="muted-text">Metrics, goals, and trackers live together here for progress tracking.</p>
+        </div>
+        <div class="button-row">
+          <button onclick="openSystemsForm('metric')">Add Metric</button>
+          <button class="secondary-btn" onclick="openSystemsForm('goal')">Add Goal</button>
+        </div>
+      </div>
+      <div id="metricsList"></div>
+    ` : ""}
     ${activeSystemsSection === "Logs" ? `
       <div class="section-toolbar card">
         <div>
           <h3>Logs</h3>
-          <p class="muted-text">Numeric, time, boolean, counter, mood, and custom-unit logs with trends.</p>
+          <p class="muted-text">Daily sleep, gym, spending, health, study, and custom history.</p>
         </div>
         <button onclick="openSystemsForm('log')">Add Log</button>
       </div>
@@ -419,33 +475,7 @@ const pages = {
         <div id="systemsLogsList"></div>
       </div>
     ` : ""}
-    ${activeSystemsSection === "Metrics" ? `
-      <div class="section-toolbar card">
-        <div>
-          <h3>Metrics</h3>
-          <p class="muted-text">Track progress, rolling averages, pace, and recurring targets.</p>
-        </div>
-        <button onclick="openSystemsForm('metric')">Add Metric</button>
-      </div>
-      <div id="metricsList"></div>
-    ` : ""}
-    ${activeSystemsSection === "Goals" ? `
-      <div class="section-toolbar card">
-        <div>
-          <h3>Goals</h3>
-          <p class="muted-text">Milestones, deadlines, linked habits, planner suggestions, and projections.</p>
-        </div>
-        <button onclick="openSystemsForm('goal')">Add Goal</button>
-      </div>
-      <div id="goalsList"></div>
-    ` : ""}
-    ${activeSystemsSection === "Insights" ? `
-      <div class="card">
-        <h3>Smart Insights</h3>
-        <div id="systemsDashboard"></div>
-      </div>
-    ` : ""}
-    <button class="floating-add-btn systems-fab" onclick="openSystemsFormForSection()">+</button>
+    <button class="floating-add-btn systems-fab" onclick="openSystemsAddMenu()">+</button>
   `,
 
   Social: () => `
@@ -458,17 +488,26 @@ const pages = {
         </button>
         <div class="${friendFormOpen ? "" : "hidden"}">
           <input id="friendName" placeholder="Name">
+          <input id="friendBirthday" type="date">
+          <input id="friendPhoneHandle" placeholder="Phone or social handle">
+          <select id="friendRelationshipType">
+            <option>Friend</option>
+            <option>Family</option>
+            <option>Dating</option>
+            <option>Networking</option>
+          </select>
           <select id="friendPriority">
             <option>High</option>
             <option>Medium</option>
             <option>Low</option>
           </select>
+          <input id="friendLastContacted" type="date">
           <input id="friendLastSeen" type="date">
-          <textarea id="friendInterests" placeholder="Interests"></textarea>
-          <textarea id="friendDetails" placeholder="Details"></textarea>
+          <input id="friendFavoriteFood" placeholder="Favorite food">
           <textarea id="friendFavoriteActivities" placeholder="Favorite activities"></textarea>
-          <textarea id="friendContactNotes" placeholder="Contact notes"></textarea>
-          <textarea id="friendNotes" placeholder="Notes"></textarea>
+          <textarea id="friendGiftIdeas" placeholder="Gift ideas"></textarea>
+          <textarea id="friendImportantNotes" placeholder="Important notes"></textarea>
+          <textarea id="friendPreferredHangoutStyle" placeholder="Preferred hangout style"></textarea>
           <button id="friendSaveButton" onclick="saveFriend()">Save Friend</button>
           <button class="secondary-btn" onclick="resetFriendForm()">Clear Friend Form</button>
         </div>
@@ -482,6 +521,13 @@ const pages = {
             <option>High</option>
             <option>Medium</option>
             <option>Low</option>
+          </select>
+          <select id="friendRelationshipFilter" onchange="renderFriends()">
+            <option value="All">All relationships</option>
+            <option>Friend</option>
+            <option>Family</option>
+            <option>Dating</option>
+            <option>Networking</option>
           </select>
           <select id="friendSort" onchange="renderFriends()">
             <option value="name">Sort by name</option>
@@ -508,6 +554,18 @@ const pages = {
           <select id="hangoutPeopleSelect" multiple onchange="renderSelectedHangoutPeopleChips()"></select>
           <div id="selectedHangoutPeopleChips" class="chip-row"></div>
           <input id="hangoutCost" placeholder="Cost">
+          <textarea id="hangoutChecklist" placeholder="Checklist, one item per line"></textarea>
+          <input id="hangoutFollowUpReminder" type="date">
+          <select id="hangoutRating">
+            <option value="">Rating after</option>
+            <option>5</option>
+            <option>4</option>
+            <option>3</option>
+            <option>2</option>
+            <option>1</option>
+          </select>
+          <input id="hangoutMoodAfter" placeholder="Mood after">
+          <textarea id="hangoutMemories" placeholder="Photos/memories notes"></textarea>
           <textarea id="hangoutNotes" placeholder="Notes"></textarea>
           <button id="hangoutSaveButton" onclick="saveHangout()">Save Hangout</button>
           <button class="secondary-btn" onclick="resetHangoutForm()">Clear Hangout Form</button>
@@ -538,7 +596,13 @@ const pages = {
           <option>Cheap</option>
           <option>Active</option>
           <option>Chill</option>
+          <option>Food</option>
+          <option>Luxury</option>
+          <option>Study</option>
+          <option>Fitness</option>
           <option>Events</option>
+          <option>Date Night</option>
+          <option>Group</option>
         </select>
         <input id="ideaCost" placeholder="Cost">
         <textarea id="ideaNotes" placeholder="Notes"></textarea>
@@ -548,10 +612,34 @@ const pages = {
       </div>
       <div class="card">
         <h3>Saved Ideas</h3>
+        <div class="list-controls">
+          <input id="ideaSearch" placeholder="Search ideas" oninput="renderIdeas()">
+          <select id="ideaCategoryFilter" onchange="renderIdeas()">
+            <option value="All">All categories</option>
+            <option>Cheap</option>
+            <option>Active</option>
+            <option>Chill</option>
+            <option>Food</option>
+            <option>Luxury</option>
+            <option>Study</option>
+            <option>Fitness</option>
+            <option>Events</option>
+            <option>Date Night</option>
+            <option>Group</option>
+          </select>
+          <select id="ideaFavoriteFilter" onchange="renderIdeas()">
+            <option value="All">All ideas</option>
+            <option value="Favorites">Favorites</option>
+          </select>
+        </div>
         <div id="ideasList"></div>
       </div>
     ` : ""}
     ${activeSocialSection === "Insights" ? `
+      <div class="card">
+        <h3>Smart Suggestions</h3>
+        <div id="smartSocialSuggestions"></div>
+      </div>
       <div class="card">
         <h3>Who should I hang out with?</h3>
         <div id="friendSuggestions"></div>
@@ -629,6 +717,28 @@ function renderSubTabs(page, tabs, activeTab) {
       ${tabs.map(tab => `
         <button class="${tab === activeTab ? "active" : ""}" onclick="set${page}Section('${tab}')">${tab}</button>
       `).join("")}
+    </div>
+  `;
+}
+
+function renderPlannerNav() {
+  const dayBlocks = getBlocksForDate(selectedPlannerDate).filter(block => !block.isBuffer);
+  return `
+    <div class="planner-nav card">
+      <div>
+        <p class="eyebrow">Planner</p>
+        <h2>${formatDashboardDate(selectedPlannerDate)}</h2>
+        <p class="muted-text">${dayBlocks.length} block${dayBlocks.length === 1 ? "" : "s"} scheduled</p>
+      </div>
+      <div class="planner-date-controls">
+        <button class="secondary-btn" onclick="changePlannerDate(-1)">Prev</button>
+        <input type="date" value="${selectedPlannerDate}" onchange="selectPlannerDate(this.value)">
+        <button class="secondary-btn" onclick="changePlannerDate(1)">Next</button>
+        <button onclick="goToPlannerToday(); activePlannerSection='Day'; main.innerHTML=getPageHTML('Planner'); renderPlanner();">Today</button>
+      </div>
+      <div class="planner-nav-actions">
+        <button onclick="openTimeBlockModal()">+ Block</button>
+      </div>
     </div>
   `;
 }
@@ -946,6 +1056,12 @@ function renderVisualTimeBlock(block, index, isOverlapping, timelineStart, pxPer
         </div>
         ${block.notes ? `<p>${escapeHTML(block.notes)}</p>` : ""}
       </div>
+      <div class="visual-block-toolbar">
+        <button class="secondary-btn" onclick="event.stopPropagation(); editTimeBlock(${index})">Edit Block</button>
+        <button class="secondary-btn" onclick="event.stopPropagation(); duplicateTimeBlock(${index})">Duplicate Block</button>
+        <button class="secondary-btn" onclick="event.stopPropagation(); toggleBlockComplete(${index})">${block.completed ? "Reopen Block" : "Complete Block"}</button>
+        <button class="danger-btn" onclick="event.stopPropagation(); deleteTimeBlock(${index})">Delete Block</button>
+      </div>
       <div class="visual-task-list" data-block-index="${index}">
         ${
           block.tasks.length
@@ -964,12 +1080,6 @@ function renderVisualTimeBlock(block, index, isOverlapping, timelineStart, pxPer
       <div class="visual-block-actions">
         <input id="taskInput${index}" placeholder="Add task">
         <button class="secondary-btn" onclick="addTaskToBlock(${index})">Add</button>
-        <button class="secondary-btn" onclick="duplicateTimeBlock(${index})">Duplicate</button>
-        <label class="block-complete">
-          <input type="checkbox" ${block.completed ? "checked" : ""} onchange="toggleBlockComplete(${index})">
-          Done
-        </label>
-        <button class="danger-btn" onclick="deleteTimeBlock(${index})">Delete</button>
       </div>
       ${block.isBuffer ? "" : `<div class="resize-handle" data-index="${index}" title="Drag to resize"></div>`}
     </div>
@@ -1057,6 +1167,7 @@ function completeHabitFromPlannerBlock(block) {
 }
 
 function deleteTaskFromBlock(blockIndex, taskIndex) {
+  if (!scheduleData.blocks[blockIndex]) return;
   scheduleData.blocks[blockIndex].tasks.splice(taskIndex, 1);
   scheduleData.blocks[blockIndex].completed = scheduleData.blocks[blockIndex].tasks.length
     ? scheduleData.blocks[blockIndex].tasks.every(task => task.completed)
@@ -1066,11 +1177,15 @@ function deleteTaskFromBlock(blockIndex, taskIndex) {
 }
 
 function deleteTimeBlock(index) {
-  const date = scheduleData.blocks[index].date;
+  const block = scheduleData.blocks[index];
+  if (!block) return;
+  if (!confirm("Delete this time block?")) return;
+  const date = block.date;
   scheduleData.blocks.splice(index, 1);
   if (editingBlockIndex === index) editingBlockIndex = null;
   addBufferBlocksForDate(date);
   saveScheduleData();
+  renderHome();
   renderPlanner();
 }
 
@@ -2071,6 +2186,10 @@ function selectPlannerDate(date) {
   renderPlanner();
 }
 
+function changePlannerDate(offset) {
+  selectPlannerDate(getDateOffset(selectedPlannerDate, offset));
+}
+
 function changePlannerMonth(offset) {
   const [year, month] = visiblePlannerMonth.split("-").map(Number);
   const date = new Date(year, month - 1 + offset, 1);
@@ -2582,25 +2701,28 @@ function renderHabitFormFields() {
 function renderLogFormFields() {
   return `
     <input id="logTitle" placeholder="Log title">
-    <select id="logType">
-      <option>Numeric</option>
-      <option>Time</option>
-      <option>Boolean</option>
-      <option>Counter</option>
-      <option>Mood</option>
+    <select id="logType" onchange="updateLogLinkedItemOptions()">
+      <option>Weight</option>
       <option>Sleep</option>
       <option>Gym</option>
       <option>Spending</option>
+      <option>Study</option>
       <option>Health</option>
+      <option>Mood</option>
+      <option>Habit</option>
+      <option>Taper</option>
       <option>Custom</option>
     </select>
     <input id="logValue" placeholder="Value">
     <input id="logUnit" placeholder="Custom unit, ex: min, $, hrs, reps">
     <input id="logDate" type="date">
-    <select id="logLinkedHabit">
-      <option value="">No linked habit</option>
-      ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
+    <select id="logLinkedItemType" onchange="updateLogLinkedItemOptions()">
+      <option value="">No linked item</option>
+      <option value="habit">Linked Habit</option>
+      <option value="metric">Linked Metric</option>
+      <option value="goal">Linked Goal</option>
     </select>
+    <div id="logLinkedItemSelectWrap"></div>
     <textarea id="logNotes" placeholder="Notes"></textarea>
     <button onclick="saveSystemLog()">Save Log</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
@@ -2638,6 +2760,14 @@ function renderMetricFormFields() {
 function renderGoalFormFields() {
   return `
     <input id="goalName" placeholder="Goal name">
+    <select id="goalType">
+      <option>Increase toward target</option>
+      <option>Decrease toward target</option>
+      <option>Do not exceed limit</option>
+      <option>Stay within range</option>
+      <option>Habit-based</option>
+      <option>Taper</option>
+    </select>
     <select id="goalCategory">
       <option>Study</option>
       <option>Savings</option>
@@ -2647,16 +2777,22 @@ function renderGoalFormFields() {
       <option>Calories</option>
       <option>Work</option>
       <option>Personal</option>
+      <option>Taper</option>
       <option>Custom</option>
     </select>
     <div class="habit-meta-row">
-      <input id="goalStartValue" type="number" placeholder="Start value">
-      <input id="goalCurrentValue" type="number" placeholder="Current value">
+      <input id="goalStartValue" type="number" placeholder="Start amount / minimum">
+      <input id="goalCurrentValue" type="number" placeholder="Current amount / used">
     </div>
     <div class="habit-meta-row">
-      <input id="goalTargetValue" type="number" placeholder="Target value">
+      <input id="goalTargetValue" type="number" placeholder="Target amount / limit / maximum">
       <input id="goalUnit" placeholder="Unit">
     </div>
+    <select id="goalResetCycle">
+      <option value="daily">Reset cycle: daily</option>
+      <option value="weekly">Reset cycle: weekly</option>
+      <option value="monthly">Reset cycle: monthly</option>
+    </select>
     <input id="goalRecurringTarget" placeholder="Recurring target (optional)">
     <div class="habit-meta-row">
       <input id="goalStartDate" type="date">
@@ -2678,6 +2814,7 @@ function renderGoalFormFields() {
 }
 
 function openSystemsForm(kind, index = null) {
+  systemsAddMenuOpen = false;
   activeSystemsForm = kind;
   editingHabitIndex = kind === "habit" ? index : null;
   editingMetricIndex = kind === "metric" ? index : null;
@@ -2686,7 +2823,7 @@ function openSystemsForm(kind, index = null) {
   if (kind === "habit") activeSystemsSection = "Habits";
   if (kind === "log") activeSystemsSection = "Logs";
   if (kind === "metric") activeSystemsSection = "Metrics";
-  if (kind === "goal") activeSystemsSection = "Goals";
+  if (kind === "goal") activeSystemsSection = "Metrics";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
   fillDefaultLogDate();
@@ -2696,18 +2833,51 @@ function openSystemsForm(kind, index = null) {
 
 function openSystemsFormForSection() {
   const map = {
-    Dashboard: "habit",
+    Overview: "habit",
     Habits: "habit",
-    Logs: "log",
     Metrics: "metric",
-    Goals: "goal",
-    Insights: "log"
+    Logs: "log"
   };
   openSystemsForm(map[activeSystemsSection] || "habit");
 }
 
+function openSystemsAddMenu() {
+  systemsAddMenuOpen = !systemsAddMenuOpen;
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function renderSystemsAddMenu() {
+  return `
+    <div class="planner-modal-backdrop" onclick="closeSystemsAddMenuFromBackdrop(event)">
+      <div class="planner-sheet systems-sheet systems-add-menu" role="dialog" aria-modal="true">
+        <div class="sheet-handle"></div>
+        <div class="sheet-header">
+          <h3>Add to Systems</h3>
+          <button class="icon-btn" onclick="closeSystemsAddMenu()">x</button>
+        </div>
+        <button onclick="openSystemsForm('habit')">Add Habit</button>
+        <button onclick="openSystemsForm('metric')">Add Metric</button>
+        <button onclick="openSystemsForm('goal')">Add Goal</button>
+        <button onclick="openSystemsForm('log')">Add Log</button>
+      </div>
+    </div>
+  `;
+}
+
+function closeSystemsAddMenu() {
+  systemsAddMenuOpen = false;
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function closeSystemsAddMenuFromBackdrop(event) {
+  if (event.target && event.target.classList.contains("planner-modal-backdrop")) closeSystemsAddMenu();
+}
+
 function closeSystemsForm() {
   activeSystemsForm = null;
+  systemsAddMenuOpen = false;
   editingHabitIndex = null;
   editingTrackerIndex = null;
   editingGoalIndex = null;
@@ -2731,6 +2901,7 @@ function renderSystems() {
   renderMetricsList();
   renderGoalsList();
   fillDefaultLogDate();
+  updateLogLinkedItemOptions();
 }
 
 function saveHabit() {
@@ -2902,6 +3073,8 @@ function saveSystemLog() {
   const unit = document.getElementById("logUnit").value.trim();
   const date = document.getElementById("logDate").value || getTodayISO();
   if (!title && !value) return;
+  const linkedItemType = document.getElementById("logLinkedItemType")?.value || "";
+  const linkedItemId = document.getElementById("logLinkedItemId")?.value || "";
 
   const log = {
     id: createId("log"),
@@ -2912,11 +3085,14 @@ function saveSystemLog() {
     unit,
     date,
     notes: document.getElementById("logNotes").value.trim(),
-    linkedHabitId: document.getElementById("logLinkedHabit")?.value || "",
+    linkedItemType,
+    linkedHabitId: linkedItemType === "habit" ? linkedItemId : "",
+    linkedMetricId: linkedItemType === "metric" ? linkedItemId : "",
+    linkedGoalId: linkedItemType === "goal" ? linkedItemId : "",
     linkedPlannerBlockId: ""
   };
   systemsData.logs.push(log);
-  syncMetricsFromLog(log);
+  syncLinkedItemsFromLog(log);
 
   saveSystemsData();
   activeSystemsForm = null;
@@ -2925,24 +3101,111 @@ function saveSystemLog() {
   renderSystems();
 }
 
-function syncMetricsFromLog(log) {
+function updateLogLinkedItemOptions() {
+  const wrap = document.getElementById("logLinkedItemSelectWrap");
+  const type = document.getElementById("logLinkedItemType")?.value || "";
+  const logType = document.getElementById("logType")?.value || "";
+  if (!wrap) return;
+
+  if (!type) {
+    wrap.innerHTML = "";
+    return;
+  }
+
+  const source = type === "habit"
+    ? systemsData.habits
+    : type === "metric"
+      ? systemsData.metrics
+      : systemsData.goals;
+  const suggestionMatcher = logType === "Weight"
+    ? isWeightRelated
+    : logType === "Taper"
+      ? isTaperRelated
+      : () => false;
+  const suggestedFirst = logType === "Weight" || logType === "Taper"
+    ? [...source].sort((a, b) => Number(suggestionMatcher(b)) - Number(suggestionMatcher(a)))
+    : source;
+
+  wrap.innerHTML = `
+    <select id="logLinkedItemId">
+      <option value="">Choose ${type}</option>
+      ${suggestedFirst.map(item => `<option value="${item.id}">${escapeHTML(item.name)}${suggestionMatcher(item) ? " • suggested" : ""}</option>`).join("")}
+    </select>
+  `;
+}
+
+function isWeightRelated(item) {
+  return /weight|weigh|lb|lbs|pound|fat|cut|loss|lose/i.test(`${item.name || ""} ${item.category || ""} ${item.unit || ""} ${item.notes || ""}`);
+}
+
+function isTaperRelated(item) {
+  return /taper|reduce|reduction|decrease|cut/i.test(`${item.name || ""} ${item.category || ""} ${item.goalType || ""} ${item.unit || ""} ${item.notes || ""}`);
+}
+
+function syncLinkedItemsFromLog(log) {
   const numericValue = getLogNumber(log);
   if (isNaN(numericValue)) return;
-  const normalizedTitle = (log.title || "").trim().toLowerCase();
-  const metric = systemsData.metrics.find(item =>
-    item.name.trim().toLowerCase() === normalizedTitle ||
-    (log.linkedHabitId && item.linkedHabitId === log.linkedHabitId)
-  );
-  if (!metric) return;
-  metric.currentValue = String(numericValue);
-  if (!Array.isArray(metric.entries)) metric.entries = [];
-  metric.entries.push({ date: log.date || getTodayISO(), value: String(numericValue), logId: log.id });
+
+  if (log.linkedMetricId) {
+    const metric = systemsData.metrics.find(item => item.id === log.linkedMetricId);
+    if (metric) {
+      metric.currentValue = String(numericValue);
+      if (!Array.isArray(metric.entries)) metric.entries = [];
+      metric.entries.push({ date: log.date || getTodayISO(), value: String(numericValue), logId: log.id });
+    }
+  }
+
+  if (log.linkedGoalId) {
+    const goal = systemsData.goals.find(item => item.id === log.linkedGoalId);
+    if (goal) {
+      if (goal.goalType === "Do not exceed limit") {
+        const cycleLogs = getLogsForGoalResetCycle(goal, log)
+          .filter(item => item.id !== log.id)
+          .map(getLogNumber)
+          .filter(value => !isNaN(value));
+        goal.currentValue = String(cycleLogs.reduce((sum, value) => sum + value, numericValue));
+      } else {
+        goal.currentValue = String(numericValue);
+      }
+    }
+  }
+
+  if (!log.linkedMetricId && !log.linkedGoalId) {
+    const normalizedTitle = (log.title || "").trim().toLowerCase();
+    const metric = systemsData.metrics.find(item =>
+      item.name.trim().toLowerCase() === normalizedTitle ||
+      (log.linkedHabitId && item.linkedHabitId === log.linkedHabitId)
+    );
+    if (!metric) return;
+    metric.currentValue = String(numericValue);
+    if (!Array.isArray(metric.entries)) metric.entries = [];
+    metric.entries.push({ date: log.date || getTodayISO(), value: String(numericValue), logId: log.id });
+  }
 }
 
 function deleteSystemLog(index) {
   systemsData.logs.splice(index, 1);
   saveSystemsData();
   renderSystems();
+}
+
+function getLogsForGoalResetCycle(goal, referenceLog) {
+  const referenceDate = referenceLog.date || getTodayISO();
+  return systemsData.logs.filter(log => {
+    if (log.linkedGoalId !== goal.id) return false;
+    const logDate = log.date || "";
+    if (!logDate) return false;
+    if (goal.resetCycle === "daily") return logDate === referenceDate;
+    if (goal.resetCycle === "monthly") return logDate.slice(0, 7) === referenceDate.slice(0, 7);
+    return getWeekKey(logDate) === getWeekKey(referenceDate);
+  });
+}
+
+function getWeekKey(dateString) {
+  const date = new Date(`${dateString}T00:00:00`);
+  const day = date.getDay();
+  date.setDate(date.getDate() - day);
+  return date.toISOString().slice(0, 10);
 }
 
 function fillDefaultLogDate() {
@@ -3289,6 +3552,12 @@ function renderSystemsLogsList() {
       const linkedHabit = log.linkedHabitId
         ? systemsData.habits.find(habit => habit.id === log.linkedHabitId)
         : null;
+      const linkedMetric = log.linkedMetricId
+        ? systemsData.metrics.find(metric => metric.id === log.linkedMetricId)
+        : null;
+      const linkedGoal = log.linkedGoalId
+        ? systemsData.goals.find(goal => goal.id === log.linkedGoalId)
+        : null;
       return `
         <div class="system-item">
           <div class="item-title">
@@ -3297,6 +3566,8 @@ function renderSystemsLogsList() {
           </div>
           <p>${escapeHTML(log.date || "No date")} • ${escapeHTML(log.value || "")} ${escapeHTML(log.unit || "")}</p>
           ${linkedHabit ? `<p class="muted-text">Linked habit: ${escapeHTML(linkedHabit.name)}</p>` : ""}
+          ${linkedMetric ? `<p class="muted-text">Linked metric: ${escapeHTML(linkedMetric.name)}</p>` : ""}
+          ${linkedGoal ? `<p class="muted-text">Linked goal: ${escapeHTML(linkedGoal.name)}</p>` : ""}
           <p>${escapeHTML(log.notes || "")}</p>
           <button class="danger-btn" onclick="deleteSystemLog(${index})">Delete Log</button>
         </div>
@@ -3468,11 +3739,13 @@ function deleteTracker(index) {
 
 function saveGoal() {
   const name = document.getElementById("goalName").value.trim();
+  const goalType = document.getElementById("goalType")?.value || "Increase toward target";
   const category = document.getElementById("goalCategory").value;
   const startValue = document.getElementById("goalStartValue").value;
   const currentValue = document.getElementById("goalCurrentValue").value;
   const targetValue = document.getElementById("goalTargetValue").value;
   const unit = document.getElementById("goalUnit").value.trim();
+  const resetCycle = document.getElementById("goalResetCycle")?.value || "weekly";
   const recurringTarget = document.getElementById("goalRecurringTarget")?.value.trim() || "";
   const startDate = document.getElementById("goalStartDate").value;
   const deadline = document.getElementById("goalDeadline").value;
@@ -3502,7 +3775,7 @@ function saveGoal() {
     id: editingGoalIndex === null
       ? createId("goal")
       : systemsData.goals[editingGoalIndex].id,
-    name, category, startValue, currentValue, targetValue,
+    name, category, goalType, resetCycle, startValue, currentValue, targetValue,
     unit, startDate, deadline,
     linkedTrackerId, linkedHabitId, recurringTarget, milestones,
     linkedPlannerBlockId: editingGoalIndex === null
@@ -3520,7 +3793,7 @@ function saveGoal() {
   editingGoalIndex = null;
   activeSystemsForm = null;
   saveSystemsData();
-  activeSystemsSection = "Goals";
+  activeSystemsSection = "Metrics";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
 }
@@ -3551,11 +3824,14 @@ function fillEditingGoalForm() {
   const goal = systemsData.goals[editingGoalIndex];
   if (!goal) return;
   document.getElementById("goalName").value = goal.name || "";
+  if (document.getElementById("goalType")) document.getElementById("goalType").value = goal.goalType || "Increase toward target";
   document.getElementById("goalCategory").value = goal.category || "Custom";
   document.getElementById("goalStartValue").value = goal.startValue || "";
   document.getElementById("goalCurrentValue").value = goal.currentValue || "";
   document.getElementById("goalTargetValue").value = goal.targetValue || "";
   document.getElementById("goalUnit").value = goal.unit || "";
+  const resetCycleEl = document.getElementById("goalResetCycle");
+  if (resetCycleEl) resetCycleEl.value = goal.resetCycle || "weekly";
   const recurringEl = document.getElementById("goalRecurringTarget");
   if (recurringEl) recurringEl.value = goal.recurringTarget || "";
   document.getElementById("goalStartDate").value = goal.startDate || "";
@@ -3601,9 +3877,22 @@ function getGoalProgress(goal) {
 
   if (isNaN(current) || isNaN(target)) return 0;
 
+  if (goal.goalType === "Do not exceed limit") {
+    if (!target) return 0;
+    return Math.max(0, Math.round((current / target) * 100));
+  }
+
+  if (goal.goalType === "Stay within range") {
+    const min = start;
+    const max = target;
+    if (min === null || isNaN(min) || isNaN(max) || max <= min) return 0;
+    return Math.min(100, Math.max(0, Math.round(((current - min) / (max - min)) * 100)));
+  }
+
+  const isDecreasingGoal = goal.goalType === "Decrease toward target" || goal.goalType === "Taper";
   const isDecreasing = start !== null
     ? target < start
-    : (goal.category === "Weight" || goal.category === "Taper") && target < current;
+    : (isDecreasingGoal || goal.category === "Weight" || goal.category === "Taper") && target < current;
 
   if (isDecreasing) {
     const startVal = start !== null ? start : current;
@@ -3622,6 +3911,77 @@ function getGoalProgress(goal) {
 
   if (!target) return 0;
   return Math.min(100, Math.max(0, Math.round((current / target) * 100)));
+}
+
+function getWeightGoalStats(goal) {
+  if (goal.goalType === "Do not exceed limit" || goal.goalType === "Stay within range") return null;
+  if (!isWeightRelated(goal)) return null;
+  const start = getGoalStartValue(goal);
+  const current = getGoalCurrentValue(goal);
+  const target = getGoalTargetValue(goal);
+  if (start === null || isNaN(current) || isNaN(target) || target >= start) return null;
+  const lost = Math.max(0, start - current);
+  const remaining = Math.max(0, current - target);
+  return { current, lost, remaining };
+}
+
+function getDoNotExceedStats(goal) {
+  if (goal.goalType !== "Do not exceed limit") return null;
+  const used = getGoalCurrentValue(goal);
+  const limit = getGoalTargetValue(goal);
+  if (isNaN(used) || isNaN(limit)) return null;
+  const remaining = Math.max(0, limit - used);
+  const overBy = Math.max(0, used - limit);
+  const usagePct = limit ? Math.max(0, Math.round((used / limit) * 100)) : 0;
+  const status = used > limit ? "Exceeded" : usagePct >= 80 ? "Close" : "On Track";
+  return { used, limit, remaining, overBy, usagePct, status };
+}
+
+function getRangeGoalStats(goal) {
+  if (goal.goalType !== "Stay within range") return null;
+  const min = getGoalStartValue(goal);
+  const current = getGoalCurrentValue(goal);
+  const max = getGoalTargetValue(goal);
+  if (min === null || isNaN(current) || isNaN(max)) return null;
+  const status = current < min ? "Below Range" : current > max ? "Above Range" : "In Range";
+  return { min, current, max, status };
+}
+
+function getTaperGoalStats(goal) {
+  if (!isTaperRelated(goal)) return null;
+  const start = getGoalStartValue(goal);
+  const current = getGoalCurrentValue(goal);
+  const target = getGoalTargetValue(goal);
+  if (start === null || isNaN(current) || isNaN(target) || target >= start) return null;
+  const reduced = Math.max(0, start - current);
+  const remaining = Math.max(0, current - target);
+  const logs = systemsData.logs
+    .filter(log => log.linkedGoalId === goal.id || /taper/i.test(log.type || ""))
+    .filter(log => !isNaN(getLogNumber(log)))
+    .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const latestDate = logs.length ? logs[logs.length - 1].date : "";
+  const weeksLeft = goal.deadline
+    ? Math.max((new Date(`${goal.deadline}T00:00:00`) - new Date(`${getTodayISO()}T00:00:00`)) / 604800000, 0)
+    : 0;
+  const pacePerWeek = weeksLeft ? remaining / weeksLeft : null;
+  return { start, current, target, reduced, remaining, latestDate, pacePerWeek, logs };
+}
+
+function renderTaperTrendHistory(logs, unit) {
+  if (!logs.length) return `<p class="muted-text">No taper logs yet.</p>`;
+  const values = logs.slice(-10).map(getLogNumber);
+  return `
+    <div class="taper-history">
+      <p class="muted-text">Trend history</p>
+      ${renderMiniBars(values)}
+      ${logs.slice(-3).reverse().map(log => `
+        <div class="home-list-item">
+          <strong>${escapeHTML(log.date || "No date")}</strong>
+          <p>${escapeHTML(log.value || "")} ${unit}</p>
+        </div>
+      `).join("")}
+    </div>
+  `;
 }
 
 function getGoalStatus(goal) {
@@ -4046,6 +4406,10 @@ function renderMetricGoalRow(goal, index) {
   const current = getGoalCurrentValue(goal);
   const target = getGoalTargetValue(goal);
   const unit = escapeHTML(goal.unit || "");
+  const weightStats = getWeightGoalStats(goal);
+  const limitStats = getDoNotExceedStats(goal);
+  const rangeStats = getRangeGoalStats(goal);
+  const taperStats = getTaperGoalStats(goal);
   return `
     <div class="system-item goal-item">
       <div class="item-title">
@@ -4053,6 +4417,44 @@ function renderMetricGoalRow(goal, index) {
         <span class="metric-type-pill metric-type-progress">Goal</span>
       </div>
       <p>${current} ${unit} → ${target} ${unit}</p>
+      ${weightStats ? `
+        <div class="habit-stat-row">
+          <div><strong>${roundForDisplay(weightStats.current)} ${unit}</strong><span>current weight</span></div>
+          <div><strong>${roundForDisplay(weightStats.lost)} ${unit}</strong><span>lost so far</span></div>
+          <div><strong>${roundForDisplay(weightStats.remaining)} ${unit}</strong><span>remaining</span></div>
+        </div>
+      ` : ""}
+      ${limitStats ? `
+        <div class="habit-stat-row">
+          <div><strong>${roundForDisplay(limitStats.used)} ${unit}</strong><span>used</span></div>
+          <div><strong>${roundForDisplay(limitStats.limit)} ${unit}</strong><span>limit</span></div>
+          <div><strong>${roundForDisplay(limitStats.remaining)} ${unit}</strong><span>remaining allowance</span></div>
+        </div>
+        ${limitStats.overBy ? `<p class="muted-text">Over by ${roundForDisplay(limitStats.overBy)} ${unit}</p>` : ""}
+        <p class="muted-text">Reset: ${escapeHTML(goal.resetCycle || "weekly")} • Status: ${escapeHTML(limitStats.status)}</p>
+      ` : ""}
+      ${rangeStats ? `
+        <div class="habit-stat-row">
+          <div><strong>${roundForDisplay(rangeStats.min)} ${unit}</strong><span>minimum</span></div>
+          <div><strong>${roundForDisplay(rangeStats.current)} ${unit}</strong><span>current</span></div>
+          <div><strong>${roundForDisplay(rangeStats.max)} ${unit}</strong><span>maximum</span></div>
+        </div>
+        <p class="muted-text">Status: ${escapeHTML(rangeStats.status)}</p>
+      ` : ""}
+      ${taperStats ? `
+        <div class="habit-stat-row">
+          <div><strong>${roundForDisplay(taperStats.start)} ${unit}</strong><span>start amount</span></div>
+          <div><strong>${roundForDisplay(taperStats.current)} ${unit}</strong><span>current amount</span></div>
+          <div><strong>${roundForDisplay(taperStats.target)} ${unit}</strong><span>target amount</span></div>
+        </div>
+        <div class="habit-stat-row">
+          <div><strong>${roundForDisplay(taperStats.reduced)} ${unit}</strong><span>reduced so far</span></div>
+          <div><strong>${roundForDisplay(taperStats.remaining)} ${unit}</strong><span>remaining</span></div>
+          <div><strong>${taperStats.pacePerWeek === null ? "-" : `${roundForDisplay(taperStats.pacePerWeek)} ${unit}`}</strong><span>pace/week</span></div>
+        </div>
+        ${taperStats.latestDate ? `<p class="muted-text">Latest logged: ${escapeHTML(taperStats.latestDate)}</p>` : ""}
+        ${renderTaperTrendHistory(taperStats.logs, unit)}
+      ` : ""}
       <div class="tracker-progress-bar">
         <div class="tracker-progress-fill goal-progress-fill-${status}" style="width:${pct}%"></div>
       </div>
@@ -4287,7 +4689,7 @@ function renderHomeSuggestions() {
     friendSuggestion ? `Reach out: ${friendSuggestion.friend.name} (${friendSuggestion.reason})` : "",
     upcomingHangout ? `Next hangout: ${upcomingHangout.activity} on ${upcomingHangout.date}` : "",
     nextFreeSlot ? `Use your next free slot: ${nextFreeSlot.start}-${nextFreeSlot.end}` : ""
-  ].filter(Boolean);
+  ].filter(Boolean).concat(getSmartSocialSuggestions()).slice(0, 6);
 
   box.innerHTML = suggestions.length
     ? `<div class="home-focus-preview"><strong>${escapeHTML(suggestions[0])}</strong><p>Best single nudge based on your planner, habits, and social data.</p></div>`
@@ -4486,6 +4888,7 @@ function renderSocial() {
   renderMostSeenMonth();
   renderSocialBalance();
   renderSocialInsights();
+  renderSmartSocialSuggestions();
   renderIdeas();
   renderFriends();
   renderHangouts();
@@ -4509,13 +4912,21 @@ function saveFriend() {
 
   const friend = {
     name,
+    birthday: document.getElementById("friendBirthday").value,
+    phoneHandle: document.getElementById("friendPhoneHandle").value.trim(),
+    favoriteFood: document.getElementById("friendFavoriteFood").value.trim(),
+    giftIdeas: document.getElementById("friendGiftIdeas").value.trim(),
+    importantNotes: document.getElementById("friendImportantNotes").value.trim(),
+    relationshipType: document.getElementById("friendRelationshipType").value,
     priority: document.getElementById("friendPriority").value,
+    lastContacted: document.getElementById("friendLastContacted").value,
     lastSeen: document.getElementById("friendLastSeen").value,
-    interests: document.getElementById("friendInterests").value.trim(),
-    details: document.getElementById("friendDetails").value.trim(),
     favoriteActivities: document.getElementById("friendFavoriteActivities").value.trim(),
-    contactNotes: document.getElementById("friendContactNotes").value.trim(),
-    notes: document.getElementById("friendNotes").value.trim()
+    preferredHangoutStyle: document.getElementById("friendPreferredHangoutStyle").value.trim(),
+    interests: "",
+    details: "",
+    contactNotes: document.getElementById("friendPhoneHandle").value.trim(),
+    notes: document.getElementById("friendImportantNotes").value.trim()
   };
 
   if (editingFriendIndex === null) {
@@ -4542,6 +4953,7 @@ function renderFriends() {
 
   const search = document.getElementById("friendSearch")?.value.trim().toLowerCase() || "";
   const priorityFilter = document.getElementById("friendPriorityFilter")?.value || "All";
+  const relationshipFilter = document.getElementById("friendRelationshipFilter")?.value || "All";
   const sort = document.getElementById("friendSort")?.value || "name";
   const priorityRank = { High: 1, Medium: 2, Low: 3 };
   const friends = socialData.friends
@@ -4549,12 +4961,15 @@ function renderFriends() {
     .filter(({ friend }) =>
       (!search || [
         friend.name,
-        friend.interests,
+        friend.phoneHandle,
+        friend.favoriteFood,
         friend.favoriteActivities,
-        friend.notes,
-        friend.details
+        friend.giftIdeas,
+        friend.importantNotes,
+        friend.preferredHangoutStyle
       ].join(" ").toLowerCase().includes(search)) &&
-      (priorityFilter === "All" || friend.priority === priorityFilter)
+      (priorityFilter === "All" || friend.priority === priorityFilter) &&
+      (relationshipFilter === "All" || friend.relationshipType === relationshipFilter)
     )
     .sort((a, b) => {
       if (sort === "lastSeen") return (b.friend.lastSeen || "").localeCompare(a.friend.lastSeen || "");
@@ -4564,18 +4979,19 @@ function renderFriends() {
 
   box.innerHTML = friends.length
     ? friends.map(({ friend: f, index: i }) => `
-    <div class="social-item">
+    <div class="social-item friend-card">
       <div class="item-title">
         <strong>${escapeHTML(f.name)}</strong>
         <span class="priority-pill ${f.priority.toLowerCase()}">${escapeHTML(f.priority)}</span>
       </div>
-      <p>Last seen: ${f.lastSeen || "Not logged yet"}</p>
-      <p>${escapeHTML(f.favoriteActivities || "")}</p>
+      <p>${escapeHTML(f.relationshipType)} • Last contacted: ${f.lastContacted || "Not logged yet"} • Last seen: ${f.lastSeen || "Not logged yet"}</p>
+      <p>${escapeHTML(f.favoriteFood ? `Favorite food: ${f.favoriteFood}` : f.favoriteActivities || "")}</p>
       <div class="button-row three-actions">
+        <button onclick="quickContactFriend(${i})">Contact</button>
         <button onclick="toggleFriendDetail(${i})">View</button>
         <button onclick="editFriend(${i})">Edit</button>
-        <button class="danger-btn" onclick="deleteFriend(${i})">Delete</button>
       </div>
+      <button class="danger-btn" onclick="deleteFriend(${i})">Delete</button>
       ${viewingFriendIndex === i ? renderFriendDetail(f) : ""}
     </div>
   `).join("")
@@ -4590,11 +5006,13 @@ function renderFriendDetail(friend) {
 
   return `
     <div class="detail-panel">
-      <p><strong>Interests:</strong> ${escapeHTML(friend.interests || "None added")}</p>
-      <p><strong>Details:</strong> ${escapeHTML(friend.details || "None added")}</p>
-      <p><strong>Notes:</strong> ${escapeHTML(friend.notes || "None added")}</p>
-      <p><strong>Contact:</strong> ${escapeHTML(friend.contactNotes || "None added")}</p>
+      <p><strong>Birthday:</strong> ${escapeHTML(friend.birthday || "None added")}</p>
+      <p><strong>Contact:</strong> ${escapeHTML(friend.phoneHandle || friend.contactNotes || "None added")}</p>
+      <p><strong>Gift ideas:</strong> ${escapeHTML(friend.giftIdeas || "None added")}</p>
+      <p><strong>Important notes:</strong> ${escapeHTML(friend.importantNotes || friend.notes || "None added")}</p>
       <p><strong>Favorite activities:</strong> ${escapeHTML(friend.favoriteActivities || "None added")}</p>
+      <p><strong>Preferred hangout style:</strong> ${escapeHTML(friend.preferredHangoutStyle || "None added")}</p>
+      <p><strong>Memory log:</strong></p>
       <p><strong>Related hangouts:</strong></p>
       ${
         relatedHangouts.length
@@ -4608,6 +5026,16 @@ function renderFriendDetail(friend) {
 function toggleFriendDetail(index) {
   viewingFriendIndex = viewingFriendIndex === index ? null : index;
   renderFriends();
+}
+
+function quickContactFriend(i) {
+  const friend = socialData.friends[i];
+  friend.lastContacted = getTodayISO();
+  saveSocialData();
+  if (friend.phoneHandle) {
+    window.location.href = friend.phoneHandle.includes("@") ? `mailto:${friend.phoneHandle}` : `tel:${friend.phoneHandle}`;
+  }
+  renderSocial();
 }
 
 function editFriend(i) {
@@ -4679,6 +5107,11 @@ function saveHangout() {
   const location = document.getElementById("hangoutLocation").value.trim();
   const people = getSelectedHangoutPeople();
   const cost = document.getElementById("hangoutCost").value.trim();
+  const checklist = document.getElementById("hangoutChecklist").value.trim();
+  const followUpReminder = document.getElementById("hangoutFollowUpReminder").value;
+  const rating = document.getElementById("hangoutRating").value;
+  const moodAfter = document.getElementById("hangoutMoodAfter").value.trim();
+  const memories = document.getElementById("hangoutMemories").value.trim();
   const notes = document.getElementById("hangoutNotes").value.trim();
 
   if (!activity || !people.length) return;
@@ -4690,6 +5123,11 @@ function saveHangout() {
     location,
     people,
     cost,
+    checklist,
+    followUpReminder,
+    rating,
+    moodAfter,
+    memories,
     notes,
     completed: editingHangoutIndex === null ? false : socialData.hangouts[editingHangoutIndex].completed
   };
@@ -4853,6 +5291,11 @@ function renderHangoutDetail(hangout, index) {
       <p><strong>People:</strong> ${hangout.people.map(escapeHTML).join(", ") || "None"}</p>
       <p><strong>Location:</strong> ${escapeHTML(hangout.location || "None added")}</p>
       <p><strong>Cost:</strong> ${escapeHTML(hangout.cost || "None added")}</p>
+      <p><strong>Checklist:</strong> ${escapeHTML(hangout.checklist || "None added")}</p>
+      <p><strong>Mood after:</strong> ${escapeHTML(hangout.moodAfter || "None added")}</p>
+      <p><strong>Rating:</strong> ${escapeHTML(hangout.rating || "None added")}</p>
+      <p><strong>Memories:</strong> ${escapeHTML(hangout.memories || "None added")}</p>
+      <p><strong>Follow-up:</strong> ${escapeHTML(hangout.followUpReminder || "None added")}</p>
       <p><strong>Notes:</strong> ${escapeHTML(hangout.notes || "None added")}</p>
       <button onclick="editHangout(${index})">Edit Hangout</button>
     </div>
@@ -4873,6 +5316,7 @@ function scheduleHangoutInPlanner(index) {
     hangout.people.length ? `People: ${hangout.people.join(", ")}` : "",
     hangout.location ? `Location: ${hangout.location}` : "",
     hangout.cost ? `Cost: ${hangout.cost}` : "",
+    hangout.checklist ? `Checklist: ${hangout.checklist}` : "",
     hangout.notes ? `Notes: ${hangout.notes}` : ""
   ].filter(Boolean).join("\n");
 
@@ -4969,8 +5413,19 @@ function renderIdeas() {
   const box = document.getElementById("ideasList");
   if (!box) return;
 
-  box.innerHTML = socialData.ideas.length
-    ? socialData.ideas.map((idea, i) => `
+  const search = document.getElementById("ideaSearch")?.value.trim().toLowerCase() || "";
+  const categoryFilter = document.getElementById("ideaCategoryFilter")?.value || "All";
+  const favoriteFilter = document.getElementById("ideaFavoriteFilter")?.value || "All";
+  const ideas = socialData.ideas
+    .map((idea, index) => ({ idea, index }))
+    .filter(({ idea }) =>
+      (!search || [idea.title, idea.category, idea.cost, idea.notes].join(" ").toLowerCase().includes(search)) &&
+      (categoryFilter === "All" || idea.category === categoryFilter) &&
+      (favoriteFilter !== "Favorites" || idea.favorite)
+    );
+
+  box.innerHTML = ideas.length
+    ? ideas.map(({ idea, index: i }) => `
     <div class="social-item">
       <div class="item-title">
         <strong>${escapeHTML(idea.favorite ? `* ${idea.title}` : idea.title)}</strong>
@@ -4988,7 +5443,7 @@ function renderIdeas() {
       </div>
     </div>
   `).join("")
-    : "<p>No ideas saved yet.</p>";
+    : "<p>No ideas match those filters.</p>";
 }
 
 function useIdea(i) {
@@ -5032,13 +5487,17 @@ function fillEditingSocialForms() {
     if (!document.getElementById("friendName")) return;
     const friend = socialData.friends[editingFriendIndex];
     document.getElementById("friendName").value = friend.name;
+    document.getElementById("friendBirthday").value = friend.birthday || "";
+    document.getElementById("friendPhoneHandle").value = friend.phoneHandle || friend.contactNotes || "";
+    document.getElementById("friendRelationshipType").value = friend.relationshipType || "Friend";
     document.getElementById("friendPriority").value = friend.priority;
+    document.getElementById("friendLastContacted").value = friend.lastContacted || "";
     document.getElementById("friendLastSeen").value = friend.lastSeen || "";
-    document.getElementById("friendInterests").value = friend.interests || "";
-    document.getElementById("friendDetails").value = friend.details || "";
+    document.getElementById("friendFavoriteFood").value = friend.favoriteFood || "";
     document.getElementById("friendFavoriteActivities").value = friend.favoriteActivities || "";
-    document.getElementById("friendContactNotes").value = friend.contactNotes || "";
-    document.getElementById("friendNotes").value = friend.notes || "";
+    document.getElementById("friendGiftIdeas").value = friend.giftIdeas || "";
+    document.getElementById("friendImportantNotes").value = friend.importantNotes || friend.notes || "";
+    document.getElementById("friendPreferredHangoutStyle").value = friend.preferredHangoutStyle || "";
     document.getElementById("friendSaveButton").textContent = "Update Friend";
   }
 
@@ -5050,6 +5509,11 @@ function fillEditingSocialForms() {
     document.getElementById("hangoutTime").value = hangout.time || "";
     document.getElementById("hangoutLocation").value = hangout.location || "";
     document.getElementById("hangoutCost").value = hangout.cost || "";
+    document.getElementById("hangoutChecklist").value = hangout.checklist || "";
+    document.getElementById("hangoutFollowUpReminder").value = hangout.followUpReminder || "";
+    document.getElementById("hangoutRating").value = hangout.rating || "";
+    document.getElementById("hangoutMoodAfter").value = hangout.moodAfter || "";
+    document.getElementById("hangoutMemories").value = hangout.memories || "";
     document.getElementById("hangoutNotes").value = hangout.notes || "";
     populateHangoutPeopleSelect(hangout.people);
     renderSelectedHangoutPeopleChips();
@@ -5090,6 +5554,10 @@ function renderSocialInsights() {
     ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
     : 0;
   const topFriend = getFriendSuggestions()[0];
+  const avgSpend = getAverageHangoutSpend();
+  const highPriorityNeglected = socialData.friends.filter(friend =>
+    friend.priority === "High" && (getDaysSince(friend.lastSeen) === null || getDaysSince(friend.lastSeen) >= 21)
+  ).length;
 
   box.innerHTML = `
     <div class="summary-grid">
@@ -5098,12 +5566,23 @@ function renderSocialInsights() {
       <div><strong>${socialData.hangouts.length}</strong><span>Total hangouts</span></div>
       <div><strong>${notSeenRecently.length}</strong><span>Neglected friends</span></div>
       <div><strong>${avgScore}</strong><span>Avg friend score</span></div>
-      <div><strong>${socialData.friends.length}</strong><span>Total friends</span></div>
+      <div><strong>${avgSpend ? `$${avgSpend}` : "$0"}</strong><span>Avg spend</span></div>
     </div>
     <p><strong>Top suggestion:</strong> ${topFriend ? `${escapeHTML(topFriend.friend.name)} (score ${topFriend.score})` : "Add friends to get suggestions."}</p>
     <p><strong>Priority balance:</strong> High ${priorityCounts.High || 0} · Medium ${priorityCounts.Medium || 0} · Low ${priorityCounts.Low || 0}</p>
     <p><strong>Hangout frequency:</strong> ${getHangoutFrequencyText()}</p>
+    <p><strong>Neglected high-priority people:</strong> ${highPriorityNeglected}</p>
   `;
+}
+
+function renderSmartSocialSuggestions() {
+  const box = document.getElementById("smartSocialSuggestions");
+  if (!box) return;
+
+  const suggestions = getSmartSocialSuggestions();
+  box.innerHTML = suggestions.length
+    ? suggestions.map(text => `<div class="suggestion-item"><strong>${escapeHTML(text)}</strong></div>`).join("")
+    : "<p>Add friends, ideas, and planner blocks to unlock smarter suggestions.</p>";
 }
 
 function renderFriendSuggestions() {
@@ -5247,6 +5726,44 @@ function getHangoutFrequencyText() {
   const perWeek = Math.round((completed.length / Math.max(daysSinceFirst / 7, 1)) * 10) / 10;
 
   return `${perWeek} completed hangout${perWeek === 1 ? "" : "s"} per week`;
+}
+
+function getAverageHangoutSpend() {
+  const costs = socialData.hangouts
+    .map(hangout => Number(String(hangout.cost || "").replace(/[^0-9.]/g, "")))
+    .filter(cost => Number.isFinite(cost) && cost > 0);
+  if (!costs.length) return 0;
+  return Math.round(costs.reduce((sum, cost) => sum + cost, 0) / costs.length);
+}
+
+function getSmartSocialSuggestions() {
+  const suggestions = [];
+  const topFriend = getFriendSuggestions()[0]?.friend;
+  const cheapIdea = socialData.ideas.find(idea => idea.favorite && idea.category === "Cheap") ||
+    socialData.ideas.find(idea => idea.category === "Cheap");
+  const favoriteIdea = socialData.ideas.find(idea => idea.favorite);
+  const friday = getNextWeekdayISO(5);
+  const fridayFree = getFreeSlots(friday, 60)[0];
+
+  if (topFriend) {
+    const daysContacted = getDaysSince(topFriend.lastContacted);
+    const daysSeen = getDaysSince(topFriend.lastSeen);
+    if (daysContacted === null || daysContacted >= 7) suggestions.push(`Text ${topFriend.name} today`);
+    if (daysSeen === null || daysSeen >= 21) suggestions.push(`You haven't seen ${topFriend.name} in ${daysSeen === null ? "a while" : `${daysSeen} days`}`);
+    if (favoriteIdea) suggestions.push(`Use "${favoriteIdea.title}" with ${topFriend.name}`);
+  }
+
+  if (cheapIdea) suggestions.push(`Plan a cheap hangout this weekend: ${cheapIdea.title}`);
+  if (fridayFree) suggestions.push(`You have free time Friday night: ${fridayFree.start}-${fridayFree.end}`);
+
+  return suggestions.slice(0, 5);
+}
+
+function getNextWeekdayISO(targetDay) {
+  const date = new Date();
+  const diff = (targetDay + 7 - date.getDay()) % 7 || 7;
+  date.setDate(date.getDate() + diff);
+  return date.toISOString().split("T")[0];
 }
 
 function showSocialImportMode(mode) {

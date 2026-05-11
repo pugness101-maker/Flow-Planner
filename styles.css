@@ -67,7 +67,7 @@ header {
 main {
   flex: 1;
   padding: 12px 14px;
-  padding-bottom: calc(84px + env(safe-area-inset-bottom));
+  padding-bottom: calc(160px + env(safe-area-inset-bottom));
   overflow-y: auto;
 }
 
@@ -334,6 +334,72 @@ textarea:focus {
   margin-top: 0;
 }
 
+.planner-nav {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, auto) auto;
+  gap: 12px;
+  align-items: center;
+  max-width: 1100px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.planner-date-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.planner-date-controls input {
+  margin-top: 0;
+  width: auto;
+  min-width: 145px;
+}
+
+.planner-date-controls button,
+.planner-nav-actions button {
+  width: auto;
+  margin-top: 0;
+}
+
+.planner-nav-actions {
+  margin-top: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.planner-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 760px) {
+  .planner-nav,
+  .planner-action-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .planner-date-controls {
+    justify-content: flex-start;
+  }
+
+  .planner-date-controls input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .planner-nav-actions {
+    justify-content: stretch;
+  }
+
+  .planner-nav-actions button {
+    width: 100%;
+  }
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -392,7 +458,7 @@ textarea:focus {
 .floating-add-btn {
   position: fixed;
   right: max(18px, calc((100vw - 1120px) / 2 + 18px));
-  bottom: calc(92px + env(safe-area-inset-bottom));
+  bottom: calc(108px + env(safe-area-inset-bottom));
   z-index: 1200;
   width: 58px;
   height: 58px;
@@ -1044,8 +1110,9 @@ button:disabled {
 .visual-timeline {
   position: relative;
   height: var(--timeline-height);
-  min-height: 720px;
+  min-height: 820px;
   margin-top: 12px;
+  margin-bottom: 96px;
   margin-left: 50px;
   border-left: 1px solid var(--border);
   background:
@@ -1107,17 +1174,18 @@ button:disabled {
   left: 10px;
   right: 8px;
   min-height: 42px;
-  overflow: hidden;
+  overflow: visible;
   padding: 10px;
   border: 1px solid var(--border);
   border-left-width: 5px;
   border-radius: 12px;
   background: var(--card);
   box-shadow: 0 4px 18px var(--shadow);
+  z-index: 2;
 }
 
 .visual-block:hover {
-  z-index: 9;
+  z-index: 20;
   overflow: visible;
 }
 
@@ -1152,10 +1220,27 @@ button:disabled {
 
 .visual-block-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px;
   align-items: center;
   margin-top: 8px;
+}
+
+.visual-block-toolbar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+  position: relative;
+  z-index: 3;
+}
+
+.visual-block-toolbar button {
+  width: 100%;
+  margin-top: 0;
+  min-height: 34px;
+  padding: 7px 8px;
+  font-size: 12px;
 }
 
 .visual-block-actions input {
@@ -1569,7 +1654,7 @@ button:disabled {
 
   main {
     padding: 18px 22px;
-    padding-bottom: calc(96px + env(safe-area-inset-bottom));
+    padding-bottom: calc(160px + env(safe-area-inset-bottom));
   }
 
   .dashboard-hero {
@@ -1621,11 +1706,15 @@ button:disabled {
   }
 
   .visual-block-actions {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr auto;
   }
 
   .visual-block-actions input {
-    grid-column: 1 / -1;
+    grid-column: auto;
+  }
+
+  .visual-block-toolbar {
+    grid-template-columns: 1fr;
   }
 
   .planner-sheet {
