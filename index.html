@@ -4,7 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Flow Planner</title>
-
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -28,6 +27,16 @@
     </nav>
   </div>
 
+  <!-- Core app — must be first -->
   <script src="app.js"></script>
+
+  <!--
+    Enhanced Import / Export module.
+    Must load AFTER app.js — it patches pages.Settings and adds import/export functions.
+    Remove the two old files (import-export.js + import-export-ui.js) from your project;
+    this single file replaces both.
+  -->
+  <script src="flow-import-export.js"></script>
+
 </body>
 </html>
