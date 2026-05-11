@@ -53,7 +53,8 @@ let systemsData = JSON.parse(localStorage.getItem("flowSystemsData")) || {
   habits: [],
   logs: [],
   trackers: [],
-  goals: []
+  goals: [],
+  metrics: []
 };
 
 if (!Array.isArray(systemsData.habits)) systemsData.habits = [];
@@ -74,6 +75,9 @@ systemsData.goals = systemsData.goals.map(goal => ({
   deadline: goal.deadline || "",
   linkedTrackerId: goal.linkedTrackerId || "",
   linkedHabitId: goal.linkedHabitId || "",
+  linkedPlannerBlockId: goal.linkedPlannerBlockId || "",
+  milestones: Array.isArray(goal.milestones) ? goal.milestones : [],
+  recurringTarget: goal.recurringTarget || "",
   notes: goal.notes || ""
 }));
 
@@ -101,6 +105,7 @@ systemsData.metrics = systemsData.metrics.map(metric => ({
   startDate: metric.startDate || "",
   deadline: metric.deadline || "",
   linkedHabitId: metric.linkedHabitId || "",
+  recurringTarget: metric.recurringTarget || "",
   notes: metric.notes || "",
   entries: Array.isArray(metric.entries) ? metric.entries : []
 }));
@@ -110,9 +115,13 @@ systemsData.habits = systemsData.habits.map(habit => ({
   name: habit.name || "",
   category: habit.category || "",
   frequency: habit.frequency || "Daily",
+  targetFrequency: habit.targetFrequency || habit.frequency || "Daily",
   target: habit.target || "",
   unit: habit.unit || "",
   linkedGoalId: habit.linkedGoalId || "",
+  paused: Boolean(habit.paused),
+  skippedDates: Array.isArray(habit.skippedDates) ? habit.skippedDates : [],
+  completionHistory: Array.isArray(habit.completionHistory) ? habit.completionHistory : [],
   notes: habit.notes || "",
   completions: Array.isArray(habit.completions) ? habit.completions : []
 }));
@@ -121,6 +130,7 @@ systemsData.logs = systemsData.logs.map(log => ({
   id: log.id || createId("log"),
   title: log.title || "",
   type: log.type || "Custom",
+  valueType: log.valueType || log.type || "Custom",
   value: log.value || "",
   unit: log.unit || "",
   date: log.date || "",
@@ -151,6 +161,8 @@ scheduleData.blocks.forEach(block => {
   if (!Array.isArray(block.tasks)) block.tasks = [];
   block.tasks = block.tasks.map(normalizeTask);
   if (!block.type) block.type = block.routineId ? "routine" : "task";
+  if (!block.category) block.category = "Personal";
+  if (!block.notes) block.notes = "";
 });
 
 scheduleData.routines.forEach(routine => {
@@ -172,18 +184,23 @@ let editingPlanIndex = null;
 let editingFriendIndex = null;
 let editingHangoutIndex = null;
 let editingRoutineIndex = null;
+let editingBlockIndex = null;
 let editingIdeaIndex = null;
 let editingHabitIndex = null;
 let editingTrackerIndex = null;
 let editingGoalIndex = null;
 let editingMetricIndex = null;
 let activePlannerSection = "Day";
-let activeSystemsSection = "Habits";
+let activeSystemsSection = "Dashboard";
 let activeSocialSection = "Friends";
+let activeSystemsForm = null;
 let friendFormOpen = false;
 let hangoutFormOpen = false;
 let viewingFriendIndex = null;
 let viewingHangoutIndex = null;
+let selectedPlannerDate = getTodayISO();
+let visiblePlannerMonth = getTodayISO().slice(0, 7);
+let pendingSocialImport = null;
 
 // SAVE
 function savePlannerData() {
@@ -201,64 +218,85 @@ function saveSystemsData() {
 // PAGES
 const pages = {
   Home: () => `
-    <div class="card">
-      <h3>Today Snapshot</h3>
-      <div id="homeSnapshot"></div>
-    </div>
-    <div class="card">
-      <h3>Quick Add</h3>
-      <div class="quick-add-grid">
-        <button onclick="openPlannerSection('Day')">Time Block</button>
-        <button onclick="openSystemsSection('Habits')">Habit</button>
-        <button onclick="openSystemsSection('Logs')">Log</button>
-        <button onclick="openSocialSection('Hangouts')">Hangout</button>
+    <div class="dashboard-shell">
+      <div class="dashboard-hero">
+        <div>
+          <p class="eyebrow">Today</p>
+          <h2>${formatDashboardDate(getTodayISO())}</h2>
+          <p>What should I do next?</p>
+        </div>
+        <button onclick="openQuickAddDefault()">Quick Add</button>
       </div>
+      <div id="todayFocus"></div>
     </div>
-    <div class="card">
-      <h3>Today Timeline</h3>
-      <div id="homeTimeline"></div>
-    </div>
-    <div class="card">
-      <h3>Systems Today</h3>
-      <div id="homeSystemsHabits"></div>
-    </div>
-    <div class="card">
-      <h3>Upcoming Hangouts</h3>
-      <div id="homeUpcomingHangouts"></div>
-    </div>
-    <div class="card">
-      <h3>Smart Suggestions</h3>
-      <div id="homeSuggestions"></div>
-    </div>
-    <div class="card">
-      <h3>Stats</h3>
-      <div id="homeProductivitySummary"></div>
-      <div id="homeStats"></div>
+    <div class="dashboard-grid">
+      <div class="card dashboard-card wide-card">
+        <h3>Next Action</h3>
+        <div id="homeNextAction"></div>
+      </div>
+      <div class="card dashboard-card">
+        <h3>Today Focus</h3>
+        <div id="homeSnapshot"></div>
+      </div>
+      <div class="card dashboard-card">
+        <h3>Quick Add</h3>
+        <div class="quick-add-grid">
+          <button onclick="openPlannerSection('Day')">Time Block</button>
+          <button onclick="openSystemsSection('Habits')">Habit</button>
+          <button onclick="openSystemsSection('Logs')">Log</button>
+          <button onclick="openSocialSection('Hangouts')">Hangout</button>
+        </div>
+      </div>
+      <div class="card dashboard-card">
+        <h3>Goal Progress</h3>
+        <div id="homeGoalProgress"></div>
+      </div>
+      <div class="card dashboard-card">
+        <h3>Social Reminder</h3>
+        <div id="homeSocialReminder"></div>
+      </div>
+      <div class="card dashboard-card">
+        <h3>Smart Suggestion</h3>
+        <div id="homeSuggestions"></div>
+      </div>
+      <div class="card dashboard-card wide-card">
+        <h3>Today Timeline</h3>
+        <div id="homeTimeline"></div>
+      </div>
+      <div class="card dashboard-card">
+        <h3>Systems Today</h3>
+        <div id="homeSystemsHabits"></div>
+      </div>
+      <div class="card dashboard-card">
+        <h3>Stats</h3>
+        <div id="homeProductivitySummary"></div>
+        <div id="homeStats"></div>
+      </div>
     </div>
   `,
 
   Planner: () => `
-    ${renderSubTabs("Planner", ["Day", "Week", "Routines"], activePlannerSection)}
+    ${renderSubTabs("Planner", ["Day", "Week", "Month", "Routines"], activePlannerSection)}
     ${activePlannerSection === "Day" ? `
+      ${renderPlannerBlockSheet()}
       <div class="card">
-        <h3>Add Time Block</h3>
-        <input id="blockTitle" placeholder="Block title">
-        <input id="blockDate" type="date">
-        <input id="blockStart" type="time">
-        <input id="blockEnd" type="time">
-        <select id="blockCategory">
-          <option>School</option>
-          <option>Work</option>
-          <option>Gym</option>
-          <option>Social</option>
-          <option>Personal</option>
-          <option>Errand</option>
-        </select>
-        <textarea id="blockNotes" placeholder="Notes"></textarea>
-        <button onclick="addTimeBlock()">Save Time Block</button>
+        <h3>Templates</h3>
+        <div class="template-grid">
+          ${getPlannerTemplates().map(template => `<button class="secondary-btn" onclick="addPlannerTemplate('${template.id}')">${escapeHTML(template.name)}</button>`).join("")}
+        </div>
       </div>
       <div class="card">
-        <h3>Today Timeline</h3>
+        <h3>Workload Analytics</h3>
+        <div id="plannerAnalytics"></div>
+      </div>
+      <div class="card">
+        <div class="planner-day-header">
+          <div>
+            <h3>${selectedPlannerDate === getTodayISO() ? "Today Timeline" : `Timeline for ${escapeHTML(selectedPlannerDate)}`}</h3>
+            <p class="muted-text">Drag blocks to move them. Pull the bottom handle to resize.</p>
+          </div>
+          <button class="secondary-btn" onclick="goToPlannerToday(); activePlannerSection='Day'; main.innerHTML=getPageHTML('Planner'); renderPlanner();">Today</button>
+        </div>
         <div id="timeBlocksList"></div>
       </div>
       <div class="card">
@@ -277,11 +315,18 @@ const pages = {
         <h3>Productivity Summary</h3>
         <div id="productivitySummary"></div>
       </div>
+      <button class="floating-add-btn" onclick="openTimeBlockModal()">+</button>
     ` : ""}
     ${activePlannerSection === "Week" ? `
       <div class="card">
         <h3>Weekly View</h3>
         <div id="weeklyView"></div>
+      </div>
+    ` : ""}
+    ${activePlannerSection === "Month" ? `
+      <div class="card">
+        <h3>Monthly Planner</h3>
+        <div id="monthlyPlannerView"></div>
       </div>
     ` : ""}
     ${activePlannerSection === "Routines" ? `
@@ -326,121 +371,81 @@ const pages = {
   `,
 
   Systems: () => `
-    ${renderSubTabs("Systems", ["Habits", "Logs", "Metrics", "Insights"], activeSystemsSection)}
-    ${activeSystemsSection === "Habits" ? `
-      <div class="card">
-        <h3>Add Habit</h3>
-        <input id="habitName" placeholder="Habit name">
-        <select id="habitCategory">
-          <option value="">Category</option>
-          <option>Health</option>
-          <option>Fitness</option>
-          <option>Learning</option>
-          <option>Mindfulness</option>
-          <option>Productivity</option>
-          <option>Social</option>
-          <option>Finance</option>
-          <option>Sleep</option>
-          <option>School</option>
-          <option>Work</option>
-          <option>Personal</option>
-          <option>Gym</option>
-          <option>Custom</option>
-        </select>
-        <select id="habitFrequency">
-          <option>Daily</option>
-          <option>Weekdays</option>
-          <option>Weekly</option>
-          <option>Custom</option>
-        </select>
-        <input id="habitTarget" placeholder="Target (e.g. 30, 8 glasses)">
-        <div class="habit-meta-row">
-          <select id="habitUnit">
-            <option value="">Unit</option>
-            <option>times</option>
-            <option>minutes</option>
-            <option>hours</option>
-            <option>pages</option>
-            <option>miles</option>
-            <option>reps</option>
-            <option>glasses</option>
-            <option>calories</option>
-            <option>steps</option>
-            <option>Custom</option>
-          </select>
-          <select id="habitLinkedGoalId">
-            <option value="">Link to goal</option>
-            ${systemsData.goals.map(g => `<option value="${g.id}">${escapeHTML(g.name)}</option>`).join("")}
-          </select>
-        </div>
-        <textarea id="habitNotes" placeholder="Notes"></textarea>
-        <button id="habitSaveButton" onclick="saveHabit()">Save Habit</button>
-        <button class="secondary-btn" onclick="resetHabitForm()">Clear Habit Form</button>
+    ${renderSubTabs("Systems", ["Dashboard", "Habits", "Logs", "Metrics", "Goals", "Insights"], activeSystemsSection)}
+    ${renderSystemsSheet()}
+    <div class="systems-hero card">
+      <div>
+        <p class="eyebrow">Systems</p>
+        <h2>Life Analytics</h2>
+        <p class="muted-text">Habits, logs, metrics, goals, and planner blocks now work together.</p>
       </div>
-      <div class="card">
-        <h3>Habit List</h3>
-        <div id="habitsList"></div>
+      <button onclick="openSystemsFormForSection()">+ Add</button>
+    </div>
+    ${activeSystemsSection === "Dashboard" ? `
+      <div class="systems-dashboard-grid">
+        <div class="card wide-card">
+          <h3>Growth Dashboard</h3>
+          <div id="systemsDashboard"></div>
+        </div>
+        <div class="card">
+          <h3>Today Habits</h3>
+          <div id="habitsList"></div>
+        </div>
+        <div class="card">
+          <h3>Goal Forecasts</h3>
+          <div id="goalsList"></div>
+        </div>
       </div>
     ` : ""}
+    ${activeSystemsSection === "Habits" ? `
+      <div class="section-toolbar card">
+        <div>
+          <h3>Habits</h3>
+          <p class="muted-text">Track streaks, completion rate, skips, and category consistency.</p>
+        </div>
+        <button onclick="openSystemsForm('habit')">Add Habit</button>
+      </div>
+      <div id="habitsList"></div>
+    ` : ""}
     ${activeSystemsSection === "Logs" ? `
-      <div class="card">
-        <h3>Add Log</h3>
-        <input id="logTitle" placeholder="Log title">
-        <select id="logType">
-          <option>Sleep</option>
-          <option>Gym</option>
-          <option>Spending</option>
-          <option>Health</option>
-          <option>Custom</option>
-        </select>
-        <input id="logValue" placeholder="Value">
-        <input id="logUnit" placeholder="Unit, ex: min, $, hrs, reps">
-        <input id="logDate" type="date">
-        <textarea id="logNotes" placeholder="Notes"></textarea>
-        <button onclick="saveSystemLog()">Save Log</button>
+      <div class="section-toolbar card">
+        <div>
+          <h3>Logs</h3>
+          <p class="muted-text">Numeric, time, boolean, counter, mood, and custom-unit logs with trends.</p>
+        </div>
+        <button onclick="openSystemsForm('log')">Add Log</button>
       </div>
       <div class="card">
-        <h3>Log List</h3>
         <div id="systemsLogsList"></div>
       </div>
     ` : ""}
     ${activeSystemsSection === "Metrics" ? `
-      <div class="card">
-        <h3>Add Metric</h3>
-        <input id="metricName" placeholder="Name">
-        <select id="metricType">
-          <option value="Numeric">Numeric Tracker</option>
-          <option value="Progress">Progress Goal</option>
-          <option value="Counter">Counter</option>
-          <option value="Boolean">Daily Check-in</option>
-          <option value="Time">Time Tracker</option>
-          <option value="Milestone">Milestone Goal</option>
-        </select>
-        <input id="metricUnit" placeholder="Unit (lb, hrs, $, reps...)">
-        <input id="metricStartValue" type="number" placeholder="Start value">
-        <input id="metricCurrentValue" type="number" placeholder="Current value">
-        <input id="metricTargetValue" type="number" placeholder="Target value">
-        <input id="metricStartDate" type="date">
-        <input id="metricDeadline" type="date">
-        <select id="metricLinkedHabit">
-          <option value="">No linked habit</option>
-          ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
-        </select>
-        <textarea id="metricNotes" placeholder="Notes"></textarea>
-        <button id="metricSaveButton" onclick="saveMetric()">Save Metric</button>
-        <button class="secondary-btn" onclick="resetMetricForm()">Clear Form</button>
+      <div class="section-toolbar card">
+        <div>
+          <h3>Metrics</h3>
+          <p class="muted-text">Track progress, rolling averages, pace, and recurring targets.</p>
+        </div>
+        <button onclick="openSystemsForm('metric')">Add Metric</button>
       </div>
-      <div class="card">
-        <h3>Metrics</h3>
-        <div id="metricsList"></div>
+      <div id="metricsList"></div>
+    ` : ""}
+    ${activeSystemsSection === "Goals" ? `
+      <div class="section-toolbar card">
+        <div>
+          <h3>Goals</h3>
+          <p class="muted-text">Milestones, deadlines, linked habits, planner suggestions, and projections.</p>
+        </div>
+        <button onclick="openSystemsForm('goal')">Add Goal</button>
       </div>
+      <div id="goalsList"></div>
     ` : ""}
     ${activeSystemsSection === "Insights" ? `
       <div class="card">
-        <h3>Systems Insights</h3>
+        <h3>Smart Insights</h3>
         <div id="systemsDashboard"></div>
       </div>
     ` : ""}
+    <button class="floating-add-btn systems-fab" onclick="openSystemsFormForSection()">+</button>
   `,
 
   Social: () => `
@@ -577,11 +582,39 @@ const pages = {
       <button onclick="clearSystems()">Clear Systems</button>
       <button onclick="clearSocial()">Clear Social</button>
     </div>
-    <div class="card">
+    <div class="card backup-restore-card">
+      <h3>Backup + Restore</h3>
+      <p class="settings-warning">Local data is saved per browser and per URL/port. Switching between localhost, Replit, Netlify, Codex preview, or different ports may show different data unless you import a backup.</p>
+      <p class="muted-text">Backup includes plannerData, scheduleData, systemsData, and socialData. Offline localStorage stays enabled.</p>
+      <button onclick="downloadFullBackup()">Download Backup JSON</button>
+      <textarea id="allDataImportJson" placeholder="Paste Flow Planner backup JSON here to restore plannerData, scheduleData, systemsData, and socialData"></textarea>
+      <button onclick="importAllData()">Restore From Backup</button>
+    </div>
+    <div class="card social-import-card">
       <h3>Social Data Import</h3>
-      <textarea id="hangoutPlannerImportJson" placeholder="Paste Hangout Planner JSON here, or leave blank to import from hangout-planner-v1 localStorage"></textarea>
-      <button onclick="importHangoutPlannerData()">Import Hangout Planner Data</button>
-      <button class="secondary-btn" onclick="exportCurrentSocialData()">Export Current Social Data</button>
+      <p class="muted-text">Bring in friends, hangouts, and ideas from a backup file, pasted JSON, or browser localStorage.</p>
+      <div class="import-mode-grid">
+        <button onclick="showSocialImportMode('file')">Upload JSON file</button>
+        <button class="secondary-btn" onclick="showSocialImportMode('paste')">Paste JSON manually</button>
+        <button class="secondary-btn" onclick="previewSocialImportFromLocalStorage()">Import from browser localStorage</button>
+      </div>
+      <div id="socialImportFileMode" class="social-import-mode">
+        <label class="file-upload-box">
+          <span>Choose a JSON file</span>
+          <input id="socialImportFile" type="file" accept="application/json,.json" onchange="handleSocialImportFile(event)">
+        </label>
+      </div>
+      <div id="socialImportPasteMode" class="social-import-mode hidden">
+        <textarea id="hangoutPlannerImportJson" placeholder="Paste social JSON here"></textarea>
+        <button onclick="previewSocialImportFromTextarea()">Preview pasted JSON</button>
+      </div>
+      <div id="socialImportPreview" class="import-preview empty-state small">
+        <p>No import preview yet.</p>
+      </div>
+      <div class="button-row">
+        <button id="socialImportConfirmButton" onclick="confirmSocialImport()" disabled>Import Previewed Data</button>
+        <button class="secondary-btn" onclick="exportCurrentSocialData()">Export Social Data</button>
+      </div>
     </div>
   `
 };
@@ -662,46 +695,170 @@ function setActiveBottomNav(tab) {
 
 function renderPlanner() {
   fillBufferSetting();
+  fillEditingTimeBlockForm();
   renderRoutines();
   renderTimeBlocks();
   renderFreeTime();
   renderOverlapWarnings();
   renderProductivitySummary("productivitySummary");
+  renderPlannerAnalytics();
   renderWeeklyView();
+  renderMonthlyPlannerView();
   fillEditingRoutineForm();
 }
 
+function renderPlannerBlockSheet() {
+  return `
+    <div id="blockModal" class="modal-backdrop hidden" onclick="closeTimeBlockModalFromBackdrop(event)">
+      <div class="planner-sheet" role="dialog" aria-modal="true">
+        <div class="sheet-handle"></div>
+        <div class="sheet-header">
+          <h3 id="blockSheetTitle">${editingBlockIndex === null ? "Add Time Block" : "Edit Time Block"}</h3>
+          <button class="icon-btn" onclick="closeTimeBlockModal()">x</button>
+        </div>
+        <input id="blockTitle" placeholder="Block title">
+        <input id="blockDate" type="date">
+        <div class="time-input-row">
+          <input id="blockStart" type="time">
+          <input id="blockEnd" type="time">
+        </div>
+        <select id="blockCategory">
+          <option>School</option>
+          <option>Work</option>
+          <option>Gym</option>
+          <option>Social</option>
+          <option>Personal</option>
+          <option>Errand</option>
+        </select>
+        <textarea id="blockNotes" placeholder="Notes"></textarea>
+        <textarea id="blockTasks" placeholder="Tasks, one per line"></textarea>
+        <button id="blockSaveButton" onclick="addTimeBlock()">${editingBlockIndex === null ? "Save Time Block" : "Update Time Block"}</button>
+        <button class="secondary-btn" onclick="closeTimeBlockModal()">Cancel</button>
+      </div>
+    </div>
+  `;
+}
+
 function addTimeBlock() {
-  const title = document.getElementById("blockTitle").value;
-  const date = document.getElementById("blockDate").value;
-  const start = document.getElementById("blockStart").value;
-  const end = document.getElementById("blockEnd").value;
-  const category = document.getElementById("blockCategory").value;
-  const notes = document.getElementById("blockNotes").value;
+  const title = document.getElementById("blockTitle")?.value.trim() || "";
+  const date = document.getElementById("blockDate")?.value || selectedPlannerDate;
+  const start = document.getElementById("blockStart")?.value || "";
+  const end = document.getElementById("blockEnd")?.value || "";
+  const category = document.getElementById("blockCategory")?.value || "Personal";
+  const notes = document.getElementById("blockNotes")?.value.trim() || "";
+  const tasks = (document.getElementById("blockTasks")?.value || "")
+    .split("\n")
+    .map(task => task.trim())
+    .filter(Boolean)
+    .map(text => ({ text, completed: false }));
 
   if (!title || !date || !start || !end) {
     alert("Add title, date, start, and end time.");
     return;
   }
 
-  scheduleData.blocks.push({
-    id: createId("block"),
+  const existing = editingBlockIndex !== null ? scheduleData.blocks[editingBlockIndex] : null;
+  const oldDate = existing ? existing.date : date;
+  const previousTasks = existing ? existing.tasks : [];
+  const block = {
+    ...(existing || {}),
+    id: existing ? existing.id : createId("block"),
     title,
     date,
     start,
     end,
     category,
     notes,
-    type: "task",
-    completed: false,
-    tasks: []
-  });
+    type: existing ? existing.type || "task" : "task",
+    completed: existing ? existing.completed : false,
+    tasks: tasks.length ? mergeEditedTasks(tasks, previousTasks) : previousTasks
+  };
 
+  if (editingBlockIndex === null) {
+    scheduleData.blocks.push(block);
+  } else {
+    scheduleData.blocks[editingBlockIndex] = block;
+    editingBlockIndex = null;
+  }
+
+  selectedPlannerDate = date;
+  visiblePlannerMonth = date.slice(0, 7);
+  addBufferBlocksForDate(oldDate);
   addBufferBlocksForDate(date);
   saveScheduleData();
   activePlannerSection = "Day";
   main.innerHTML = getPageHTML("Planner");
   renderPlanner();
+}
+
+function mergeEditedTasks(newTasks, oldTasks) {
+  return newTasks.map(task => {
+    const oldTask = oldTasks.find(item => item.text === task.text);
+    return oldTask ? { text: task.text, completed: oldTask.completed } : task;
+  });
+}
+
+function editTimeBlock(index) {
+  editingBlockIndex = index;
+  selectedPlannerDate = scheduleData.blocks[index]?.date || selectedPlannerDate;
+  activePlannerSection = "Day";
+  main.innerHTML = getPageHTML("Planner");
+  renderPlanner();
+  openTimeBlockModal(index);
+}
+
+function fillEditingTimeBlockForm() {
+  if (editingBlockIndex === null) {
+    const dateInput = document.getElementById("blockDate");
+    if (dateInput && !dateInput.value) dateInput.value = selectedPlannerDate;
+    return;
+  }
+  const block = scheduleData.blocks[editingBlockIndex];
+  if (!block || !document.getElementById("blockTitle")) return;
+  document.getElementById("blockTitle").value = block.title || "";
+  document.getElementById("blockDate").value = block.date || selectedPlannerDate;
+  document.getElementById("blockStart").value = block.start || "";
+  document.getElementById("blockEnd").value = block.end || "";
+  document.getElementById("blockCategory").value = block.category || "Personal";
+  document.getElementById("blockNotes").value = block.notes || "";
+  document.getElementById("blockTasks").value = (block.tasks || []).map(task => task.text).join("\n");
+  document.getElementById("blockSaveButton").textContent = "Update Time Block";
+  const title = document.getElementById("blockSheetTitle");
+  if (title) title.textContent = "Edit Time Block";
+}
+
+function resetTimeBlockForm() {
+  editingBlockIndex = null;
+  main.innerHTML = getPageHTML("Planner");
+  renderPlanner();
+}
+
+function openTimeBlockModal(index = null) {
+  editingBlockIndex = index;
+  if (index !== null && scheduleData.blocks[index]) {
+    selectedPlannerDate = scheduleData.blocks[index].date || selectedPlannerDate;
+  }
+  const modal = document.getElementById("blockModal");
+  if (!modal) {
+    main.innerHTML = getPageHTML("Planner");
+    renderPlanner();
+    return;
+  }
+  modal.classList.remove("hidden");
+  fillEditingTimeBlockForm();
+  const title = document.getElementById("blockSheetTitle");
+  if (title) title.textContent = editingBlockIndex === null ? "Add Time Block" : "Edit Time Block";
+  document.getElementById("blockTitle")?.focus();
+}
+
+function closeTimeBlockModal() {
+  const modal = document.getElementById("blockModal");
+  if (modal) modal.classList.add("hidden");
+  editingBlockIndex = null;
+}
+
+function closeTimeBlockModalFromBackdrop(event) {
+  if (event.target && event.target.id === "blockModal") closeTimeBlockModal();
 }
 
 function normalizeTask(task) {
@@ -733,50 +890,97 @@ function getTodayISO() {
 function renderTimeBlocks() {
   const box = document.getElementById("timeBlocksList");
   if (!box) return;
-  const today = getTodayISO();
+  const date = selectedPlannerDate;
 
   const blocks = scheduleData.blocks
     .map((block, index) => ({ block, index }))
-    .filter(item => item.block.date === today)
+    .filter(item => item.block.date === date)
     .sort((a, b) => a.block.start.localeCompare(b.block.start));
+  const overlapIndexes = getOverlappingBlockIndexes(date);
+  const currentTimeTop = getCurrentTimeIndicatorTop(date);
+  const timelineStart = 6 * 60;
+  const timelineEnd = 23 * 60;
+  const pxPerMinute = 1;
+  const timelineHeight = (timelineEnd - timelineStart) * pxPerMinute;
 
   box.innerHTML = blocks.length
-    ? blocks.map(({ block, index }) => `
-      <div class="timeline-block draggable-plan block-type-${block.type || "task"}" draggable="true" data-index="${index}">
-        <strong>${escapeHTML(block.start)} - ${escapeHTML(block.end)} | ${escapeHTML(block.title)}</strong>
-        ${block.type && block.type !== "task" ? `<span class="block-tag block-tag-${block.type}">${block.type}</span>` : ""}
-        <p>${escapeHTML(block.category)}</p>
-        <p>${escapeHTML(block.notes || "")}</p>
-
-        <input id="taskInput${index}" placeholder="Add task inside this block">
-        <button onclick="addTaskToBlock(${index})">Add Task</button>
-
-        <div>
-          ${
-            block.tasks.length
-              ? block.tasks.map((task, taskIndex) => `
-                <div class="task-row ${task.completed ? "task-done" : ""}">
-                  <label>
-                    <input type="checkbox" ${task.completed ? "checked" : ""} onchange="toggleTaskComplete(${index}, ${taskIndex})">
-                    ${escapeHTML(task.text)}
-                  </label>
-                  <button onclick="deleteTaskFromBlock(${index}, ${taskIndex})">x</button>
-                </div>
-              `).join("")
-              : "<p>No tasks yet.</p>"
-          }
+    ? `
+      <div class="visual-timeline" data-date="${date}" style="--timeline-height:${timelineHeight}px">
+        <div class="timeline-hours">
+          ${Array.from({ length: 18 }, (_, hourOffset) => {
+            const hour = 6 + hourOffset;
+            return `<div class="timeline-hour" style="top:${(hour * 60 - timelineStart) * pxPerMinute}px"><span>${formatHourLabel(hour)}</span></div>`;
+          }).join("")}
         </div>
+        ${currentTimeTop !== null ? `<div class="current-time-line" style="top:${currentTimeTop}px"><span>Now</span></div>` : ""}
+        ${blocks.map(({ block, index }) => renderVisualTimeBlock(block, index, overlapIndexes.has(index), timelineStart, pxPerMinute)).join("")}
+      </div>
+    `
+    : `<div class="empty-state"><p>No blocks for this day.</p><button onclick="focusTimeBlockForm()">Create time block</button></div>`;
 
+  enableVisualBlockInteractions();
+  enableTaskDragDrop();
+}
+
+function renderVisualTimeBlock(block, index, isOverlapping, timelineStart, pxPerMinute) {
+  const startMinutes = timeToMinutes(block.start || "06:00");
+  const endMinutes = timeToMinutes(block.end || block.start || "06:30");
+  const top = Math.max((startMinutes - timelineStart) * pxPerMinute, 0);
+  const height = Math.max((endMinutes - startMinutes) * pxPerMinute, 34);
+  const categoryClass = getCategoryClass(block.category);
+
+  return `
+    <div class="timeline-block visual-block ${categoryClass} ${block.completed ? "completed-block" : ""} ${isOverlapping ? "overlap-block" : ""} block-type-${block.type || "task"}"
+      draggable="true"
+      data-index="${index}"
+      style="top:${top}px;height:${height}px">
+      <div class="visual-block-main" onclick="editTimeBlock(${index})">
+        <div class="visual-block-title">
+          <strong>${escapeHTML(block.title)}</strong>
+          <span>${escapeHTML(block.start)}-${escapeHTML(block.end)}</span>
+        </div>
+        <div class="visual-block-meta">
+          ${renderCategoryPill(block.category)}
+          ${block.type && block.type !== "task" ? `<span class="block-tag block-tag-${block.type}">${block.type}</span>` : ""}
+          ${isOverlapping ? `<span class="overlap-pill">Overlap</span>` : ""}
+        </div>
+        ${block.notes ? `<p>${escapeHTML(block.notes)}</p>` : ""}
+      </div>
+      <div class="visual-task-list" data-block-index="${index}">
+        ${
+          block.tasks.length
+            ? block.tasks.map((task, taskIndex) => `
+              <div class="task-row compact-task ${task.completed ? "task-done" : ""}" draggable="true" data-block-index="${index}" data-task-index="${taskIndex}">
+                <label>
+                  <input type="checkbox" ${task.completed ? "checked" : ""} onchange="toggleTaskComplete(${index}, ${taskIndex})">
+                  ${escapeHTML(task.text)}
+                </label>
+                <button onclick="deleteTaskFromBlock(${index}, ${taskIndex})">x</button>
+              </div>
+            `).join("")
+            : `<p class="muted-text">No tasks yet.</p>`
+        }
+      </div>
+      <div class="visual-block-actions">
+        <input id="taskInput${index}" placeholder="Add task">
+        <button class="secondary-btn" onclick="addTaskToBlock(${index})">Add</button>
+        <button class="secondary-btn" onclick="duplicateTimeBlock(${index})">Duplicate</button>
         <label class="block-complete">
           <input type="checkbox" ${block.completed ? "checked" : ""} onchange="toggleBlockComplete(${index})">
-          Block complete
+          Done
         </label>
-        <button onclick="deleteTimeBlock(${index})">Delete Block</button>
+        <button class="danger-btn" onclick="deleteTimeBlock(${index})">Delete</button>
       </div>
-    `).join("")
-    : "<p>No blocks for today.</p>";
+      ${block.isBuffer ? "" : `<div class="resize-handle" data-index="${index}" title="Drag to resize"></div>`}
+    </div>
+  `;
+}
 
-  enableBlockDragDrop();
+function focusTimeBlockForm() {
+  activePlannerSection = "Day";
+  main.innerHTML = getPageHTML("Planner");
+  renderPlanner();
+  document.getElementById("blockTitle")?.focus();
 }
 
 function addTaskToBlock(index) {
@@ -810,8 +1014,46 @@ function toggleBlockComplete(index) {
     ...task,
     completed: block.completed ? true : task.completed
   }));
+  if (block.completed && block.systemHabitId) {
+    completeHabitFromPlannerBlock(block);
+  }
   saveScheduleData();
   renderPlanner();
+}
+
+function completeHabitFromPlannerBlock(block) {
+  const habit = systemsData.habits.find(item => item.id === block.systemHabitId);
+  if (!habit || habit.paused) return;
+  const date = block.date || getTodayISO();
+  if (!Array.isArray(habit.completions)) habit.completions = [];
+  if (!habit.completions.includes(date)) habit.completions.push(date);
+  habit.skippedDates = (habit.skippedDates || []).filter(item => item !== date);
+  if (!Array.isArray(habit.completionHistory)) habit.completionHistory = [];
+  if (!habit.completionHistory.some(entry => entry.date === date && entry.plannerBlockId === block.id)) {
+    habit.completionHistory.push({
+      date,
+      time: block.end || new Date().toTimeString().slice(0, 5),
+      plannerBlockId: block.id
+    });
+  }
+  const alreadyLogged = systemsData.logs.some(log =>
+    log.linkedHabitId === habit.id && log.linkedPlannerBlockId === block.id
+  );
+  if (!alreadyLogged) {
+    systemsData.logs.push({
+      id: createId("log"),
+      title: habit.name,
+      type: "Habit",
+      valueType: "Boolean",
+      value: "1",
+      unit: "completion",
+      date,
+      notes: `Completed from Planner block: ${block.title}`,
+      linkedHabitId: habit.id,
+      linkedPlannerBlockId: block.id
+    });
+  }
+  saveSystemsData();
 }
 
 function deleteTaskFromBlock(blockIndex, taskIndex) {
@@ -826,7 +1068,25 @@ function deleteTaskFromBlock(blockIndex, taskIndex) {
 function deleteTimeBlock(index) {
   const date = scheduleData.blocks[index].date;
   scheduleData.blocks.splice(index, 1);
+  if (editingBlockIndex === index) editingBlockIndex = null;
   addBufferBlocksForDate(date);
+  saveScheduleData();
+  renderPlanner();
+}
+
+function duplicateTimeBlock(index) {
+  const block = scheduleData.blocks[index];
+  if (!block) return;
+  const copy = {
+    ...block,
+    id: createId("block"),
+    title: `${block.title} Copy`,
+    completed: false,
+    tasks: (block.tasks || []).map(task => ({ ...task, completed: false })),
+    isBuffer: false
+  };
+  scheduleData.blocks.push(copy);
+  addBufferBlocksForDate(copy.date);
   saveScheduleData();
   renderPlanner();
 }
@@ -834,7 +1094,7 @@ function deleteTimeBlock(index) {
 function renderFreeTime() {
   const box = document.getElementById("freeTimeBox");
   if (!box) return;
-  const today = getTodayISO();
+  const today = selectedPlannerDate;
 
   const blocks = scheduleData.blocks.filter(b => b.date === today && !b.isBuffer);
 
@@ -854,7 +1114,7 @@ function renderFreeTime() {
 }
 
 function timeToMinutes(time) {
-  const [h, m] = time.split(":").map(Number);
+  const [h, m] = String(time || "00:00").split(":").map(Number);
   return h * 60 + m;
 }
 
@@ -863,6 +1123,47 @@ function minutesToTime(minutes) {
   const h = String(Math.floor(normalized / 60)).padStart(2, "0");
   const m = String(normalized % 60).padStart(2, "0");
   return `${h}:${m}`;
+}
+
+function formatHourLabel(hour) {
+  if (hour === 0) return "12 AM";
+  if (hour < 12) return `${hour} AM`;
+  if (hour === 12) return "12 PM";
+  return `${hour - 12} PM`;
+}
+
+function getCategoryClass(category) {
+  return `visual-category-${String(category || "Personal").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
+
+function getCurrentTimeIndicatorTop(date) {
+  if (date !== getTodayISO()) return null;
+  const now = new Date();
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  const start = 6 * 60;
+  const end = 23 * 60;
+  if (minutes < start || minutes > end) return null;
+  return minutes - start;
+}
+
+function getOverlappingBlockIndexes(date) {
+  const indexes = new Set();
+  const blocks = scheduleData.blocks
+    .map((block, index) => ({ block, index }))
+    .filter(item => item.block.date === date && !item.block.isBuffer && item.block.start && item.block.end)
+    .sort((a, b) => a.block.start.localeCompare(b.block.start));
+
+  for (let i = 0; i < blocks.length; i++) {
+    for (let j = i + 1; j < blocks.length; j++) {
+      if (timeToMinutes(blocks[j].block.start) >= timeToMinutes(blocks[i].block.end)) break;
+      if (blocksOverlap(blocks[i].block.start, blocks[i].block.end, blocks[j].block.start, blocks[j].block.end)) {
+        indexes.add(blocks[i].index);
+        indexes.add(blocks[j].index);
+      }
+    }
+  }
+
+  return indexes;
 }
 
 function enableBlockDragDrop() {
@@ -888,11 +1189,130 @@ function enableBlockDragDrop() {
   });
 }
 
+function enableVisualBlockInteractions() {
+  const timeline = document.querySelector(".visual-timeline");
+  if (!timeline) return;
+  const blocks = timeline.querySelectorAll(".visual-block[draggable='true']");
+
+  blocks.forEach(blockEl => {
+    blockEl.addEventListener("dragstart", event => {
+      if (event.target.classList.contains("compact-task") || event.target.closest(".resize-handle")) {
+        event.preventDefault();
+        return;
+      }
+      blockEl.classList.add("dragging");
+      event.dataTransfer.setData("text/plain", blockEl.dataset.index);
+    });
+
+    blockEl.addEventListener("dragend", () => blockEl.classList.remove("dragging"));
+  });
+
+  timeline.addEventListener("dragover", event => event.preventDefault());
+  timeline.addEventListener("drop", event => {
+    const blockIndex = Number(event.dataTransfer.getData("text/plain"));
+    if (!Number.isFinite(blockIndex) || !scheduleData.blocks[blockIndex]) return;
+    const rect = timeline.getBoundingClientRect();
+    const y = event.clientY - rect.top + timeline.scrollTop;
+    moveBlockToTimelineY(blockIndex, y);
+  });
+
+  document.querySelectorAll(".resize-handle").forEach(handle => {
+    handle.addEventListener("mousedown", event => {
+      event.preventDefault();
+      const index = Number(handle.dataset.index);
+      startResizeBlock(index, event.clientY);
+    });
+  });
+}
+
+function moveBlockToTimelineY(blockIndex, y) {
+  const block = scheduleData.blocks[blockIndex];
+  const duration = Math.max(timeToMinutes(block.end) - timeToMinutes(block.start), 15);
+  const start = snapMinutes(Math.max(6 * 60, Math.min(23 * 60 - duration, 6 * 60 + y)));
+  block.start = minutesToTime(start);
+  block.end = minutesToTime(start + duration);
+  addBufferBlocksForDate(block.date);
+  saveScheduleData();
+  renderPlanner();
+}
+
+function startResizeBlock(blockIndex, startY) {
+  const block = scheduleData.blocks[blockIndex];
+  if (!block) return;
+  const originalEnd = timeToMinutes(block.end);
+  const onMove = event => {
+    const delta = event.clientY - startY;
+    const proposed = snapMinutes(originalEnd + delta);
+    const minEnd = timeToMinutes(block.start) + 15;
+    block.end = minutesToTime(Math.max(minEnd, Math.min(23 * 60, proposed)));
+    saveScheduleData();
+    renderTimeBlocks();
+    renderFreeTime();
+    renderOverlapWarnings();
+    renderPlannerAnalytics();
+  };
+  const onUp = () => {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    addBufferBlocksForDate(block.date);
+    saveScheduleData();
+    renderPlanner();
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
+function snapMinutes(minutes, interval = 15) {
+  return Math.round(minutes / interval) * interval;
+}
+
+function enableTaskDragDrop() {
+  document.querySelectorAll(".compact-task").forEach(taskEl => {
+    taskEl.addEventListener("dragstart", event => {
+      event.stopPropagation();
+      taskEl.classList.add("dragging-task");
+      event.dataTransfer.setData("text/plain", JSON.stringify({
+        blockIndex: Number(taskEl.dataset.blockIndex),
+        taskIndex: Number(taskEl.dataset.taskIndex)
+      }));
+    });
+    taskEl.addEventListener("dragend", () => taskEl.classList.remove("dragging-task"));
+  });
+
+  document.querySelectorAll(".visual-task-list").forEach(list => {
+    list.addEventListener("dragover", event => event.preventDefault());
+    list.addEventListener("drop", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const payload = JSON.parse(event.dataTransfer.getData("text/plain") || "{}");
+      const targetBlockIndex = Number(list.dataset.blockIndex);
+      const targetTaskEl = event.target.closest(".compact-task");
+      const targetTaskIndex = targetTaskEl ? Number(targetTaskEl.dataset.taskIndex) : scheduleData.blocks[targetBlockIndex].tasks.length;
+      reorderTask(payload.blockIndex, payload.taskIndex, targetBlockIndex, targetTaskIndex);
+    });
+  });
+}
+
+function reorderTask(sourceBlockIndex, sourceTaskIndex, targetBlockIndex, targetTaskIndex) {
+  const sourceBlock = scheduleData.blocks[sourceBlockIndex];
+  const targetBlock = scheduleData.blocks[targetBlockIndex];
+  if (!sourceBlock || !targetBlock || !sourceBlock.tasks[sourceTaskIndex]) return;
+  const [task] = sourceBlock.tasks.splice(sourceTaskIndex, 1);
+  const adjustedTarget = sourceBlockIndex === targetBlockIndex && targetTaskIndex > sourceTaskIndex
+    ? targetTaskIndex - 1
+    : targetTaskIndex;
+  targetBlock.tasks.splice(adjustedTarget, 0, task);
+  sourceBlock.completed = sourceBlock.tasks.length ? sourceBlock.tasks.every(item => item.completed) : false;
+  targetBlock.completed = targetBlock.tasks.length ? targetBlock.tasks.every(item => item.completed) : false;
+  saveScheduleData();
+  renderPlanner();
+}
+
 function saveNewBlockOrder() {
   const items = document.querySelectorAll(".draggable-plan");
   const todayIndexes = scheduleData.blocks
     .map((block, index) => ({ block, index }))
-    .filter(item => item.block.date === getTodayISO())
+    .filter(item => item.block.date === selectedPlannerDate)
     .map(item => item.index);
 
   const reorderedTodayBlocks = [...items].map(item => {
@@ -925,7 +1345,7 @@ function saveBufferSetting() {
 }
 
 function addBuffersForToday() {
-  addBufferBlocksForDate(getTodayISO());
+  addBufferBlocksForDate(selectedPlannerDate);
   saveScheduleData();
   renderPlanner();
 }
@@ -973,7 +1393,7 @@ function renderOverlapWarnings() {
   const box = document.getElementById("overlapWarnings");
   if (!box) return;
 
-  const warnings = getOverlapWarnings(getTodayISO());
+  const warnings = getOverlapWarnings(selectedPlannerDate);
 
   box.innerHTML = warnings.length
     ? warnings.map(warning => `<p class="warning">${escapeHTML(warning)}</p>`).join("")
@@ -1140,7 +1560,7 @@ function renderRoutines() {
           </div>
         `;
       }).join("")
-    : "<p>No routines saved yet.</p>";
+    : `<div class="empty-state"><p>No routines saved yet.</p><button onclick="openPlannerSection('Routines')">Add first routine</button></div>`;
 }
 
 function toggleRoutineStep(routineIndex, stepIndex) {
@@ -1168,7 +1588,7 @@ function completeRoutineDay(routineIndex, silent) {
   if (!routine.completedDates.includes(today)) {
     routine.completedDates.push(today);
   }
-  routine.streak = getRoutineStreak(routine);
+  routine.streak = getRoutineCompletionStreak(routine);
   saveScheduleData();
   renderRoutines();
   if (!silent) {
@@ -1176,7 +1596,7 @@ function completeRoutineDay(routineIndex, silent) {
   }
 }
 
-function getRoutineStreak(routine) {
+function getRoutineCompletionStreak(routine) {
   if (!routine.completedDates || !routine.completedDates.length) return 0;
   const today = getTodayISO();
   let streak = 0;
@@ -1394,25 +1814,41 @@ function renderWeeklyView() {
   if (!box) return;
 
   const weekDates = getWeekDates();
+  const weekStats = weekDates.map(day => ({ ...day, stats: getDayWorkload(day.iso) }));
+  const busiestMinutes = Math.max(...weekStats.map(day => day.stats.totalMinutes), 0);
 
   box.innerHTML = `
+    <div class="weekly-balance">
+      ${weekStats.map(day => {
+        const pct = busiestMinutes ? Math.round((day.stats.totalMinutes / busiestMinutes) * 100) : 0;
+        return `
+          <div class="balance-row compact">
+            <span class="balance-name">${day.label}</span>
+            <div class="balance-bar-bg"><div class="balance-bar-fill" style="width:${pct}%"></div></div>
+            <span class="balance-count">${formatMinutes(day.stats.totalMinutes)}</span>
+          </div>
+        `;
+      }).join("")}
+    </div>
     <div class="week-grid">
-      ${weekDates.map(day => {
+      ${weekStats.map(day => {
         const dayBlocks = scheduleData.blocks
           .map((block, index) => ({ block, index }))
           .filter(item => item.block.date === day.iso)
           .sort((a, b) => a.block.start.localeCompare(b.block.start));
-        const stats = getDayWorkload(day.iso);
+        const stats = day.stats;
+        const overloaded = isOverloadedDay(stats);
 
         return `
-          <div class="week-day">
+          <div class="week-day ${overloaded ? "overloaded-day" : ""}">
             <strong>${day.label} ${day.dayNumber}</strong>
             <div class="workload">
               <span>${stats.totalBlocks} blocks</span>
               <span>${formatMinutes(stats.totalMinutes)}</span>
               <span>${stats.unfinishedTasks} unfinished</span>
             </div>
-            ${dayBlocks.length ? dayBlocks.map(({ block, index }) => renderWeeklyBlock(block, index, weekDates)).join("") : "<p>No blocks.</p>"}
+            ${overloaded ? `<p class="warning compact-warning">Overloaded day</p>` : ""}
+            ${dayBlocks.length ? dayBlocks.map(({ block, index }) => renderWeeklyBlock(block, index, weekDates)).join("") : `<div class="empty-state small"><p>No blocks.</p><button onclick="selectPlannerDate('${day.iso}')">Create time block</button></div>`}
           </div>
         `;
       }).join("")}
@@ -1422,13 +1858,15 @@ function renderWeeklyView() {
 
 function renderWeeklyBlock(block, index, weekDates) {
   return `
-    <div class="week-block ${block.isBuffer ? "buffer-block" : ""} block-type-${block.type || "task"}">
+    <div class="week-block ${block.isBuffer ? "buffer-block" : ""} ${getCategoryClass(block.category)} ${block.completed ? "completed-block" : ""} block-type-${block.type || "task"}">
       <strong>${escapeHTML(block.start)} ${escapeHTML(block.title)}</strong>
       ${block.type && block.type !== "task" ? `<span class="block-tag block-tag-${block.type}">${block.type}</span>` : ""}
       <small>${escapeHTML(block.end)} • ${escapeHTML(block.category)}</small>
       <select onchange="moveBlockToDate(${index}, this.value)">
         ${weekDates.map(day => `<option value="${day.iso}" ${block.date === day.iso ? "selected" : ""}>Move to ${day.label}</option>`).join("")}
       </select>
+      ${block.isBuffer ? "" : `<button class="secondary-btn" onclick="duplicateTimeBlock(${index})">Duplicate block</button>`}
+      ${block.isBuffer ? "" : `<button class="secondary-btn" onclick="editTimeBlock(${index})">Quick edit</button>`}
       ${
         block.tasks.length
           ? block.tasks.map((task, taskIndex) => `
@@ -1443,6 +1881,10 @@ function renderWeeklyBlock(block, index, weekDates) {
       }
     </div>
   `;
+}
+
+function isOverloadedDay(stats) {
+  return stats.totalMinutes >= 8 * 60 || stats.totalBlocks >= 7 || stats.unfinishedTasks >= 8;
 }
 
 function moveBlockToDate(index, date) {
@@ -1508,8 +1950,179 @@ function getDayWorkload(date) {
   };
 }
 
+function getPlannerAnalytics(date) {
+  const blocks = scheduleData.blocks
+    .filter(block => block.date === date && !block.isBuffer)
+    .sort((a, b) => (a.start || "").localeCompare(b.start || ""));
+  const totalMinutes = blocks.reduce((sum, block) =>
+    sum + Math.max(timeToMinutes(block.end) - timeToMinutes(block.start), 0), 0);
+  const freeSlots = getFreeSlots(date, 15);
+  const freeMinutes = freeSlots.reduce((sum, slot) =>
+    sum + Math.max(timeToMinutes(slot.end) - timeToMinutes(slot.start), 0), 0);
+  const focusMinutes = blocks
+    .filter(block => ["School", "Work", "Personal"].includes(block.category || ""))
+    .reduce((sum, block) => sum + Math.max(timeToMinutes(block.end) - timeToMinutes(block.start), 0), 0);
+  const overlapCount = getOverlappingBlockIndexes(date).size;
+
+  return {
+    totalMinutes,
+    freeMinutes,
+    focusMinutes,
+    overlapCount,
+    blocks,
+    freeSlots
+  };
+}
+
+function renderPlannerAnalytics() {
+  const box = document.getElementById("plannerAnalytics");
+  if (!box) return;
+  const stats = getPlannerAnalytics(selectedPlannerDate);
+
+  box.innerHTML = `
+    <div class="summary-grid planner-summary-grid">
+      <div><strong>${formatMinutes(stats.totalMinutes)}</strong><span>Total planned</span></div>
+      <div><strong>${formatMinutes(stats.freeMinutes)}</strong><span>Free time gaps</span></div>
+      <div><strong>${formatMinutes(stats.focusMinutes)}</strong><span>Focus time</span></div>
+      <div><strong>${stats.overlapCount}</strong><span>Overlaps</span></div>
+    </div>
+    ${stats.freeSlots.length ? `
+      <div class="free-slots-row">
+        ${stats.freeSlots.slice(0, 5).map(slot => `<button class="slot-chip" onclick="prefillBlockTime('${slot.start}', '${slot.end}')">${slot.start}-${slot.end}</button>`).join("")}
+      </div>
+    ` : `<p class="muted-text">No open free-time gaps in the 6 AM to 11 PM planning window.</p>`}
+  `;
+}
+
+function prefillBlockTime(start, end) {
+  openTimeBlockModal();
+  const startInput = document.getElementById("blockStart");
+  const endInput = document.getElementById("blockEnd");
+  const dateInput = document.getElementById("blockDate");
+  if (dateInput) dateInput.value = selectedPlannerDate;
+  if (startInput) startInput.value = start;
+  if (endInput) endInput.value = end;
+}
+
+function renderMonthlyPlannerView() {
+  const box = document.getElementById("monthlyPlannerView");
+  if (!box) return;
+  const [year, month] = visiblePlannerMonth.split("-").map(Number);
+  const monthDates = getMonthDates(year, month - 1);
+  const monthLabel = new Date(year, month - 1, 1).toLocaleDateString(undefined, {
+    month: "long",
+    year: "numeric"
+  });
+
+  box.innerHTML = `
+    <div class="planner-month-header">
+      <button class="secondary-btn" onclick="changePlannerMonth(-1)">Prev</button>
+      <strong>${escapeHTML(monthLabel)}</strong>
+      <button class="secondary-btn" onclick="changePlannerMonth(1)">Next</button>
+    </div>
+    <button class="secondary-btn" onclick="goToPlannerToday()">Today</button>
+    <div class="planner-month-weekdays">
+      ${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(day => `<span>${day}</span>`).join("")}
+    </div>
+    <div class="planner-month-grid">
+      ${monthDates.map(day => {
+        const blocks = getBlocksForDate(day.iso).filter(block => !block.isBuffer);
+        return `
+          <button class="planner-month-day ${day.inMonth ? "" : "muted-month"} ${day.iso === selectedPlannerDate ? "selected" : ""} ${day.iso === getTodayISO() ? "today" : ""}" onclick="selectPlannerDate('${day.iso}')">
+            <span>${day.day}</span>
+            ${blocks.slice(0, 3).map(block => `<small>${escapeHTML(block.start || "")} ${escapeHTML(block.title || "")}</small>`).join("")}
+            ${blocks.length > 3 ? `<em>+${blocks.length - 3} more</em>` : ""}
+          </button>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function getMonthDates(year, monthIndex) {
+  const first = new Date(year, monthIndex, 1);
+  const gridStart = new Date(first);
+  gridStart.setDate(first.getDate() - first.getDay());
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(gridStart);
+    date.setDate(gridStart.getDate() + index);
+    const iso = toLocalISO(date);
+    return {
+      iso,
+      day: date.getDate(),
+      inMonth: date.getMonth() === monthIndex
+    };
+  });
+}
+
+function toLocalISO(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function selectPlannerDate(date) {
+  selectedPlannerDate = date;
+  visiblePlannerMonth = date.slice(0, 7);
+  activePlannerSection = "Day";
+  main.innerHTML = getPageHTML("Planner");
+  renderPlanner();
+}
+
+function changePlannerMonth(offset) {
+  const [year, month] = visiblePlannerMonth.split("-").map(Number);
+  const date = new Date(year, month - 1 + offset, 1);
+  visiblePlannerMonth = toLocalISO(date).slice(0, 7);
+  renderMonthlyPlannerView();
+}
+
+function goToPlannerToday() {
+  selectedPlannerDate = getTodayISO();
+  visiblePlannerMonth = selectedPlannerDate.slice(0, 7);
+  renderMonthlyPlannerView();
+}
+
+function getBlocksForDate(date) {
+  return scheduleData.blocks
+    .filter(block => block.date === date)
+    .sort((a, b) => (a.start || "").localeCompare(b.start || ""));
+}
+
+function getPlannerTemplates() {
+  return [
+    { id: "morning", name: "Morning routine", title: "Morning Routine", start: "07:00", end: "08:00", category: "Personal", tasks: ["Wake up", "Get ready", "Review priorities"] },
+    { id: "night", name: "Night routine", title: "Night Routine", start: "21:30", end: "22:30", category: "Personal", tasks: ["Reset space", "Plan tomorrow", "Wind down"] },
+    { id: "work", name: "Work shift", title: "Work Shift", start: "09:00", end: "17:00", category: "Work", tasks: ["Clock in", "Main work", "Wrap up"] },
+    { id: "gym", name: "Gym", title: "Gym", start: "17:30", end: "18:30", category: "Gym", tasks: ["Warm up", "Workout", "Cool down"] },
+    { id: "study", name: "Study block", title: "Study Block", start: "18:00", end: "19:30", category: "School", tasks: ["Review notes", "Practice", "Summarize"] },
+    { id: "hangout", name: "Hangout", title: "Hangout", start: "19:00", end: "21:00", category: "Social", tasks: ["Confirm plans", "Meet up", "Follow up"] }
+  ];
+}
+
+function addPlannerTemplate(templateId) {
+  const template = getPlannerTemplates().find(item => item.id === templateId);
+  if (!template) return;
+  scheduleData.blocks.push({
+    id: createId("block"),
+    title: template.title,
+    date: selectedPlannerDate,
+    start: template.start,
+    end: template.end,
+    category: template.category,
+    notes: "Created from template",
+    type: template.id === "hangout" ? "social" : "task",
+    completed: false,
+    tasks: template.tasks.map(text => ({ text, completed: false }))
+  });
+  addBufferBlocksForDate(selectedPlannerDate);
+  saveScheduleData();
+  renderPlanner();
+}
+
 function moveUnfinishedToTomorrow() {
-  const today = getTodayISO();
+  const today = selectedPlannerDate;
   const tomorrow = getDateOffset(today, 1);
   let movedCount = 0;
   const targetBlock = findOrCreateMovedTasksBlock(tomorrow);
@@ -1546,13 +2159,268 @@ function getDateOffset(isoDate, offsetDays) {
 }
 
 function renderHome() {
+  renderTodayFocus();
+  renderHomeNextAction();
   renderHomeSnapshot();
   renderProductivitySummary("homeProductivitySummary");
   renderHomeTimeline();
   renderHomeSystemsHabits();
-  renderHomeUpcomingHangouts();
+  renderHomeGoalProgress();
+  renderHomeSocialReminder();
   renderHomeSuggestions();
   renderHomeStats();
+}
+
+function renderTodayFocus() {
+  const box = document.getElementById("todayFocus");
+  if (!box) return;
+  const focus = getTodayFocus();
+  box.innerHTML = `
+    <div class="today-focus-grid">
+      <button onclick="${focus.nextBlockAction}"><span>Current/next block</span><strong>${escapeHTML(focus.nextBlock)}</strong></button>
+      <button onclick="openPlannerSection('Day')"><span>Top unfinished task</span><strong>${escapeHTML(focus.topTask)}</strong></button>
+      <button onclick="openSystemsSection('Habits')"><span>Habit left</span><strong>${escapeHTML(focus.habitLeft)}</strong></button>
+      <button onclick="openSystemsSection('Metrics')"><span>Goal preview</span><strong>${escapeHTML(focus.goalPreview)}</strong></button>
+      <button onclick="openSocialSection('Friends')"><span>Social reminder</span><strong>${escapeHTML(focus.socialSuggestion)}</strong></button>
+    </div>
+  `;
+}
+
+function getTodayFocus() {
+  const today = getTodayISO();
+  const now = new Date();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const currentBlock = scheduleData.blocks
+    .filter(block => block.date === today && !block.isBuffer)
+    .find(block => timeToMinutes(block.start || "00:00") <= nowMinutes && timeToMinutes(block.end || "00:00") > nowMinutes);
+  const nextBlock = scheduleData.blocks
+    .filter(block => block.date === today && !block.isBuffer && timeToMinutes(block.start || "00:00") >= nowMinutes)
+    .sort((a, b) => (a.start || "").localeCompare(b.start || ""))[0];
+  const currentOrNextBlock = currentBlock || nextBlock;
+  const topTask = scheduleData.blocks
+    .filter(block => block.date === today && !block.isBuffer)
+    .flatMap(block => block.tasks.map(task => ({ task, block })))
+    .find(item => !item.task.completed);
+  const nextFree = getFreeSlots(today, 30).find(slot => timeToMinutes(slot.end) >= nowMinutes) || getFreeSlots(today, 30)[0];
+  const habitLeft = systemsData.habits.find(habit => !habit.completions.includes(today));
+  const goal = getTopGoalPreview();
+  const social = getSocialReminder();
+  const nextAction = getHomeNextAction({
+    currentBlock,
+    nextBlock,
+    topTask,
+    habitLeft,
+    goal,
+    social,
+    nextFree
+  });
+
+  return {
+    nextAction,
+    currentBlock,
+    nextPlannerBlock: nextBlock,
+    topTask,
+    habitLeft,
+    goal,
+    social,
+    nextBlock: currentOrNextBlock ? `${currentOrNextBlock.start} ${currentOrNextBlock.title}` : "No planner block",
+    nextBlockAction: currentOrNextBlock ? "openPlannerSection('Day')" : "openPlannerSection('Day')",
+    topTask: topTask ? `${topTask.task.text}` : "No unfinished tasks",
+    nextFreeSlot: nextFree ? `${nextFree.start}-${nextFree.end}` : "No open slot",
+    habitLeft: habitLeft ? habitLeft.name : "All habits done",
+    goalPreview: goal ? `${goal.name} ${goal.progress}%` : "No goal yet",
+    socialSuggestion: social ? social.title : "Add a friend"
+  };
+}
+
+function getHomeNextAction(context) {
+  if (context.currentBlock) {
+    const task = (context.currentBlock.tasks || []).find(item => !item.completed);
+    return {
+      label: "Stay in this block",
+      title: task ? task.text : context.currentBlock.title,
+      detail: `${context.currentBlock.start}-${context.currentBlock.end} • ${context.currentBlock.title}`,
+      actionLabel: "Open planner",
+      action: "openPlannerSection('Day')"
+    };
+  }
+
+  if (context.topTask) {
+    return {
+      label: "Finish this task",
+      title: context.topTask.task.text,
+      detail: `From ${context.topTask.block.title}`,
+      actionLabel: "Open planner",
+      action: "openPlannerSection('Day')"
+    };
+  }
+
+  if (context.nextBlock) {
+    return {
+      label: "Prepare for your next block",
+      title: context.nextBlock.title,
+      detail: `${context.nextBlock.start}-${context.nextBlock.end} • ${context.nextBlock.category || "Planner"}`,
+      actionLabel: "Open planner",
+      action: "openPlannerSection('Day')"
+    };
+  }
+
+  if (context.habitLeft) {
+    return {
+      label: "Complete one habit",
+      title: context.habitLeft.name,
+      detail: context.habitLeft.target || context.habitLeft.category || "Keep the streak alive",
+      actionLabel: "Open habits",
+      action: "openSystemsSection('Habits')"
+    };
+  }
+
+  if (context.goal) {
+    return {
+      label: "Move a goal forward",
+      title: context.goal.name,
+      detail: `${context.goal.progress}% complete${context.goal.status ? ` • ${context.goal.status}` : ""}`,
+      actionLabel: "Open metrics",
+      action: "openSystemsSection('Metrics')"
+    };
+  }
+
+  if (context.social) {
+    return {
+      label: "Keep your social rhythm",
+      title: context.social.title,
+      detail: context.social.detail,
+      actionLabel: "Open social",
+      action: "openSocialSection('Friends')"
+    };
+  }
+
+  return {
+    label: "Plan the next useful thing",
+    title: context.nextFree ? `Use ${context.nextFree.start}-${context.nextFree.end}` : "Create a time block",
+    detail: "Your day has open space. Give it a job.",
+    actionLabel: "Create time block",
+    action: "openPlannerSection('Day')"
+  };
+}
+
+function renderHomeNextAction() {
+  const box = document.getElementById("homeNextAction");
+  if (!box) return;
+  const focus = getTodayFocus();
+  box.innerHTML = `
+    <div class="next-action-panel">
+      <p class="eyebrow">${escapeHTML(focus.nextAction.label)}</p>
+      <strong>${escapeHTML(focus.nextAction.title)}</strong>
+      <p>${escapeHTML(focus.nextAction.detail)}</p>
+      <div class="next-action-actions">
+        <button onclick="${focus.nextAction.action}">${escapeHTML(focus.nextAction.actionLabel)}</button>
+        <button class="secondary-btn" onclick="openQuickAddDefault()">Quick Add</button>
+      </div>
+    </div>
+  `;
+}
+
+function openQuickAddDefault() {
+  openPlannerSection("Day");
+}
+
+function getTopGoalPreview() {
+  const goals = systemsData.goals
+    .map(goal => ({
+      name: goal.name || "Untitled goal",
+      progress: getGoalProgress(goal),
+      status: getGoalStatus(goal),
+      deadline: goal.deadline || "",
+      unit: goal.unit || "",
+      current: getGoalCurrentValue(goal),
+      target: getGoalTargetValue(goal)
+    }))
+    .sort((a, b) => {
+      if (a.status === "behind" && b.status !== "behind") return -1;
+      if (a.status !== "behind" && b.status === "behind") return 1;
+      return a.progress - b.progress;
+    });
+
+  return goals[0] || null;
+}
+
+function getSocialReminder() {
+  const today = getTodayISO();
+  const upcoming = socialData.hangouts
+    .filter(hangout => !hangout.completed && hangout.date && hangout.date >= today)
+    .sort((a, b) => `${a.date} ${a.time || ""}`.localeCompare(`${b.date} ${b.time || ""}`))[0];
+
+  if (upcoming) {
+    return {
+      title: upcoming.activity || "Upcoming hangout",
+      detail: `${upcoming.date}${upcoming.time ? ` at ${upcoming.time}` : ""}${upcoming.people.length ? ` • ${upcoming.people.join(", ")}` : ""}`
+    };
+  }
+
+  const friendSuggestion = getFriendSuggestions().find(item => {
+    const daysSince = getDaysSince(item.friend.lastSeen);
+    return daysSince === null || daysSince >= 21;
+  }) || getFriendSuggestions()[0];
+
+  if (!friendSuggestion) return null;
+
+  return {
+    title: `Reach out to ${friendSuggestion.friend.name}`,
+    detail: friendSuggestion.reason || "Good person to reconnect with"
+  };
+}
+
+function renderHomeGoalProgress() {
+  const box = document.getElementById("homeGoalProgress");
+  if (!box) return;
+  const goal = getTopGoalPreview();
+
+  box.innerHTML = goal
+    ? `
+      <div class="home-focus-preview">
+        <strong>${escapeHTML(goal.name)}</strong>
+        <p>${goal.progress}% complete${goal.status ? ` • ${escapeHTML(goal.status)}` : ""}</p>
+        <div class="tracker-progress-bar">
+          <div class="tracker-progress-fill goal-progress-fill-${goal.status}" style="width:${goal.progress}%"></div>
+        </div>
+        <p class="tracker-pct">${escapeHTML(String(goal.current))}/${escapeHTML(String(goal.target))} ${escapeHTML(goal.unit)}</p>
+        ${goal.deadline ? `<p>Deadline: ${escapeHTML(goal.deadline)}</p>` : ""}
+        <button class="secondary-btn" onclick="openSystemsSection('Metrics')">Open goals</button>
+      </div>
+    `
+    : `<div class="empty-state small"><p>No goals yet.</p><button onclick="openSystemsSection('Metrics')">Add first goal</button></div>`;
+}
+
+function renderHomeSocialReminder() {
+  const box = document.getElementById("homeSocialReminder");
+  if (!box) return;
+  const reminder = getSocialReminder();
+
+  box.innerHTML = reminder
+    ? `
+      <div class="home-focus-preview">
+        <strong>${escapeHTML(reminder.title)}</strong>
+        <p>${escapeHTML(reminder.detail)}</p>
+        <button class="secondary-btn" onclick="openSocialSection('Friends')">Open social</button>
+      </div>
+    `
+    : `<div class="empty-state small"><p>No social reminder yet.</p><button onclick="openSocialSection('Friends')">Add friend</button></div>`;
+}
+
+function formatDashboardDate(isoDate) {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "short",
+    day: "numeric"
+  });
+}
+
+function renderCategoryPill(category) {
+  const label = category || "Personal";
+  const key = label.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  return `<span class="category-pill category-${key}">${escapeHTML(label)}</span>`;
 }
 
 function renderProductivitySummary(targetId) {
@@ -1594,10 +2462,10 @@ function getProductivitySummary() {
 function getBestRoutineStreak() {
   if (!scheduleData.routines.length) return 0;
 
-  return Math.max(...scheduleData.routines.map(routine => getRoutineStreak(routine.id)));
+  return Math.max(...scheduleData.routines.map(routine => getRoutineBlockStreak(routine.id)));
 }
 
-function getRoutineStreak(routineId) {
+function getRoutineBlockStreak(routineId) {
   let streak = 0;
   let date = getTodayISO();
 
@@ -1627,6 +2495,231 @@ function formatMinutes(minutes) {
 
 // ---------------- SYSTEMS ----------------
 
+function renderSystemsSheet() {
+  if (!activeSystemsForm) return "";
+  const titles = {
+    habit: editingHabitIndex === null ? "Add Habit" : "Edit Habit",
+    log: "Add Log",
+    metric: editingMetricIndex === null && editingTrackerIndex === null ? "Add Metric" : "Edit Metric",
+    goal: editingGoalIndex === null ? "Add Goal" : "Edit Goal"
+  };
+
+  return `
+    <div id="systemsModal" class="modal-backdrop" onclick="closeSystemsFormFromBackdrop(event)">
+      <div class="planner-sheet systems-sheet" role="dialog" aria-modal="true">
+        <div class="sheet-handle"></div>
+        <div class="sheet-header">
+          <h3>${titles[activeSystemsForm] || "Add System Item"}</h3>
+          <button class="icon-btn" onclick="closeSystemsForm()">x</button>
+        </div>
+        ${activeSystemsForm === "habit" ? renderHabitFormFields() : ""}
+        ${activeSystemsForm === "log" ? renderLogFormFields() : ""}
+        ${activeSystemsForm === "metric" ? renderMetricFormFields() : ""}
+        ${activeSystemsForm === "goal" ? renderGoalFormFields() : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderHabitFormFields() {
+  return `
+    <input id="habitName" placeholder="Habit name">
+    <select id="habitCategory">
+      <option value="">Category</option>
+      <option>Health</option>
+      <option>Fitness</option>
+      <option>Learning</option>
+      <option>Mindfulness</option>
+      <option>Productivity</option>
+      <option>Social</option>
+      <option>Finance</option>
+      <option>Sleep</option>
+      <option>School</option>
+      <option>Work</option>
+      <option>Personal</option>
+      <option>Gym</option>
+      <option>Custom</option>
+    </select>
+    <select id="habitFrequency">
+      <option>Daily</option>
+      <option>Weekdays</option>
+      <option>Weekly</option>
+      <option>Custom</option>
+    </select>
+    <select id="habitTargetFrequency">
+      <option value="Daily">Target frequency: Daily</option>
+      <option value="Weekdays">Target frequency: Weekdays</option>
+      <option value="3x/week">Target frequency: 3x/week</option>
+      <option value="Weekly">Target frequency: Weekly</option>
+      <option value="Custom">Target frequency: Custom</option>
+    </select>
+    <input id="habitTarget" placeholder="Target (e.g. 30, 8 glasses)">
+    <div class="habit-meta-row">
+      <select id="habitUnit">
+        <option value="">Unit</option>
+        <option>times</option>
+        <option>minutes</option>
+        <option>hours</option>
+        <option>pages</option>
+        <option>miles</option>
+        <option>reps</option>
+        <option>glasses</option>
+        <option>calories</option>
+        <option>steps</option>
+        <option>Custom</option>
+      </select>
+      <select id="habitLinkedGoalId">
+        <option value="">Link to goal</option>
+        ${systemsData.goals.map(g => `<option value="${g.id}">${escapeHTML(g.name)}</option>`).join("")}
+      </select>
+    </div>
+    <textarea id="habitNotes" placeholder="Notes"></textarea>
+    <button id="habitSaveButton" onclick="saveHabit()">${editingHabitIndex === null ? "Save Habit" : "Update Habit"}</button>
+    <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
+  `;
+}
+
+function renderLogFormFields() {
+  return `
+    <input id="logTitle" placeholder="Log title">
+    <select id="logType">
+      <option>Numeric</option>
+      <option>Time</option>
+      <option>Boolean</option>
+      <option>Counter</option>
+      <option>Mood</option>
+      <option>Sleep</option>
+      <option>Gym</option>
+      <option>Spending</option>
+      <option>Health</option>
+      <option>Custom</option>
+    </select>
+    <input id="logValue" placeholder="Value">
+    <input id="logUnit" placeholder="Custom unit, ex: min, $, hrs, reps">
+    <input id="logDate" type="date">
+    <select id="logLinkedHabit">
+      <option value="">No linked habit</option>
+      ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
+    </select>
+    <textarea id="logNotes" placeholder="Notes"></textarea>
+    <button onclick="saveSystemLog()">Save Log</button>
+    <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
+  `;
+}
+
+function renderMetricFormFields() {
+  return `
+    <input id="metricName" placeholder="Name">
+    <select id="metricType">
+      <option value="Numeric">Numeric Tracker</option>
+      <option value="Progress">Progress Goal</option>
+      <option value="Counter">Counter</option>
+      <option value="Boolean">Daily Check-in</option>
+      <option value="Time">Time Tracker</option>
+      <option value="Milestone">Milestone Goal</option>
+    </select>
+    <input id="metricUnit" placeholder="Unit (lb, hrs, $, reps...)">
+    <input id="metricStartValue" type="number" placeholder="Start value">
+    <input id="metricCurrentValue" type="number" placeholder="Current value">
+    <input id="metricTargetValue" type="number" placeholder="Target value">
+    <input id="metricRecurringTarget" placeholder="Recurring target (weekly, monthly, custom)">
+    <input id="metricStartDate" type="date">
+    <input id="metricDeadline" type="date">
+    <select id="metricLinkedHabit">
+      <option value="">No linked habit</option>
+      ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
+    </select>
+    <textarea id="metricNotes" placeholder="Notes"></textarea>
+    <button id="metricSaveButton" onclick="saveMetric()">${editingMetricIndex === null && editingTrackerIndex === null ? "Save Metric" : "Update Metric"}</button>
+    <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
+  `;
+}
+
+function renderGoalFormFields() {
+  return `
+    <input id="goalName" placeholder="Goal name">
+    <select id="goalCategory">
+      <option>Study</option>
+      <option>Savings</option>
+      <option>Fitness</option>
+      <option>Sleep</option>
+      <option>Reading</option>
+      <option>Calories</option>
+      <option>Work</option>
+      <option>Personal</option>
+      <option>Custom</option>
+    </select>
+    <div class="habit-meta-row">
+      <input id="goalStartValue" type="number" placeholder="Start value">
+      <input id="goalCurrentValue" type="number" placeholder="Current value">
+    </div>
+    <div class="habit-meta-row">
+      <input id="goalTargetValue" type="number" placeholder="Target value">
+      <input id="goalUnit" placeholder="Unit">
+    </div>
+    <input id="goalRecurringTarget" placeholder="Recurring target (optional)">
+    <div class="habit-meta-row">
+      <input id="goalStartDate" type="date">
+      <input id="goalDeadline" type="date">
+    </div>
+    <select id="goalLinkedTracker">
+      <option value="">No linked tracker</option>
+      ${systemsData.trackers.map(t => `<option value="${t.id}">${escapeHTML(t.name)}</option>`).join("")}
+    </select>
+    <select id="goalLinkedHabit">
+      <option value="">No linked habit</option>
+      ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
+    </select>
+    <textarea id="goalMilestones" placeholder="Milestones, one per line"></textarea>
+    <textarea id="goalNotes" placeholder="Notes"></textarea>
+    <button id="goalSaveButton" onclick="saveGoal()">${editingGoalIndex === null ? "Save Goal" : "Update Goal"}</button>
+    <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
+  `;
+}
+
+function openSystemsForm(kind, index = null) {
+  activeSystemsForm = kind;
+  editingHabitIndex = kind === "habit" ? index : null;
+  editingMetricIndex = kind === "metric" ? index : null;
+  editingGoalIndex = kind === "goal" ? index : null;
+  editingTrackerIndex = null;
+  if (kind === "habit") activeSystemsSection = "Habits";
+  if (kind === "log") activeSystemsSection = "Logs";
+  if (kind === "metric") activeSystemsSection = "Metrics";
+  if (kind === "goal") activeSystemsSection = "Goals";
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+  fillDefaultLogDate();
+  const firstInput = document.querySelector("#systemsModal input, #systemsModal select, #systemsModal textarea");
+  firstInput?.focus();
+}
+
+function openSystemsFormForSection() {
+  const map = {
+    Dashboard: "habit",
+    Habits: "habit",
+    Logs: "log",
+    Metrics: "metric",
+    Goals: "goal",
+    Insights: "log"
+  };
+  openSystemsForm(map[activeSystemsSection] || "habit");
+}
+
+function closeSystemsForm() {
+  activeSystemsForm = null;
+  editingHabitIndex = null;
+  editingTrackerIndex = null;
+  editingGoalIndex = null;
+  editingMetricIndex = null;
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function closeSystemsFormFromBackdrop(event) {
+  if (event.target && event.target.id === "systemsModal") closeSystemsForm();
+}
+
 function renderSystems() {
   fillEditingHabitForm();
   fillEditingTrackerForm();
@@ -1636,6 +2729,7 @@ function renderSystems() {
   renderHabitsList();
   renderSystemsLogsList();
   renderMetricsList();
+  renderGoalsList();
   fillDefaultLogDate();
 }
 
@@ -1648,11 +2742,15 @@ function saveHabit() {
     name,
     category: document.getElementById("habitCategory").value,
     frequency: document.getElementById("habitFrequency").value,
+    targetFrequency: document.getElementById("habitTargetFrequency")?.value || document.getElementById("habitFrequency").value,
     target: document.getElementById("habitTarget").value.trim(),
     unit: document.getElementById("habitUnit")?.value || "",
     linkedGoalId: document.getElementById("habitLinkedGoalId")?.value || "",
     notes: document.getElementById("habitNotes").value.trim(),
-    completions: editingHabitIndex === null ? [] : systemsData.habits[editingHabitIndex].completions
+    completions: editingHabitIndex === null ? [] : systemsData.habits[editingHabitIndex].completions,
+    skippedDates: editingHabitIndex === null ? [] : (systemsData.habits[editingHabitIndex].skippedDates || []),
+    completionHistory: editingHabitIndex === null ? [] : (systemsData.habits[editingHabitIndex].completionHistory || []),
+    paused: editingHabitIndex === null ? false : Boolean(systemsData.habits[editingHabitIndex].paused)
   };
 
   if (editingHabitIndex === null) {
@@ -1662,6 +2760,7 @@ function saveHabit() {
   }
 
   editingHabitIndex = null;
+  activeSystemsForm = null;
   saveSystemsData();
   activeSystemsSection = "Habits";
   main.innerHTML = getPageHTML("Systems");
@@ -1677,6 +2776,8 @@ function fillEditingHabitForm() {
   document.getElementById("habitName").value = habit.name;
   document.getElementById("habitCategory").value = habit.category || "";
   document.getElementById("habitFrequency").value = habit.frequency;
+  const targetFrequencyEl = document.getElementById("habitTargetFrequency");
+  if (targetFrequencyEl) targetFrequencyEl.value = habit.targetFrequency || habit.frequency || "Daily";
   document.getElementById("habitTarget").value = habit.target;
   const habitUnitEl = document.getElementById("habitUnit");
   if (habitUnitEl) habitUnitEl.value = habit.unit || "";
@@ -1694,10 +2795,7 @@ function resetHabitForm() {
 }
 
 function editHabit(index) {
-  editingHabitIndex = index;
-  activeSystemsSection = "Habits";
-  main.innerHTML = getPageHTML("Systems");
-  renderSystems();
+  openSystemsForm("habit", index);
 }
 
 function deleteHabit(index) {
@@ -1711,8 +2809,17 @@ function deleteHabit(index) {
 function completeHabitToday(index) {
   const today = getTodayISO();
   const habit = systemsData.habits[index];
+  if (!habit || habit.paused) return;
   if (!habit.completions.includes(today)) {
     habit.completions.push(today);
+  }
+  habit.skippedDates = (habit.skippedDates || []).filter(date => date !== today);
+  if (!Array.isArray(habit.completionHistory)) habit.completionHistory = [];
+  if (!habit.completionHistory.some(entry => entry.date === today)) {
+    habit.completionHistory.push({
+      date: today,
+      time: new Date().toTimeString().slice(0, 5)
+    });
   }
 
   const alreadyLogged = systemsData.logs.some(log =>
@@ -1733,6 +2840,25 @@ function completeHabitToday(index) {
     });
   }
 
+  saveSystemsData();
+  renderSystems();
+}
+
+function skipHabitToday(index) {
+  const habit = systemsData.habits[index];
+  if (!habit) return;
+  const today = getTodayISO();
+  if (!Array.isArray(habit.skippedDates)) habit.skippedDates = [];
+  if (!habit.skippedDates.includes(today)) habit.skippedDates.push(today);
+  habit.completions = (habit.completions || []).filter(date => date !== today);
+  saveSystemsData();
+  renderSystems();
+}
+
+function toggleHabitPaused(index) {
+  const habit = systemsData.habits[index];
+  if (!habit) return;
+  habit.paused = !habit.paused;
   saveSystemsData();
   renderSystems();
 }
@@ -1777,22 +2903,40 @@ function saveSystemLog() {
   const date = document.getElementById("logDate").value || getTodayISO();
   if (!title && !value) return;
 
-  systemsData.logs.push({
+  const log = {
     id: createId("log"),
     title,
     type: document.getElementById("logType").value,
+    valueType: document.getElementById("logType").value,
     value,
     unit,
     date,
     notes: document.getElementById("logNotes").value.trim(),
-    linkedHabitId: "",
+    linkedHabitId: document.getElementById("logLinkedHabit")?.value || "",
     linkedPlannerBlockId: ""
-  });
+  };
+  systemsData.logs.push(log);
+  syncMetricsFromLog(log);
 
   saveSystemsData();
+  activeSystemsForm = null;
   activeSystemsSection = "Logs";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
+}
+
+function syncMetricsFromLog(log) {
+  const numericValue = getLogNumber(log);
+  if (isNaN(numericValue)) return;
+  const normalizedTitle = (log.title || "").trim().toLowerCase();
+  const metric = systemsData.metrics.find(item =>
+    item.name.trim().toLowerCase() === normalizedTitle ||
+    (log.linkedHabitId && item.linkedHabitId === log.linkedHabitId)
+  );
+  if (!metric) return;
+  metric.currentValue = String(numericValue);
+  if (!Array.isArray(metric.entries)) metric.entries = [];
+  metric.entries.push({ date: log.date || getTodayISO(), value: String(numericValue), logId: log.id });
 }
 
 function deleteSystemLog(index) {
@@ -1810,30 +2954,103 @@ function renderSystemsDashboard() {
   const box = document.getElementById("systemsDashboard");
   if (!box) return;
   const today = getTodayISO();
-  const completedToday = systemsData.habits.filter(habit => habit.completions.includes(today)).length;
-  const bestStreak = systemsData.habits.reduce((best, habit) =>
+  const activeHabits = systemsData.habits.filter(habit => !habit.paused);
+  const completedToday = activeHabits.filter(habit => habit.completions.includes(today)).length;
+  const weekDates = getLastNDates(7);
+  const expectedHabitChecks = activeHabits.reduce((sum, habit) =>
+    sum + getHabitExpectedCount(habit, weekDates), 0);
+  const weeklyHabitHits = activeHabits.reduce((sum, habit) =>
+    sum + weekDates.filter(date => habit.completions.includes(date)).length, 0);
+  const weeklyCompletionPct = expectedHabitChecks ? Math.round((weeklyHabitHits / expectedHabitChecks) * 100) : 0;
+  const bestStreak = activeHabits.reduce((best, habit) =>
     Math.max(best, getHabitStreak(habit)), 0);
+  const missedHabits = activeHabits.filter(habit =>
+    !habit.completions.includes(today) && !habit.skippedDates.includes(today)
+  );
+  const skippedToday = activeHabits.filter(habit => habit.skippedDates.includes(today));
+  const bestHabit = getBestHabit();
+  const mostSkipped = getMostSkippedHabit();
 
   const trackerProgresses = systemsData.trackers.map(t => getTrackerProgress(t));
+  const metricProgresses = systemsData.metrics.map(m => getMetricProgress(m));
+  const allProgresses = [...trackerProgresses, ...metricProgresses];
   const avgProgress = trackerProgresses.length
     ? Math.round(trackerProgresses.reduce((s, p) => s + p, 0) / trackerProgresses.length)
     : 0;
   const onTrack = systemsData.trackers.filter(t => getTrackerProgress(t) >= 50).length;
+  const logsThisWeek = systemsData.logs.filter(log => weekDates.includes(log.date)).length;
+  const insights = getSmartSystemsInsights();
 
   const recentLogs = [...systemsData.logs]
     .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
     .slice(0, 3);
 
   box.innerHTML = `
-    <div class="summary-grid">
-      <div><strong>${systemsData.habits.length}</strong><span>Active habits</span></div>
-      <div><strong>${completedToday}</strong><span>Done today</span></div>
+    <div class="systems-summary-grid">
+      <div class="progress-ring-card">
+        <div class="progress-ring" style="--pct:${activeHabits.length ? Math.round((completedToday / activeHabits.length) * 100) : 0}%">
+          <span>${activeHabits.length ? Math.round((completedToday / activeHabits.length) * 100) : 0}%</span>
+        </div>
+        <strong>Today</strong>
+        <p>${completedToday}/${activeHabits.length} habits complete</p>
+      </div>
+      <div><strong>${activeHabits.length}</strong><span>Active habits</span></div>
+      <div><strong>${weeklyCompletionPct}%</strong><span>Weekly habits</span></div>
       <div><strong>${bestStreak}</strong><span>Best streak</span></div>
-      <div><strong>${systemsData.logs.length}</strong><span>Total logs</span></div>
+      <div><strong>${missedHabits.length}</strong><span>Missed today</span></div>
+      <div><strong>${skippedToday.length}</strong><span>Skipped today</span></div>
+      <div><strong>${logsThisWeek}</strong><span>Logs this week</span></div>
       <div><strong>${systemsData.trackers.length}</strong><span>Trackers</span></div>
       <div><strong>${onTrack}/${systemsData.trackers.length}</strong><span>On track</span></div>
-      <div><strong>${avgProgress}%</strong><span>Avg progress</span></div>
+      <div><strong>${allProgresses.length ? Math.round(allProgresses.reduce((s, p) => s + p, 0) / allProgresses.length) : avgProgress}%</strong><span>Metric progress</span></div>
     </div>
+    <div class="systems-highlight-grid">
+      <div class="system-highlight">
+        <span>Best habit</span>
+        <strong>${bestHabit ? escapeHTML(bestHabit.name) : "No habit yet"}</strong>
+        <p>${bestHabit ? `${getHabitCompletionPct(bestHabit, 30)}% over 30 days` : "Add a habit to start tracking."}</p>
+      </div>
+      <div class="system-highlight">
+        <span>Most skipped</span>
+        <strong>${mostSkipped ? escapeHTML(mostSkipped.name) : "None"}</strong>
+        <p>${mostSkipped ? `${getHabitSkippedCount(mostSkipped, 30)} skips in 30 days` : "No skip pattern yet."}</p>
+      </div>
+    </div>
+    <div class="weekly-bars">
+      ${weekDates.slice().reverse().map(date => {
+        const done = activeHabits.filter(habit => habit.completions.includes(date)).length;
+        const pct = activeHabits.length ? Math.round((done / activeHabits.length) * 100) : 0;
+        return `
+          <div class="weekly-bar">
+            <div class="weekly-bar-fill" style="height:${Math.max(pct, 8)}%"></div>
+            <span>${new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { weekday: "short" }).slice(0, 1)}</span>
+          </div>
+        `;
+      }).join("")}
+    </div>
+    ${insights.length ? `
+      <div class="smart-insight-list">
+        ${insights.map(insight => `<div class="smart-insight ${insight.tone}"><strong>${escapeHTML(insight.title)}</strong><p>${escapeHTML(insight.detail)}</p></div>`).join("")}
+      </div>
+    ` : ""}
+    ${missedHabits.length ? `
+      <p style="margin-top:12px;font-weight:600;font-size:14px;">Missed Habits</p>
+      ${missedHabits.slice(0, 5).map(habit => `
+        <div class="home-list-item">
+          <strong>${escapeHTML(habit.name)}</strong>
+          <p>${escapeHTML(habit.category || "No category")} • ${getHabitStreak(habit)} streak</p>
+        </div>
+      `).join("")}
+    ` : `<p class="empty-state small">All habits are complete today.</p>`}
+    ${systemsData.metrics.length ? `
+      <p style="margin-top:12px;font-weight:600;font-size:14px;">Metric Progress</p>
+      ${systemsData.metrics.slice(0, 4).map(metric => `
+        <div class="home-list-item">
+          <strong>${escapeHTML(metric.name)}</strong>
+          <p>${getMetricProgress(metric)}% • ${escapeHTML(String(metric.currentValue || 0))}/${escapeHTML(String(metric.targetValue || ""))} ${escapeHTML(metric.unit || "")}</p>
+        </div>
+      `).join("")}
+    ` : ""}
     ${recentLogs.length ? `
       <p style="margin-top:12px;font-weight:600;font-size:14px;">Recent Logs</p>
       ${recentLogs.map(log => `
@@ -1846,29 +3063,200 @@ function renderSystemsDashboard() {
   `;
 }
 
+function getLastNDates(count) {
+  const today = getTodayISO();
+  return Array.from({ length: count }, (_, index) => getDateOffset(today, -index));
+}
+
+function getHabitExpectedCount(habit, dates) {
+  const frequency = habit.targetFrequency || habit.frequency || "Daily";
+  if (habit.paused) return 0;
+  if (frequency === "Weekly") return dates.length ? 1 : 0;
+  if (frequency === "3x/week") return Math.min(3, dates.length);
+  if (frequency === "Weekdays") {
+    return dates.filter(date => {
+      const day = new Date(`${date}T00:00:00`).getDay();
+      return day !== 0 && day !== 6;
+    }).length;
+  }
+  return dates.length;
+}
+
+function getHabitCompletionPct(habit, days = 30) {
+  const dates = getLastNDates(days);
+  const expected = getHabitExpectedCount(habit, dates);
+  if (!expected) return 0;
+  const hits = dates.filter(date => habit.completions.includes(date)).length;
+  return Math.min(100, Math.round((hits / expected) * 100));
+}
+
+function getHabitWeeklyConsistency(habit) {
+  return getHabitCompletionPct(habit, 7);
+}
+
+function getHabitSkippedCount(habit, days = 30) {
+  const dates = new Set(getLastNDates(days));
+  return (habit.skippedDates || []).filter(date => dates.has(date)).length;
+}
+
+function getBestHabit() {
+  return systemsData.habits
+    .filter(habit => !habit.paused)
+    .sort((a, b) => getHabitCompletionPct(b, 30) - getHabitCompletionPct(a, 30))[0] || null;
+}
+
+function getMostSkippedHabit() {
+  return systemsData.habits
+    .filter(habit => getHabitSkippedCount(habit, 30) > 0)
+    .sort((a, b) => getHabitSkippedCount(b, 30) - getHabitSkippedCount(a, 30))[0] || null;
+}
+
+function renderHabitHeatmap(habit) {
+  const dates = getLastNDates(28).slice().reverse();
+  return `
+    <div class="habit-heatmap" aria-label="Habit heatmap">
+      ${dates.map(date => {
+        const complete = habit.completions.includes(date);
+        const skipped = (habit.skippedDates || []).includes(date);
+        return `<span class="${complete ? "done" : skipped ? "skipped" : ""}" title="${date}"></span>`;
+      }).join("")}
+    </div>
+  `;
+}
+
+function getSmartSystemsInsights() {
+  const insights = [];
+  const history = systemsData.habits.flatMap(habit =>
+    (habit.completionHistory || []).map(entry => ({ ...entry, habitName: habit.name }))
+  );
+  const timedHistory = history.filter(entry => entry.time);
+  if (timedHistory.length >= 2) {
+    const before11 = timedHistory.filter(entry => timeToMinutes(entry.time) < 11 * 60).length;
+    if (before11 / timedHistory.length >= 0.5) {
+      insights.push({
+        tone: "positive",
+        title: "You complete habits most often before 11AM.",
+        detail: `${before11}/${timedHistory.length} timed completions happened before late morning.`
+      });
+    }
+  }
+
+  const sleepLogs = systemsData.logs
+    .filter(log => /sleep/i.test(`${log.title} ${log.type}`) && !isNaN(getLogNumber(log)))
+    .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const sleepChange = getPeriodChangePct(sleepLogs);
+  if (sleepChange !== null) {
+    insights.push({
+      tone: sleepChange >= 0 ? "positive" : "warning",
+      title: `Your sleep average ${sleepChange >= 0 ? "improved" : "dropped"} ${Math.abs(sleepChange)}%.`,
+      detail: "This compares your latest 7 logged sleep values with the prior 7."
+    });
+  }
+
+  const gymHabit = systemsData.habits.find(habit => /gym|workout|fitness/i.test(`${habit.name} ${habit.category}`));
+  if (gymHabit) {
+    const weekendSkips = (gymHabit.skippedDates || []).filter(date => {
+      const day = new Date(`${date}T00:00:00`).getDay();
+      return day === 0 || day === 6;
+    }).length;
+    if (weekendSkips) {
+      insights.push({
+        tone: "warning",
+        title: "You skip gym most on weekends.",
+        detail: `${weekendSkips} recent gym skips landed on Saturday or Sunday.`
+      });
+    }
+  }
+
+  const studyHabit = systemsData.habits.find(habit => /study|school|learn/i.test(`${habit.name} ${habit.category}`));
+  if (studyHabit) {
+    const last7 = getHabitCompletionPct(studyHabit, 7);
+    const last30 = getHabitCompletionPct(studyHabit, 30);
+    if (last7 >= last30 && last7 > 0) {
+      insights.push({
+        tone: "positive",
+        title: "Your study consistency is trending upward.",
+        detail: `Study is at ${last7}% this week versus ${last30}% across 30 days.`
+      });
+    }
+  }
+
+  if (!insights.length && systemsData.habits.length) {
+    insights.push({
+      tone: "neutral",
+      title: "Your system is collecting signal.",
+      detail: "Complete habits and add logs for a few more days to unlock stronger trend insights."
+    });
+  }
+  return insights.slice(0, 4);
+}
+
+function getPeriodChangePct(logs) {
+  if (logs.length < 4) return null;
+  const latest = logs.slice(-7);
+  const previous = logs.slice(-14, -7);
+  if (!previous.length) return null;
+  const latestAvg = average(latest.map(getLogNumber).filter(value => !isNaN(value)));
+  const previousAvg = average(previous.map(getLogNumber).filter(value => !isNaN(value)));
+  if (!previousAvg) return null;
+  return Math.round(((latestAvg - previousAvg) / Math.abs(previousAvg)) * 100);
+}
+
+function average(values) {
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
+function getMetricProgress(metric) {
+  const current = Number(metric.currentValue);
+  const target = Number(metric.targetValue);
+  const start = Number(metric.startValue || 0);
+  if (isNaN(current) || isNaN(target) || target === start) return 0;
+  return Math.min(100, Math.max(0, Math.round(((current - start) / (target - start)) * 100)));
+}
+
 function renderHabitsList() {
   const box = document.getElementById("habitsList");
   if (!box) return;
 
   box.innerHTML = systemsData.habits.length
-    ? systemsData.habits.map((habit, index) => `
-      <div class="system-item">
-        <div class="item-title">
-          <strong>${escapeHTML(habit.name)}</strong>
-          <span>${getHabitStreak(habit)} streak</span>
+    ? `<div class="systems-card-grid">${systemsData.habits.map((habit, index) => {
+      const doneToday = habit.completions.includes(getTodayISO());
+      const skippedToday = (habit.skippedDates || []).includes(getTodayISO());
+      const pct = getHabitCompletionPct(habit, 30);
+      const weekly = getHabitWeeklyConsistency(habit);
+      return `
+        <div class="system-item habit-card ${habit.paused ? "paused" : ""}">
+          <div class="item-title">
+            <strong>${escapeHTML(habit.name)}</strong>
+            <span class="streak-badge">${getHabitStreak(habit)} streak</span>
+          </div>
+          <div class="habit-pill-row">
+            <span class="metric-type-pill metric-type-progress">${escapeHTML(habit.category || "No category")}</span>
+            <span class="metric-type-pill">${escapeHTML(habit.targetFrequency || habit.frequency)}</span>
+            ${habit.paused ? `<span class="metric-type-pill metric-type-milestone">Paused</span>` : ""}
+          </div>
+          <div class="habit-stat-row">
+            <div><strong>${pct}%</strong><span>30-day completion</span></div>
+            <div><strong>${weekly}%</strong><span>weekly consistency</span></div>
+            <div><strong>${getHabitSkippedCount(habit, 30)}</strong><span>skips</span></div>
+          </div>
+          ${renderHabitHeatmap(habit)}
+          ${habit.target ? `<p>${escapeHTML(habit.target)} ${escapeHTML(habit.unit || "")}</p>` : ""}
+          ${habit.notes ? `<p>${escapeHTML(habit.notes)}</p>` : ""}
+          <div class="button-row three-actions">
+            <button onclick="completeHabitToday(${index})" ${habit.paused || doneToday ? "disabled" : ""}>${doneToday ? "Done" : "Complete"}</button>
+            <button class="secondary-btn" onclick="skipHabitToday(${index})" ${habit.paused || skippedToday ? "disabled" : ""}>${skippedToday ? "Skipped" : "Skip"}</button>
+            <button class="secondary-btn" onclick="scheduleHabitInPlanner(${index})">Plan</button>
+          </div>
+          <div class="button-row three-actions">
+            <button class="secondary-btn" onclick="toggleHabitPaused(${index})">${habit.paused ? "Resume" : "Pause"}</button>
+            <button onclick="editHabit(${index})">Edit</button>
+            <button class="danger-btn" onclick="deleteHabit(${index})">Delete</button>
+          </div>
         </div>
-        <p>${escapeHTML(habit.category || "No category")} • ${escapeHTML(habit.frequency)}</p>
-        <p>${escapeHTML(habit.target || "")}</p>
-        <p>${escapeHTML(habit.notes || "")}</p>
-        <button onclick="completeHabitToday(${index})">${habit.completions.includes(getTodayISO()) ? "Completed Today" : "Complete Today"}</button>
-        <button class="secondary-btn" onclick="scheduleHabitInPlanner(${index})">Schedule in Planner</button>
-        <div class="button-row">
-          <button onclick="editHabit(${index})">Edit</button>
-          <button class="danger-btn" onclick="deleteHabit(${index})">Delete</button>
-        </div>
-      </div>
-    `).join("")
-    : "<p>No habits saved yet.</p>";
+      `;
+    }).join("")}</div>`
+    : `<div class="empty-state"><p>No habits saved yet.</p><button onclick="openSystemsForm('habit')">Add first habit</button></div>`;
 }
 
 function renderSystemsLogsList() {
@@ -1877,9 +3265,30 @@ function renderSystemsLogsList() {
 
   const logs = [...systemsData.logs].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 
+  const numericLogs = logs.filter(log => !isNaN(getLogNumber(log))).slice().reverse();
+  const recentValues = numericLogs.slice(-14).map(getLogNumber);
+  const sevenDayAvg = average(numericLogs.slice(-7).map(getLogNumber));
+  const previousAvg = average(numericLogs.slice(-14, -7).map(getLogNumber));
+  const trend = previousAvg
+    ? Math.round(((sevenDayAvg - previousAvg) / Math.abs(previousAvg)) * 100)
+    : 0;
+
   box.innerHTML = logs.length
-    ? logs.map(log => {
+    ? `
+      <div class="log-analytics-panel">
+        <div class="summary-grid">
+          <div><strong>${logs.length}</strong><span>Total logs</span></div>
+          <div><strong>${numericLogs.length ? roundForDisplay(average(numericLogs.map(getLogNumber))) : "-"}</strong><span>Average</span></div>
+          <div><strong>${numericLogs.length ? roundForDisplay(sevenDayAvg) : "-"}</strong><span>Rolling 7-day avg</span></div>
+          <div><strong>${trend > 0 ? "↑" : trend < 0 ? "↓" : "→"} ${Math.abs(trend)}%</strong><span>Compare periods</span></div>
+        </div>
+        ${recentValues.length ? renderMiniBars(recentValues) : `<p class="muted-text">Add numeric values to unlock charts and trend lines.</p>`}
+      </div>
+      ${logs.map(log => {
       const index = systemsData.logs.findIndex(item => item.id === log.id);
+      const linkedHabit = log.linkedHabitId
+        ? systemsData.habits.find(habit => habit.id === log.linkedHabitId)
+        : null;
       return `
         <div class="system-item">
           <div class="item-title">
@@ -1887,12 +3296,33 @@ function renderSystemsLogsList() {
             <span>${escapeHTML(log.type)}</span>
           </div>
           <p>${escapeHTML(log.date || "No date")} • ${escapeHTML(log.value || "")} ${escapeHTML(log.unit || "")}</p>
+          ${linkedHabit ? `<p class="muted-text">Linked habit: ${escapeHTML(linkedHabit.name)}</p>` : ""}
           <p>${escapeHTML(log.notes || "")}</p>
           <button class="danger-btn" onclick="deleteSystemLog(${index})">Delete Log</button>
         </div>
       `;
-    }).join("")
-    : "<p>No logs saved yet.</p>";
+    }).join("")}`
+    : `<div class="empty-state"><p>No logs saved yet.</p><button onclick="openSystemsForm('log')">Add first log</button></div>`;
+}
+
+function getLogNumber(log) {
+  const cleaned = String(log.value || "").replace(/[^0-9.-]/g, "");
+  if (!cleaned) return NaN;
+  const value = Number(cleaned);
+  return value;
+}
+
+function roundForDisplay(value) {
+  return Math.round(value * 10) / 10;
+}
+
+function renderMiniBars(values) {
+  const max = Math.max(...values.map(value => Math.abs(value)), 1);
+  return `
+    <div class="mini-chart">
+      ${values.map(value => `<span style="height:${Math.max((Math.abs(value) / max) * 100, 8)}%" title="${roundForDisplay(value)}"></span>`).join("")}
+    </div>
+  `;
 }
 
 function getTrackerProgress(tracker) {
@@ -2004,6 +3434,7 @@ function logTrackerValue(index) {
 }
 
 function editTracker(index) {
+  activeSystemsForm = "metric";
   editingTrackerIndex = index;
   editingGoalIndex = null;
   editingMetricIndex = null;
@@ -2042,10 +3473,24 @@ function saveGoal() {
   const currentValue = document.getElementById("goalCurrentValue").value;
   const targetValue = document.getElementById("goalTargetValue").value;
   const unit = document.getElementById("goalUnit").value.trim();
+  const recurringTarget = document.getElementById("goalRecurringTarget")?.value.trim() || "";
   const startDate = document.getElementById("goalStartDate").value;
   const deadline = document.getElementById("goalDeadline").value;
   const linkedTrackerId = document.getElementById("goalLinkedTracker").value;
   const linkedHabitId = document.getElementById("goalLinkedHabit").value;
+  const milestones = (document.getElementById("goalMilestones")?.value || "")
+    .split("\n")
+    .map(item => item.trim())
+    .filter(Boolean)
+    .map((title, index) => ({
+      id: editingGoalIndex === null
+        ? createId("milestone")
+        : (systemsData.goals[editingGoalIndex].milestones?.[index]?.id || createId("milestone")),
+      title,
+      completed: editingGoalIndex !== null
+        ? Boolean(systemsData.goals[editingGoalIndex].milestones?.[index]?.completed)
+        : false
+    }));
   const notes = document.getElementById("goalNotes").value.trim();
 
   if (!name || targetValue === "") {
@@ -2059,7 +3504,11 @@ function saveGoal() {
       : systemsData.goals[editingGoalIndex].id,
     name, category, startValue, currentValue, targetValue,
     unit, startDate, deadline,
-    linkedTrackerId, linkedHabitId, notes
+    linkedTrackerId, linkedHabitId, recurringTarget, milestones,
+    linkedPlannerBlockId: editingGoalIndex === null
+      ? ""
+      : systemsData.goals[editingGoalIndex].linkedPlannerBlockId || "",
+    notes
   };
 
   if (editingGoalIndex === null) {
@@ -2069,8 +3518,9 @@ function saveGoal() {
   }
 
   editingGoalIndex = null;
+  activeSystemsForm = null;
   saveSystemsData();
-  activeSystemsSection = "Metrics";
+  activeSystemsSection = "Goals";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
 }
@@ -2085,12 +3535,7 @@ function resetGoalForm() {
 }
 
 function editGoal(index) {
-  editingGoalIndex = index;
-  editingTrackerIndex = null;
-  editingMetricIndex = null;
-  activeSystemsSection = "Metrics";
-  main.innerHTML = getPageHTML("Systems");
-  renderSystems();
+  openSystemsForm("goal", index);
 }
 
 function deleteGoal(index) {
@@ -2102,7 +3547,26 @@ function deleteGoal(index) {
 }
 
 function fillEditingGoalForm() {
-  // Handled by fillEditingMetricForm — goal form elements no longer in DOM
+  if (editingGoalIndex === null || !document.getElementById("goalName")) return;
+  const goal = systemsData.goals[editingGoalIndex];
+  if (!goal) return;
+  document.getElementById("goalName").value = goal.name || "";
+  document.getElementById("goalCategory").value = goal.category || "Custom";
+  document.getElementById("goalStartValue").value = goal.startValue || "";
+  document.getElementById("goalCurrentValue").value = goal.currentValue || "";
+  document.getElementById("goalTargetValue").value = goal.targetValue || "";
+  document.getElementById("goalUnit").value = goal.unit || "";
+  const recurringEl = document.getElementById("goalRecurringTarget");
+  if (recurringEl) recurringEl.value = goal.recurringTarget || "";
+  document.getElementById("goalStartDate").value = goal.startDate || "";
+  document.getElementById("goalDeadline").value = goal.deadline || "";
+  document.getElementById("goalLinkedTracker").value = goal.linkedTrackerId || "";
+  document.getElementById("goalLinkedHabit").value = goal.linkedHabitId || "";
+  const milestonesEl = document.getElementById("goalMilestones");
+  if (milestonesEl) milestonesEl.value = (goal.milestones || []).map(item => item.title || "").join("\n");
+  document.getElementById("goalNotes").value = goal.notes || "";
+  const saveButton = document.getElementById("goalSaveButton");
+  if (saveButton) saveButton.textContent = "Update Goal";
 }
 
 function getGoalCurrentValue(goal) {
@@ -2211,16 +3675,17 @@ function renderGoalsList() {
   if (!box) return;
 
   if (!systemsData.goals.length) {
-    box.innerHTML = "<p>No goals saved yet.</p>";
+    box.innerHTML = `<div class="empty-state"><p>No goals saved yet.</p><button onclick="openSystemsForm('goal')">Create first goal</button></div>`;
     return;
   }
 
-  box.innerHTML = systemsData.goals.map((goal, index) => {
+  box.innerHTML = `<div class="systems-card-grid">${systemsData.goals.map((goal, index) => {
     const current = getGoalCurrentValue(goal);
     const target = getGoalTargetValue(goal);
     const pct = getGoalProgress(goal);
     const status = getGoalStatus(goal);
     const unit = escapeHTML(goal.unit || "");
+    const projection = getGoalProjection(goal);
     const linkedTracker = goal.linkedTrackerId
       ? systemsData.trackers.find(t => t.id === goal.linkedTrackerId)
       : null;
@@ -2234,24 +3699,98 @@ function renderGoalsList() {
           <strong>${escapeHTML(goal.name)}</strong>
           <span class="goal-status-badge goal-status-${status}">${status}</span>
         </div>
-        <p class="muted-text">${escapeHTML(goal.category)}</p>
-        <p>${current} ${unit} → ${target} ${unit}</p>
+        <div class="goal-card-top">
+          <div class="progress-ring small-ring" style="--pct:${pct}%"><span>${pct}%</span></div>
+          <div>
+            <p class="muted-text">${escapeHTML(goal.category)}</p>
+            <p>${current} ${unit} → ${target} ${unit}</p>
+            ${projection ? `<p class="muted-text">${escapeHTML(projection)}</p>` : ""}
+          </div>
+        </div>
         <div class="tracker-progress-bar">
           <div class="tracker-progress-fill goal-progress-fill-${status}" style="width:${pct}%"></div>
         </div>
-        <p class="tracker-pct">${pct}% complete</p>
         ${goal.deadline ? `<p>Deadline: <strong>${escapeHTML(goal.deadline)}</strong></p>` : ""}
+        ${goal.recurringTarget ? `<p class="muted-text">Recurring target: ${escapeHTML(goal.recurringTarget)}</p>` : ""}
         ${linkedTracker ? `<p class="muted-text">Linked tracker: ${escapeHTML(linkedTracker.name)}</p>` : ""}
         ${linkedHabit ? `<p class="muted-text">Linked habit: ${escapeHTML(linkedHabit.name)}</p>` : ""}
+        ${goal.milestones?.length ? `
+          <div class="milestone-list">
+            ${goal.milestones.map((milestone, milestoneIndex) => `
+              <label class="${milestone.completed ? "complete" : ""}">
+                <input type="checkbox" ${milestone.completed ? "checked" : ""} onchange="toggleGoalMilestone(${index}, ${milestoneIndex})">
+                ${escapeHTML(milestone.title || "")}
+              </label>
+            `).join("")}
+          </div>
+        ` : ""}
         ${goal.notes ? `<p>${escapeHTML(goal.notes)}</p>` : ""}
-        <div class="button-row">
+        <div class="button-row three-actions">
           <button onclick="logGoalProgress(${index})">Log Progress</button>
+          <button class="secondary-btn" onclick="scheduleGoalPlannerBlock(${index})">Plan</button>
           <button onclick="editGoal(${index})">Edit</button>
+        </div>
+        <div class="button-row">
           <button class="danger-btn" onclick="deleteGoal(${index})">Delete</button>
         </div>
       </div>
     `;
-  }).join("");
+  }).join("")}</div>`;
+}
+
+function toggleGoalMilestone(goalIndex, milestoneIndex) {
+  const goal = systemsData.goals[goalIndex];
+  if (!goal || !goal.milestones?.[milestoneIndex]) return;
+  goal.milestones[milestoneIndex].completed = !goal.milestones[milestoneIndex].completed;
+  saveSystemsData();
+  renderSystems();
+}
+
+function getGoalProjection(goal) {
+  const current = getGoalCurrentValue(goal);
+  const target = getGoalTargetValue(goal);
+  if (isNaN(current) || isNaN(target) || !goal.deadline) return "";
+  const today = getTodayISO();
+  const daysLeft = Math.max(Math.ceil((new Date(`${goal.deadline}T00:00:00`) - new Date(`${today}T00:00:00`)) / 86400000), 0);
+  const remaining = target - current;
+  if (daysLeft === 0) return remaining <= 0 ? "Goal complete by deadline." : "Deadline is today.";
+  const pace = remaining / daysLeft;
+  if (remaining <= 0) return "Goal is complete.";
+  return `${roundForDisplay(pace)} ${goal.unit || "units"}/day needed for ${daysLeft} days`;
+}
+
+function scheduleGoalPlannerBlock(index) {
+  const goal = systemsData.goals[index];
+  if (!goal) return;
+  const date = getTodayISO();
+  const freeSlot = getFreeSlots(date, 30)[0];
+  const start = freeSlot?.start || "17:00";
+  const end = freeSlot?.end || "17:30";
+  const block = {
+    id: createId("block"),
+    title: goal.name,
+    date,
+    start,
+    end,
+    category: goal.category === "Fitness" ? "Gym" : goal.category === "Study" ? "School" : "Personal",
+    notes: `Suggested from Systems goal${goal.deadline ? ` due ${goal.deadline}` : ""}`,
+    completed: false,
+    type: "goal",
+    systemGoalId: goal.id,
+    tasks: (goal.milestones || []).filter(item => !item.completed).slice(0, 3).map(item => ({
+      text: item.title,
+      completed: false
+    }))
+  };
+  scheduleData.blocks.push(block);
+  goal.linkedPlannerBlockId = block.id;
+  addBufferBlocksForDate(date);
+  saveScheduleData();
+  saveSystemsData();
+  activePlannerSection = "Day";
+  selectedPlannerDate = date;
+  main.innerHTML = getPageHTML("Planner");
+  renderPlanner();
 }
 
 // ---------------- METRICS ----------------
@@ -2264,6 +3803,7 @@ function saveMetric() {
   const startValue = document.getElementById("metricStartValue")?.value || "";
   const currentValue = document.getElementById("metricCurrentValue")?.value || "0";
   const targetValue = document.getElementById("metricTargetValue")?.value || "";
+  const recurringTarget = document.getElementById("metricRecurringTarget")?.value.trim() || "";
   const startDate = document.getElementById("metricStartDate")?.value || "";
   const deadline = document.getElementById("metricDeadline")?.value || "";
   const linkedHabitId = document.getElementById("metricLinkedHabit")?.value || "";
@@ -2273,42 +3813,47 @@ function saveMetric() {
     const orig = systemsData.trackers[editingTrackerIndex];
     systemsData.trackers[editingTrackerIndex] = {
       id: orig.id, name, type: orig.type, unit, startValue, currentValue,
-      targetValue, startDate, targetDate: deadline, notes
+      targetValue, startDate, targetDate: deadline, recurringTarget, notes
     };
     editingTrackerIndex = null;
   } else if (editingGoalIndex !== null) {
     const orig = systemsData.goals[editingGoalIndex];
     systemsData.goals[editingGoalIndex] = {
       id: orig.id, name, category: orig.category, startValue, currentValue,
-      targetValue, unit, startDate, deadline,
-      linkedTrackerId: orig.linkedTrackerId || "", linkedHabitId, notes
+      targetValue, unit, startDate, deadline, recurringTarget,
+      linkedTrackerId: orig.linkedTrackerId || "", linkedHabitId,
+      linkedPlannerBlockId: orig.linkedPlannerBlockId || "",
+      milestones: orig.milestones || [],
+      notes
     };
     editingGoalIndex = null;
   } else if (editingMetricIndex !== null) {
     const orig = systemsData.metrics[editingMetricIndex];
     systemsData.metrics[editingMetricIndex] = {
       ...orig, name, type, unit, startValue, currentValue,
-      targetValue, startDate, deadline, linkedHabitId, notes
+      targetValue, startDate, deadline, linkedHabitId, recurringTarget, notes
     };
     editingMetricIndex = null;
   } else if (type === "Numeric") {
     systemsData.trackers.push({
       id: createId("tracker"), name, type: "Custom", unit,
-      startValue, currentValue, targetValue, startDate, targetDate: deadline, notes
+      startValue, currentValue, targetValue, startDate, targetDate: deadline, recurringTarget, notes
     });
   } else if (type === "Progress") {
     systemsData.goals.push({
       id: createId("goal"), name, category: "Custom", startValue, currentValue,
-      targetValue, unit, startDate, deadline, linkedTrackerId: "", linkedHabitId, notes
+      targetValue, unit, startDate, deadline, recurringTarget,
+      linkedTrackerId: "", linkedHabitId, linkedPlannerBlockId: "", milestones: [], notes
     });
   } else {
     systemsData.metrics.push({
       id: createId("metric"), name, type, unit,
       startValue, currentValue: type === "Counter" ? "0" : currentValue,
-      targetValue, startDate, deadline, linkedHabitId, notes, entries: []
+      targetValue, startDate, deadline, linkedHabitId, recurringTarget, notes, entries: []
     });
   }
 
+  activeSystemsForm = null;
   saveSystemsData();
   activeSystemsSection = "Metrics";
   main.innerHTML = getPageHTML("Systems");
@@ -2325,12 +3870,7 @@ function resetMetricForm() {
 }
 
 function editMetric(index) {
-  editingMetricIndex = index;
-  editingTrackerIndex = null;
-  editingGoalIndex = null;
-  activeSystemsSection = "Metrics";
-  main.innerHTML = getPageHTML("Systems");
-  renderSystems();
+  openSystemsForm("metric", index);
 }
 
 function deleteMetric(index) {
@@ -2352,6 +3892,7 @@ function fillEditingMetricForm() {
     el("metricStartValue").value = t.startValue;
     el("metricCurrentValue").value = t.currentValue;
     el("metricTargetValue").value = t.targetValue;
+    if (el("metricRecurringTarget")) el("metricRecurringTarget").value = t.recurringTarget || "";
     el("metricStartDate").value = t.startDate;
     el("metricDeadline").value = t.targetDate;
     if (el("metricLinkedHabit")) el("metricLinkedHabit").value = "";
@@ -2366,6 +3907,7 @@ function fillEditingMetricForm() {
     el("metricStartValue").value = g.startValue || "";
     el("metricCurrentValue").value = g.currentValue;
     el("metricTargetValue").value = g.targetValue;
+    if (el("metricRecurringTarget")) el("metricRecurringTarget").value = g.recurringTarget || "";
     el("metricStartDate").value = g.startDate;
     el("metricDeadline").value = g.deadline;
     if (el("metricLinkedHabit")) el("metricLinkedHabit").value = g.linkedHabitId;
@@ -2380,6 +3922,7 @@ function fillEditingMetricForm() {
     el("metricStartValue").value = m.startValue;
     el("metricCurrentValue").value = m.currentValue;
     el("metricTargetValue").value = m.targetValue;
+    if (el("metricRecurringTarget")) el("metricRecurringTarget").value = m.recurringTarget || "";
     el("metricStartDate").value = m.startDate;
     el("metricDeadline").value = m.deadline;
     if (el("metricLinkedHabit")) el("metricLinkedHabit").value = m.linkedHabitId;
@@ -2462,12 +4005,17 @@ function renderMetricsList() {
   const all = [...trackerItems, ...goalItems, ...metricItems];
   box.innerHTML = all.length
     ? all.join("")
-    : `<p class="empty-state">No metrics yet. Add one above.</p>`;
+    : `<div class="empty-state"><p>No metrics yet.</p><button onclick="openSystemsForm('metric')">Add first metric</button></div>`;
 }
 
 function renderMetricTrackerRow(tracker, index) {
   const pct = getTrackerProgress(tracker);
   const unit = escapeHTML(tracker.unit || "");
+  const linkedLogs = systemsData.logs
+    .filter(log => log.trackerId === tracker.id || log.title === tracker.name)
+    .map(getLogNumber)
+    .filter(value => !isNaN(value))
+    .slice(-10);
   return `
     <div class="system-item">
       <div class="item-title">
@@ -2479,7 +4027,9 @@ function renderMetricTrackerRow(tracker, index) {
         <div class="tracker-progress-fill" style="width:${pct}%"></div>
       </div>
       <p class="tracker-pct">${pct}% complete</p>
+      ${linkedLogs.length ? renderMiniBars(linkedLogs) : ""}
       ${tracker.targetDate ? `<p>Target: ${escapeHTML(tracker.targetDate)}</p>` : ""}
+      ${tracker.recurringTarget ? `<p class="muted-text">Recurring target: ${escapeHTML(tracker.recurringTarget)}</p>` : ""}
       ${tracker.notes ? `<p>${escapeHTML(tracker.notes)}</p>` : ""}
       <div class="button-row three-actions">
         <button onclick="logTrackerValue(${index})">Log</button>
@@ -2508,6 +4058,7 @@ function renderMetricGoalRow(goal, index) {
       </div>
       <p class="tracker-pct">${pct}% • <span class="goal-status-badge goal-status-${status}">${status}</span></p>
       ${goal.deadline ? `<p>Deadline: ${escapeHTML(goal.deadline)}</p>` : ""}
+      ${goal.recurringTarget ? `<p class="muted-text">Recurring target: ${escapeHTML(goal.recurringTarget)}</p>` : ""}
       ${goal.notes ? `<p>${escapeHTML(goal.notes)}</p>` : ""}
       <div class="button-row three-actions">
         <button onclick="logGoalProgress(${index})">Log</button>
@@ -2524,6 +4075,8 @@ function renderMetricRow(metric, index) {
   const typeLabels = { Counter: "Counter", Boolean: "Daily", Time: "Time", Milestone: "Milestone" };
   const typeLabel = typeLabels[type] || type;
   const typeCls = (type || "").toLowerCase();
+  const values = (metric.entries || []).map(entry => Number(entry.value)).filter(value => !isNaN(value)).slice(-14);
+  const trend = getValuesTrend(values);
   let body = "";
   let actions = "";
 
@@ -2589,13 +4142,25 @@ function renderMetricRow(metric, index) {
     <div class="system-item">
       <div class="item-title">
         <strong>${escapeHTML(metric.name)}</strong>
-        <span class="metric-type-pill metric-type-${typeCls}">${typeLabel}</span>
+        <span class="metric-type-pill metric-type-${typeCls}">${typeLabel} ${trend}</span>
       </div>
       ${body}
+      ${values.length ? renderMiniBars(values) : ""}
+      ${metric.recurringTarget ? `<p class="muted-text">Recurring target: ${escapeHTML(metric.recurringTarget)}</p>` : ""}
       ${metric.deadline ? `<p>Deadline: ${escapeHTML(metric.deadline)}</p>` : ""}
       ${actions}
     </div>
   `;
+}
+
+function getValuesTrend(values) {
+  if (values.length < 4) return "→";
+  const midpoint = Math.floor(values.length / 2);
+  const first = average(values.slice(0, midpoint));
+  const second = average(values.slice(midpoint));
+  if (second > first) return "↑";
+  if (second < first) return "↓";
+  return "→";
 }
 
 function getHabitStreak(habit) {
@@ -2716,17 +4281,17 @@ function renderHomeSuggestions() {
   );
 
   const suggestions = [
-    nextFreeSlot ? `Next free time: ${nextFreeSlot.start}–${nextFreeSlot.end}` : "",
     pendingRoutine ? `Routine not started: ${pendingRoutine.name}` : "",
     unfinishedTask ? `Finish: ${unfinishedTask.task.text} (${unfinishedTask.block.title})` : "",
     unfinishedHabit ? `Complete habit: ${unfinishedHabit.name}` : "",
     friendSuggestion ? `Reach out: ${friendSuggestion.friend.name} (${friendSuggestion.reason})` : "",
-    upcomingHangout ? `Next hangout: ${upcomingHangout.activity} on ${upcomingHangout.date}` : ""
+    upcomingHangout ? `Next hangout: ${upcomingHangout.activity} on ${upcomingHangout.date}` : "",
+    nextFreeSlot ? `Use your next free slot: ${nextFreeSlot.start}-${nextFreeSlot.end}` : ""
   ].filter(Boolean);
 
   box.innerHTML = suggestions.length
-    ? suggestions.map(suggestion => `<div class="home-list-item"><strong>${escapeHTML(suggestion)}</strong></div>`).join("")
-    : "<p>No smart suggestions yet.</p>";
+    ? `<div class="home-focus-preview"><strong>${escapeHTML(suggestions[0])}</strong><p>Best single nudge based on your planner, habits, and social data.</p></div>`
+    : `<div class="empty-state small"><p>No smart suggestion yet.</p><button onclick="openPlannerSection('Day')">Create time block</button></div>`;
 }
 
 function renderHomeStats() {
@@ -3684,61 +5249,187 @@ function getHangoutFrequencyText() {
   return `${perWeek} completed hangout${perWeek === 1 ? "" : "s"} per week`;
 }
 
-function importHangoutPlannerData() {
-  const pastedJSON = document.getElementById("hangoutPlannerImportJson")?.value.trim();
-  const savedJSON = localStorage.getItem("hangout-planner-v1");
-  const sourceJSON = pastedJSON || savedJSON;
+function showSocialImportMode(mode) {
+  document.getElementById("socialImportFileMode")?.classList.toggle("hidden", mode !== "file");
+  document.getElementById("socialImportPasteMode")?.classList.toggle("hidden", mode !== "paste");
+  pendingSocialImport = null;
+  renderSocialImportPreview(null);
+}
 
-  if (!sourceJSON) {
-    alert("No Hangout Planner data found.");
+function handleSocialImportFile(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = () => previewSocialImport(String(reader.result || ""), file.name);
+  reader.onerror = () => {
+    pendingSocialImport = null;
+    renderSocialImportPreview(null);
+    showToast("Could not read that file.", "error");
+  };
+  reader.readAsText(file);
+}
+
+function previewSocialImportFromTextarea() {
+  const raw = document.getElementById("hangoutPlannerImportJson")?.value.trim();
+  if (!raw) {
+    pendingSocialImport = null;
+    renderSocialImportPreview(null);
+    showToast("Paste JSON first.", "error");
     return;
   }
+  previewSocialImport(raw, "Pasted JSON");
+}
 
-  let oldData;
+function previewSocialImportFromLocalStorage() {
+  const savedJSON = localStorage.getItem("hangout-planner-v1") || localStorage.getItem("flowSocialData");
+  if (!savedJSON) {
+    pendingSocialImport = null;
+    renderSocialImportPreview(null);
+    showToast("No social import data found in this browser localStorage.", "error");
+    return;
+  }
+  previewSocialImport(savedJSON, localStorage.getItem("hangout-planner-v1") ? "hangout-planner-v1 localStorage" : "flowSocialData localStorage");
+}
+
+function previewSocialImport(rawJSON, sourceLabel) {
   try {
-    let raw = sourceJSON.trim();
-
-    if (raw.startsWith("`") && raw.endsWith("`")) {
-      raw = raw.slice(1, -1).trim();
-    }
-
-    const firstBrace = raw.indexOf("{");
-    const lastBrace = raw.lastIndexOf("}");
-
-    if (firstBrace !== -1 && lastBrace !== -1) {
-      raw = raw.slice(firstBrace, lastBrace + 1);
-    }
-
-    oldData = JSON.parse(raw);
+    const parsed = parseSocialImportJSON(rawJSON);
+    const normalized = normalizeSocialImportPayload(parsed);
+    pendingSocialImport = {
+      ...normalized,
+      sourceLabel
+    };
+    renderSocialImportPreview(pendingSocialImport);
+    showToast(`Preview ready: ${normalized.friends.length} friends, ${normalized.hangouts.length} hangouts, ${normalized.ideas.length} ideas.`);
   } catch (error) {
-    alert("Could not parse Hangout Planner data.");
-    return;
+    pendingSocialImport = null;
+    renderSocialImportPreview(null, error.message);
+    showToast(error.message || "Invalid JSON.", "error");
+  }
+}
+
+function parseSocialImportJSON(sourceJSON) {
+  let raw = String(sourceJSON || "").trim();
+
+  if (!raw) {
+    throw new Error("No JSON found.");
   }
 
-  const oldFriends = Array.isArray(oldData.friends) ? oldData.friends : [];
-  const oldHangouts = Array.isArray(oldData.hangouts) ? oldData.hangouts : [];
-  const oldIdeas = Array.isArray(oldData.ideas) ? oldData.ideas : [];
+  if (raw.startsWith("`") && raw.endsWith("`")) {
+    raw = raw.slice(1, -1).trim();
+  }
+
+  const firstBrace = raw.indexOf("{");
+  const lastBrace = raw.lastIndexOf("}");
+
+  if (firstBrace !== -1 && lastBrace !== -1) {
+    raw = raw.slice(firstBrace, lastBrace + 1);
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error("Invalid JSON. Check for missing commas, extra text, or an incomplete file.");
+  }
+}
+
+function normalizeSocialImportPayload(data) {
+  const source = data && data.socialData && typeof data.socialData === "object"
+    ? data.socialData
+    : data;
+
+  if (!source || typeof source !== "object") {
+    throw new Error("Import must be a JSON object.");
+  }
+
+  const oldFriends = Array.isArray(source.friends) ? source.friends : [];
+  const oldHangouts = Array.isArray(source.hangouts) ? source.hangouts : [];
+  const oldIdeas = Array.isArray(source.ideas) ? source.ideas : [];
+
+  if (!oldFriends.length && !oldHangouts.length && !oldIdeas.length) {
+    throw new Error("No friends, hangouts, or ideas were found in that JSON.");
+  }
+
+  const looksLikeFlowSocial = oldFriends.some(friend => "lastSeen" in friend || "favoriteActivities" in friend || "contactNotes" in friend) ||
+    oldHangouts.some(hangout => "activity" in hangout && "people" in hangout) ||
+    oldIdeas.some(idea => "favorite" in idea);
+
+  if (looksLikeFlowSocial) {
+    const normalized = normalizeSocialBackupData({
+      friends: oldFriends,
+      hangouts: oldHangouts,
+      ideas: oldIdeas
+    });
+
+    return {
+      friends: normalized.friends.filter(friend => friend.name),
+      hangouts: normalized.hangouts.filter(hangout => hangout.activity),
+      ideas: normalized.ideas.filter(idea => idea.title)
+    };
+  }
+
   const oldFriendNamesById = oldFriends.reduce((map, friend) => {
     if (friend.id && friend.name) map[String(friend.id)] = friend.name;
     return map;
   }, {});
 
-  const importedFriends = oldFriends
-    .map(convertHangoutFriend)
-    .filter(friend => friend.name);
-  const importedHangouts = oldHangouts
-    .map(hangout => convertHangoutEvent(hangout, oldFriendNamesById))
-    .filter(hangout => hangout.activity);
-  const importedIdeas = oldIdeas
-    .map(convertHangoutIdea)
-    .filter(idea => idea.title);
+  return {
+    friends: oldFriends.map(convertHangoutFriend).filter(friend => friend.name),
+    hangouts: oldHangouts.map(hangout => convertHangoutEvent(hangout, oldFriendNamesById)).filter(hangout => hangout.activity),
+    ideas: oldIdeas.map(convertHangoutIdea).filter(idea => idea.title)
+  };
+}
 
+function renderSocialImportPreview(importData, errorMessage = "") {
+  const box = document.getElementById("socialImportPreview");
+  const button = document.getElementById("socialImportConfirmButton");
+  if (!box) return;
+
+  if (button) button.disabled = !importData;
+
+  if (!importData) {
+    box.innerHTML = errorMessage
+      ? `<p class="import-error">${escapeHTML(errorMessage)}</p>`
+      : "<p>No import preview yet.</p>";
+    return;
+  }
+
+  box.innerHTML = `
+    <p class="muted-text">Preview from ${escapeHTML(importData.sourceLabel || "JSON")}</p>
+    <div class="summary-grid import-count-grid">
+      <div><strong>${importData.friends.length}</strong><span>Friends</span></div>
+      <div><strong>${importData.hangouts.length}</strong><span>Hangouts</span></div>
+      <div><strong>${importData.ideas.length}</strong><span>Ideas</span></div>
+    </div>
+    <p class="muted-text">Nothing is imported until you press Import Previewed Data.</p>
+  `;
+}
+
+function importHangoutPlannerData() {
+  const raw = document.getElementById("hangoutPlannerImportJson")?.value.trim() || localStorage.getItem("hangout-planner-v1") || "";
+  previewSocialImport(raw, "Legacy import");
+  confirmSocialImport();
+}
+
+function confirmSocialImport() {
+  if (!pendingSocialImport) {
+    showToast("Preview a JSON file, pasted JSON, or browser localStorage before importing.", "error");
+    return;
+  }
+
+  const importedFriends = pendingSocialImport.friends;
+  const importedHangouts = pendingSocialImport.hangouts;
+  const importedIdeas = pendingSocialImport.ideas;
   const existingFriendNames = new Set(socialData.friends.map(friend =>
     normalizeDuplicateKey(friend.name)
   ));
   let addedFriends = 0;
   let addedHangouts = 0;
   let addedIdeas = 0;
+  let skippedFriends = 0;
+  let skippedHangouts = 0;
+  let skippedIdeas = 0;
 
   importedFriends.forEach(friend => {
     const key = normalizeDuplicateKey(friend.name);
@@ -3746,6 +5437,8 @@ function importHangoutPlannerData() {
       socialData.friends.push(friend);
       existingFriendNames.add(key);
       addedFriends++;
+    } else {
+      skippedFriends++;
     }
   });
 
@@ -3756,6 +5449,8 @@ function importHangoutPlannerData() {
       socialData.hangouts.push(hangout);
       existingHangouts.add(key);
       addedHangouts++;
+    } else {
+      skippedHangouts++;
     }
   });
 
@@ -3768,12 +5463,19 @@ function importHangoutPlannerData() {
       socialData.ideas.push(idea);
       existingIdeas.add(key);
       addedIdeas++;
+    } else {
+      skippedIdeas++;
     }
   });
 
   saveSocialData();
-  renderHome();
-  alert(`Imported ${addedFriends} friends, ${addedHangouts} hangouts, and ${addedIdeas} ideas.`);
+  pendingSocialImport = null;
+  renderSocialImportPreview(null);
+  const fileInput = document.getElementById("socialImportFile");
+  const textInput = document.getElementById("hangoutPlannerImportJson");
+  if (fileInput) fileInput.value = "";
+  if (textInput) textInput.value = "";
+  showToast(`Imported ${addedFriends} friends, ${addedHangouts} hangouts, and ${addedIdeas} ideas. Skipped ${skippedFriends + skippedHangouts + skippedIdeas} duplicates.`);
 }
 
 function convertHangoutFriend(friend) {
@@ -3848,7 +5550,27 @@ function exportCurrentSocialData() {
   link.download = "flow-social-data.json";
   link.click();
   URL.revokeObjectURL(url);
-  alert("Current Social data exported.");
+  showToast("Social data exported.");
+}
+
+function showToast(message, type = "success") {
+  let container = document.getElementById("toastContainer");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "toastContainer";
+    container.className = "toast-container";
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+
+  setTimeout(() => {
+    toast.classList.add("toast-hide");
+    setTimeout(() => toast.remove(), 220);
+  }, 3200);
 }
 
 function getHangoutDuplicateKey(hangout) {
@@ -3876,6 +5598,244 @@ function joinValue(value) {
   return value || "";
 }
 
+function getFullDataBackup() {
+  return {
+    exportedAt: new Date().toISOString(),
+    version: 1,
+    plannerData,
+    scheduleData,
+    systemsData,
+    socialData
+  };
+}
+
+function downloadJSON(filename, data) {
+  const json = JSON.stringify(data, null, 2);
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(json).catch(() => {});
+  }
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadFullBackup() {
+  downloadJSON(`flow-planner-backup-${getTodayISO()}.json`, getFullDataBackup());
+  alert("Flow Planner backup downloaded.");
+}
+
+function exportAllData() {
+  downloadFullBackup();
+}
+
+function importAllData() {
+  const textarea = document.getElementById("allDataImportJson");
+  const raw = textarea ? textarea.value.trim() : "";
+  if (!raw) {
+    alert("Paste a Flow Planner backup JSON first.");
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    const backup = normalizeFullBackup(parsed);
+    plannerData = backup.plannerData;
+    scheduleData = backup.scheduleData;
+    systemsData = backup.systemsData;
+    socialData = backup.socialData;
+    saveScheduleData();
+    saveSystemsData();
+    saveSocialData();
+    savePlannerData();
+    selectedPlannerDate = getTodayISO();
+    visiblePlannerMonth = selectedPlannerDate.slice(0, 7);
+    editingPlanIndex = null;
+    editingRoutineIndex = null;
+    editingBlockIndex = null;
+    editingHabitIndex = null;
+    editingTrackerIndex = null;
+    editingGoalIndex = null;
+    editingMetricIndex = null;
+    alert("Flow Planner backup restored.");
+    main.innerHTML = getPageHTML("Settings");
+  } catch (error) {
+    alert(error.message || "Could not import that JSON backup.");
+  }
+}
+
+function normalizeFullBackup(parsed) {
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Backup must be a JSON object.");
+  }
+
+  const hasAllSections = ["plannerData", "scheduleData", "systemsData", "socialData"]
+    .every(key => parsed[key] && typeof parsed[key] === "object");
+
+  if (!hasAllSections) {
+    throw new Error("Backup must include plannerData, scheduleData, systemsData, and socialData.");
+  }
+
+  return {
+    plannerData: normalizePlannerBackupData(parsed.plannerData),
+    scheduleData: normalizeScheduleBackupData(parsed.scheduleData),
+    systemsData: normalizeSystemsBackupData(parsed.systemsData),
+    socialData: normalizeSocialBackupData(parsed.socialData)
+  };
+}
+
+function normalizePlannerBackupData(data) {
+  return {
+    plans: Array.isArray(data.plans)
+      ? data.plans.map(plan => ({
+          title: plan.title || "",
+          date: plan.date || "",
+          time: plan.time || "",
+          category: plan.category || "Personal",
+          notes: plan.notes || ""
+        }))
+      : []
+  };
+}
+
+function normalizeScheduleBackupData(data) {
+  const blocks = Array.isArray(data.blocks) ? data.blocks : [];
+  const routines = Array.isArray(data.routines) ? data.routines : [];
+
+  return {
+    ...data,
+    blocks: blocks.map(block => ({
+      ...block,
+      id: block.id || createId("block"),
+      title: block.title || "",
+      date: block.date || "",
+      start: block.start || "",
+      end: block.end || "",
+      category: block.category || "Personal",
+      notes: block.notes || "",
+      type: block.type || (block.routineId ? "routine" : "task"),
+      completed: Boolean(block.completed),
+      tasks: Array.isArray(block.tasks) ? block.tasks.map(normalizeTask) : [],
+      isBuffer: Boolean(block.isBuffer)
+    })),
+    routines: routines.map(routine => ({
+      ...routine,
+      id: routine.id || createId("routine"),
+      name: routine.name || "",
+      type: routine.type || "Custom",
+      start: routine.start || "",
+      end: routine.end || "",
+      repeatDays: Array.isArray(routine.repeatDays) ? routine.repeatDays.map(Number).filter(day => day >= 0 && day <= 6) : [],
+      dayTimes: routine.dayTimes && typeof routine.dayTimes === "object" ? routine.dayTimes : {},
+      tasks: Array.isArray(routine.tasks) ? routine.tasks : [],
+      notes: routine.notes || "",
+      autoAdd: Boolean(routine.autoAdd),
+      completions: routine.completions && typeof routine.completions === "object" ? routine.completions : {},
+      completedDates: Array.isArray(routine.completedDates) ? routine.completedDates : [],
+      streak: typeof routine.streak === "number" ? routine.streak : 0
+    })),
+    bufferMinutes: typeof data.bufferMinutes === "number" ? data.bufferMinutes : 15
+  };
+}
+
+function normalizeSystemsBackupData(data) {
+  return {
+    habits: Array.isArray(data.habits) ? data.habits.map(habit => ({
+      ...habit,
+      id: habit.id || createId("habit"),
+      name: habit.name || "",
+      category: habit.category || "",
+      frequency: habit.frequency || "Daily",
+      targetFrequency: habit.targetFrequency || habit.frequency || "Daily",
+      target: habit.target || "",
+      unit: habit.unit || "",
+      linkedGoalId: habit.linkedGoalId || "",
+      paused: Boolean(habit.paused),
+      skippedDates: Array.isArray(habit.skippedDates) ? habit.skippedDates : [],
+      completionHistory: Array.isArray(habit.completionHistory) ? habit.completionHistory : [],
+      notes: habit.notes || "",
+      completions: Array.isArray(habit.completions) ? habit.completions : []
+    })) : [],
+    logs: Array.isArray(data.logs) ? data.logs.map(log => ({
+      ...log,
+      id: log.id || createId("log"),
+      title: log.title || "",
+      type: log.type || "Custom",
+      valueType: log.valueType || log.type || "Custom",
+      value: log.value || "",
+      unit: log.unit || "",
+      date: log.date || "",
+      notes: log.notes || "",
+      linkedHabitId: log.linkedHabitId || "",
+      linkedPlannerBlockId: log.linkedPlannerBlockId || ""
+    })) : [],
+    trackers: Array.isArray(data.trackers) ? data.trackers.map(tracker => ({
+      ...tracker,
+      id: tracker.id || createId("tracker"),
+      name: tracker.name || "",
+      type: tracker.type || "Custom",
+      unit: tracker.unit || "",
+      notes: tracker.notes || ""
+    })) : [],
+    goals: Array.isArray(data.goals) ? data.goals.map(goal => ({
+      ...goal,
+      id: goal.id || createId("goal"),
+      name: goal.name || "",
+      category: goal.category || "Custom",
+      unit: goal.unit || "",
+      linkedPlannerBlockId: goal.linkedPlannerBlockId || "",
+      milestones: Array.isArray(goal.milestones) ? goal.milestones : [],
+      recurringTarget: goal.recurringTarget || "",
+      notes: goal.notes || ""
+    })) : [],
+    metrics: Array.isArray(data.metrics) ? data.metrics.map(metric => ({
+      ...metric,
+      id: metric.id || createId("metric"),
+      name: metric.name || "",
+      type: metric.type || "Counter",
+      unit: metric.unit || "",
+      recurringTarget: metric.recurringTarget || "",
+      notes: metric.notes || "",
+      entries: Array.isArray(metric.entries) ? metric.entries : []
+    })) : []
+  };
+}
+
+function normalizeSocialBackupData(data) {
+  return {
+    friends: Array.isArray(data.friends) ? data.friends.map(friend => ({
+      name: friend.name || "",
+      priority: friend.priority || "Medium",
+      interests: friend.interests || "",
+      details: friend.details || "",
+      notes: friend.notes || "",
+      favoriteActivities: friend.favoriteActivities || "",
+      contactNotes: friend.contactNotes || "",
+      lastSeen: friend.lastSeen || friend.lastHangout || ""
+    })) : [],
+    hangouts: Array.isArray(data.hangouts) ? data.hangouts.map(hangout => ({
+      activity: hangout.activity || hangout.title || "",
+      date: hangout.date || "",
+      time: hangout.time || "",
+      location: hangout.location || hangout.place || "",
+      people: Array.isArray(hangout.people) ? hangout.people : (hangout.friend ? [hangout.friend] : []),
+      cost: hangout.cost || "",
+      notes: hangout.notes || "",
+      completed: Boolean(hangout.completed)
+    })) : [],
+    ideas: Array.isArray(data.ideas) ? data.ideas.map(idea => ({
+      title: idea.title || "",
+      category: idea.category || "Cheap",
+      cost: idea.cost || "",
+      notes: idea.notes || "",
+      favorite: Boolean(idea.favorite)
+    })) : []
+  };
+}
+
 // SETTINGS
 function clearPlanner() {
   plannerData = { plans: [] };
@@ -3890,7 +5850,7 @@ function clearSocial() {
 }
 
 function clearSystems() {
-  systemsData = { habits: [], logs: [] };
+  systemsData = { habits: [], logs: [], trackers: [], goals: [], metrics: [] };
   saveSystemsData();
   alert("Systems cleared");
 }
