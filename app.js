@@ -68,6 +68,7 @@ let systemsData = JSON.parse(localStorage.getItem("flowSystemsData")) || {
   trackers: [],
   goals: [],
   metrics: [],
+  objectives: [],
   savedTrackerCategories: [],
   savedTrackerUnits: []
 };
@@ -77,6 +78,7 @@ if (!Array.isArray(systemsData.logs)) systemsData.logs = [];
 if (!Array.isArray(systemsData.trackers)) systemsData.trackers = [];
 if (!Array.isArray(systemsData.goals)) systemsData.goals = [];
 if (!Array.isArray(systemsData.metrics)) systemsData.metrics = [];
+if (!Array.isArray(systemsData.objectives)) systemsData.objectives = [];
 if (!Array.isArray(systemsData.savedTrackerCategories)) systemsData.savedTrackerCategories = [];
 if (!Array.isArray(systemsData.savedTrackerUnits)) systemsData.savedTrackerUnits = [];
 
@@ -134,6 +136,35 @@ systemsData.habits = systemsData.habits.map(habit => ({
   completionHistory: Array.isArray(habit.completionHistory) ? habit.completionHistory : [],
   notes: habit.notes || "",
   completions: Array.isArray(habit.completions) ? habit.completions : []
+}));
+
+systemsData.objectives = systemsData.objectives.map(objective => ({
+  id: objective.id || createId("objective"),
+  title: objective.title || "",
+  type: objective.type || "Task",
+  status: objective.status || "Not started",
+  priority: objective.priority || "Medium",
+  dueDate: objective.dueDate || "",
+  dueTime: objective.dueTime || "",
+  estimatedMinutes: objective.estimatedMinutes || "",
+  category: objective.category || "",
+  tags: objective.tags || "",
+  notes: objective.notes || "",
+  linkedPlannerBlockId: objective.linkedPlannerBlockId || "",
+  linkedHabitId: objective.linkedHabitId || "",
+  linkedTrackerId: objective.linkedTrackerId || "",
+  trackerLogAmount: objective.trackerLogAmount || "",
+  completedDate: objective.completedDate || "",
+  completedAt: objective.completedAt || "",
+  autoCompleteFromPlanner: objective.autoCompleteFromPlanner !== false,
+  autoCompleteFromHabit: objective.autoCompleteFromHabit !== false,
+  focus: Boolean(objective.focus),
+  recurring: objective.recurring || "",
+  subtasks: Array.isArray(objective.subtasks) ? objective.subtasks.map(item => ({
+    id: item.id || createId("subtask"),
+    title: item.title || "",
+    completed: Boolean(item.completed)
+  })) : []
 }));
 
 function inferLegacyLogSource(log) {
@@ -203,6 +234,7 @@ scheduleData.routines.forEach(routine => {
   if (!Array.isArray(routine.tasks)) routine.tasks = [];
   if (!routine.dayTimes || typeof routine.dayTimes !== "object") routine.dayTimes = {};
   routine.dayTimes = normalizeRoutineDayTimes(routine);
+  routine.timesByDay = buildRoutineTimesByDay(routine.dayTimes);
   if (!routine.completions || typeof routine.completions !== "object") routine.completions = {};
   if (!Array.isArray(routine.completedDates)) routine.completedDates = [];
   if (typeof routine.streak !== "number") routine.streak = 0;
@@ -229,6 +261,7 @@ let editingMetricIndex = null;
 let editingLogIndex = null;
 let manualLogTrackerId = null;
 let trackerCategoryFilter = "All";
+let completedObjectiveFilter = "All";
 let activePlannerSection = "Day";
 let activeSystemsSection = "Overview";
 let activeSocialSection = "Friends";
@@ -240,6 +273,8 @@ let viewingFriendIndex = null;
 let viewingHangoutIndex = null;
 let selectedPlannerDate = getTodayISO();
 let visiblePlannerMonth = getTodayISO().slice(0, 7);
+let plannerWeekStart = getStartOfWeekISO(getTodayISO());
+let plannerWeekEnd = getDateOffset(plannerWeekStart, 6);
 let pendingSocialImport = null;
 
 // SAVE
@@ -293,11 +328,19 @@ const pages = {
       <div class="card dashboard-card">
         <h3>Quick Add</h3>
         <div class="quick-add-grid">
-          <button onclick="openPlannerSection('Day')">Time Block</button>
+          <button onclick="quickAddObjective('Task')">+ Task</button>
+          <button onclick="quickAddObjective('Objective')">+ Objective</button>
+          <button onclick="openPlannerSection('Day')">Planner Block</button>
           <button onclick="openSystemsSection('Habits')">Habit</button>
           <button onclick="openSystemsSection('Trackers')">Tracker</button>
-          <button onclick="openSocialSection('Hangouts')">Hangout</button>
         </div>
+      </div>
+      <div class="card dashboard-card wide-card">
+        <h3>Today's Objectives</h3>
+        <div id="homeObjectives"></div>
+      </div>
+      <div class="card dashboard-card wide-card">
+        <div id="homeCompletedToday"></div>
       </div>
       <div class="card dashboard-card">
         <h3>Goal Progress</h3>
@@ -429,7 +472,8 @@ const pages = {
         </label>
         <button id="routineSaveButton" onclick="saveRoutine()">Save Routine</button>
         <button class="secondary-btn" onclick="resetRoutineForm()">Clear Routine Form</button>
-        <button onclick="autoFillToday()">Auto-fill Today</button>
+        <button onclick="autoFillSelectedDay()">Auto-fill Selected Day</button>
+        <button onclick="autoFillThisWeek()">Auto-fill This Week</button>
       </div>
       <div class="card">
         <h3>Saved Routines</h3>
@@ -445,8 +489,8 @@ const pages = {
     <div class="systems-hero card">
       <div>
         <p class="eyebrow">Systems</p>
-        <h2>Life Analytics</h2>
-        <p class="muted-text">Habits, trackers (metrics and logs), goals, and planner blocks work together.</p>
+        <h2>Systems</h2>
+        <p class="muted-text">One place for habits, trackers, logs, milestones, and planner-linked progress.</p>
       </div>
       <button onclick="openSystemsAddMenu()">+ Add</button>
     </div>
@@ -461,8 +505,8 @@ const pages = {
           <div id="habitsList"></div>
         </div>
         <div class="card">
-          <h3>Goal Forecasts</h3>
-          <div id="goalsList"></div>
+          <h3>Tracker Forecasts</h3>
+          <div id="trackersUnifiedList"></div>
         </div>
       </div>
     ` : ""}
@@ -479,23 +523,17 @@ const pages = {
     ${activeSystemsSection === "Trackers" ? `
       <div class="section-toolbar card">
         <div>
-          <h3>Trackers</h3>
-          <p class="muted-text">Metrics and logs in one place: goals, counters, taper, habits, and custom progress.</p>
+          <h3>Systems</h3>
+          <p class="muted-text">Track goals, counters, tapers, body metrics, habits, and custom progress with one tracker system.</p>
         </div>
         <div class="button-row">
           <button onclick="openSystemsForm('tracker')">Add Tracker</button>
           <button class="secondary-btn" onclick="openSystemsForm('log')">Add Log</button>
-          <button class="secondary-btn" onclick="openSystemsForm('goal')">Add Goal</button>
         </div>
       </div>
       <div id="trackersSummaryCards" class="card trackers-summary-cards"></div>
       <div class="card list-controls" id="trackerCategoryFilterMount"></div>
       <div id="trackersUnifiedList"></div>
-      <div class="card" style="margin-top:14px">
-        <h3>Goals</h3>
-        <p class="muted-text">Structured goals with reset cycles and milestones.</p>
-        <div id="trackersGoalsSection"></div>
-      </div>
     ` : ""}
     <button class="floating-add-btn systems-fab" onclick="openSystemsAddMenu()">+</button>
   `,
@@ -1205,6 +1243,7 @@ function toggleTaskComplete(blockIndex, taskIndex) {
   } else if (!blk.completed && wasComplete) {
     removePlannerAutoLogsForBlock(blk);
   }
+  if (blk.completed && !wasComplete) autoCompleteObjectivesForPlannerBlock(blk);
   saveScheduleData();
   renderPlanner();
 }
@@ -1223,6 +1262,7 @@ function toggleBlockComplete(index) {
   } else if (!block.completed && wasComplete) {
     removePlannerAutoLogsForBlock(block);
   }
+  if (block.completed && !wasComplete) autoCompleteObjectivesForPlannerBlock(block);
   saveScheduleData();
   renderPlanner();
 }
@@ -1663,14 +1703,40 @@ function normalizeRoutineTimeRanges(value, fallbackStart = "", fallbackEnd = "")
   return ranges;
 }
 
+function getRoutineDayNameMap() {
+  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+}
+
+function getRoutineDayIndexFromKey(key) {
+  const numeric = Number(key);
+  if (Number.isInteger(numeric) && numeric >= 0 && numeric <= 6) return numeric;
+  const idx = getRoutineDayNameMap().findIndex(day => day.toLowerCase() === String(key).toLowerCase());
+  return idx >= 0 ? idx : null;
+}
+
+function buildRoutineTimesByDay(dayTimes) {
+  const names = getRoutineDayNameMap();
+  const result = {};
+  Object.keys(dayTimes || {}).forEach(dayKey => {
+    const dayIndex = getRoutineDayIndexFromKey(dayKey);
+    if (dayIndex === null) return;
+    result[names[dayIndex]] = normalizeRoutineTimeRanges(dayTimes[dayKey]);
+  });
+  return result;
+}
+
 function normalizeRoutineDayTimes(routine) {
-  const dayTimes = routine && routine.dayTimes && typeof routine.dayTimes === "object"
+  const legacyDayTimes = routine && routine.dayTimes && typeof routine.dayTimes === "object"
     ? routine.dayTimes
     : {};
+  const namedTimesByDay = routine && routine.timesByDay && typeof routine.timesByDay === "object"
+    ? routine.timesByDay
+    : {};
+  const dayTimes = { ...namedTimesByDay, ...legacyDayTimes };
   const normalized = {};
   Object.keys(dayTimes).forEach(dayKey => {
-    const dayIndex = Number(dayKey);
-    if (!Number.isInteger(dayIndex) || dayIndex < 0 || dayIndex > 6) return;
+    const dayIndex = getRoutineDayIndexFromKey(dayKey);
+    if (dayIndex === null) return;
     normalized[dayIndex] = normalizeRoutineTimeRanges(dayTimes[dayKey], routine.start, routine.end);
   });
   return normalized;
@@ -1717,6 +1783,29 @@ function addRoutineBlocksForDate(routine, date, dayIndex) {
     addedCount++;
   });
   return addedCount;
+}
+
+function countRoutineBlocksForDate(routine, date, dayIndex) {
+  return getRoutineTimeRangesForDay(routine, dayIndex).filter(range =>
+    routineBlockExists(date, routine.id, range)
+  ).length;
+}
+
+function addRoutineBlocksForWeek(routines = scheduleData.routines) {
+  let addedCount = 0;
+  let existingCount = 0;
+  getWeekDates().forEach(day => {
+    const dayIndex = new Date(`${day.iso}T00:00:00`).getDay();
+    let addedForDay = 0;
+    routines.forEach(routine => {
+      if (!routine.repeatDays.includes(dayIndex)) return;
+      existingCount += countRoutineBlocksForDate(routine, day.iso, dayIndex);
+      addedForDay += addRoutineBlocksForDate(routine, day.iso, dayIndex);
+    });
+    if (addedForDay) addBufferBlocksForDate(day.iso);
+    addedCount += addedForDay;
+  });
+  return { addedCount, existingCount };
 }
 
 function getDayTimeRowsFromForm(dayIndex) {
@@ -1816,6 +1905,7 @@ function saveRoutine() {
     end: routineEnd,
     repeatDays,
     dayTimes,
+    timesByDay: buildRoutineTimesByDay(dayTimes),
     tasks,
     notes,
     autoAdd,
@@ -1839,13 +1929,7 @@ function saveRoutine() {
 }
 
 function autoInsertRoutineBlocks(routine) {
-  const today = getTodayISO();
-  for (let offset = 0; offset < 7; offset++) {
-    const date = getDateOffset(today, offset);
-    const dayIndex = new Date(date + "T00:00:00").getDay();
-    if (!routine.repeatDays.includes(dayIndex)) continue;
-    addRoutineBlocksForDate(routine, date, dayIndex);
-  }
+  addRoutineBlocksForWeek([routine]);
 }
 
 function renderRoutines() {
@@ -1951,16 +2035,10 @@ function getRoutineCompletionStreak(routine) {
 }
 
 function dailyAutoInsert() {
-  const today = getTodayISO();
-  const todayDay = new Date().getDay();
-  let inserted = false;
-  scheduleData.routines.forEach(routine => {
-    if (!routine.autoAdd) return;
-    if (!routine.repeatDays.includes(todayDay)) return;
-    if (addRoutineBlocksForDate(routine, today, todayDay) > 0) inserted = true;
-  });
-  if (inserted) {
-    addBufferBlocksForDate(today);
+  const autoAddRoutines = scheduleData.routines.filter(routine => routine.autoAdd);
+  if (!autoAddRoutines.length) return;
+  const result = addRoutineBlocksForWeek(autoAddRoutines);
+  if (result.addedCount) {
     saveScheduleData();
   }
 }
@@ -2222,7 +2300,7 @@ function syncRoutineTimeRemoveButtons(dayIndex) {
   });
 }
 
-function autoFillToday() {
+function autoFillSelectedDay() {
   const today = getTodayISO();
   const todayDay = new Date().getDay();
   const matchingRoutines = scheduleData.routines.filter(routine =>
@@ -2235,32 +2313,55 @@ function autoFillToday() {
   }
 
   let addedCount = 0;
+  let existingCount = 0;
 
   matchingRoutines.forEach(routine => {
+    existingCount += countRoutineBlocksForDate(routine, today, todayDay);
     addedCount += addRoutineBlocksForDate(routine, today, todayDay);
   });
 
-  addBufferBlocksForDate(today);
+  if (addedCount) addBufferBlocksForDate(today);
   saveScheduleData();
   renderPlanner();
-  alert(addedCount ? `Added ${addedCount} routine block${addedCount === 1 ? "" : "s"} for today.` : "Today's matching routines are already in your schedule.");
+  alert(`${addedCount} added, ${existingCount} already existed`);
 }
 
-function getWeekDates() {
-  const today = new Date();
-  const start = new Date(today);
-  start.setDate(today.getDate() - today.getDay());
+function autoFillThisWeek() {
+  const result = addRoutineBlocksForWeek(scheduleData.routines);
+  saveScheduleData();
+  activePlannerSection = "Week";
+  main.innerHTML = getPageHTML("Planner");
+  renderPlanner();
+  alert(`${result.addedCount} added, ${result.existingCount} already existed`);
+}
 
-  return Array.from({ length: 7 }, (_, index) => {
+function getStartOfWeekISO(dateIso) {
+  const date = new Date(`${dateIso}T00:00:00`);
+  date.setDate(date.getDate() - date.getDay());
+  return toLocalISO(date);
+}
+
+function getDateRangeLength(startIso, endIso) {
+  const start = new Date(`${startIso}T00:00:00`);
+  const end = new Date(`${endIso}T00:00:00`);
+  return Math.max(Math.round((end - start) / 86400000) + 1, 1);
+}
+
+function getWeekDates(startIso = plannerWeekStart, endIso = plannerWeekEnd) {
+  const rangeLength = getDateRangeLength(startIso, endIso);
+  const start = new Date(`${startIso}T00:00:00`);
+
+  return Array.from({ length: rangeLength }, (_, index) => {
     const date = new Date(start);
     date.setDate(start.getDate() + index);
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, "0");
     const day = String(date.getDate()).padStart(2, "0");
+    const dayIndex = date.getDay();
 
     return {
       iso: `${year}-${month}-${day}`,
-      label: getDayName(index),
+      label: getDayName(dayIndex),
       dayNumber: date.getDate()
     };
   });
@@ -2273,8 +2374,22 @@ function renderWeeklyView() {
   const weekDates = getWeekDates();
   const weekStats = weekDates.map(day => ({ ...day, stats: getDayWorkload(day.iso) }));
   const busiestMinutes = Math.max(...weekStats.map(day => day.stats.totalMinutes), 0);
+  const rangeLabel = `${formatShortDate(plannerWeekStart)} – ${formatShortDate(plannerWeekEnd)}`;
 
   box.innerHTML = `
+    <div class="planner-range-header">
+      <div>
+        <p class="eyebrow">Selected range</p>
+        <strong>${escapeHTML(rangeLabel)}</strong>
+      </div>
+      <div class="planner-range-controls">
+        <button class="secondary-btn" onclick="shiftPlannerWeekRange(-1)">Prev</button>
+        <input type="date" value="${plannerWeekStart}" onchange="setPlannerWeekRange(this.value, plannerWeekEnd)">
+        <input type="date" value="${plannerWeekEnd}" onchange="setPlannerWeekRange(plannerWeekStart, this.value)">
+        <button class="secondary-btn" onclick="shiftPlannerWeekRange(1)">Next</button>
+        <button onclick="resetPlannerWeekRange()">This Week</button>
+      </div>
+    </div>
     <div class="weekly-balance">
       ${weekStats.map(day => {
         const pct = busiestMinutes ? Math.round((day.stats.totalMinutes / busiestMinutes) * 100) : 0;
@@ -2311,6 +2426,35 @@ function renderWeeklyView() {
       }).join("")}
     </div>
   `;
+}
+
+function formatShortDate(iso) {
+  const date = new Date(`${iso}T00:00:00`);
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function setPlannerWeekRange(startIso, endIso) {
+  if (!startIso || !endIso) return;
+  if (startIso > endIso) {
+    [startIso, endIso] = [endIso, startIso];
+  }
+  plannerWeekStart = startIso;
+  plannerWeekEnd = endIso;
+  renderWeeklyView();
+}
+
+function shiftPlannerWeekRange(direction) {
+  const length = getDateRangeLength(plannerWeekStart, plannerWeekEnd);
+  const offset = direction * length;
+  plannerWeekStart = getDateOffset(plannerWeekStart, offset);
+  plannerWeekEnd = getDateOffset(plannerWeekEnd, offset);
+  renderWeeklyView();
+}
+
+function resetPlannerWeekRange() {
+  plannerWeekStart = getStartOfWeekISO(getTodayISO());
+  plannerWeekEnd = getDateOffset(plannerWeekStart, 6);
+  renderWeeklyView();
 }
 
 function renderWeeklyBlock(block, index, weekDates) {
@@ -2474,7 +2618,10 @@ function renderMonthlyPlannerView() {
   box.innerHTML = `
     <div class="planner-month-header">
       <button class="secondary-btn" onclick="changePlannerMonth(-1)">Prev</button>
-      <strong>${escapeHTML(monthLabel)}</strong>
+      <div>
+        <strong>${escapeHTML(monthLabel)}</strong>
+        <input type="month" value="${visiblePlannerMonth}" onchange="setPlannerMonth(this.value)">
+      </div>
       <button class="secondary-btn" onclick="changePlannerMonth(1)">Next</button>
     </div>
     <button class="secondary-btn" onclick="goToPlannerToday()">Today</button>
@@ -2539,10 +2686,20 @@ function changePlannerMonth(offset) {
   renderMonthlyPlannerView();
 }
 
+function setPlannerMonth(monthValue) {
+  if (!monthValue) return;
+  visiblePlannerMonth = monthValue;
+  renderMonthlyPlannerView();
+}
+
 function goToPlannerToday() {
   selectedPlannerDate = getTodayISO();
   visiblePlannerMonth = selectedPlannerDate.slice(0, 7);
-  renderMonthlyPlannerView();
+  if (activePlannerSection === "Month") renderMonthlyPlannerView();
+  else {
+    main.innerHTML = getPageHTML("Planner");
+    renderPlanner();
+  }
 }
 
 function getBlocksForDate(date) {
@@ -2622,6 +2779,8 @@ function getDateOffset(isoDate, offsetDays) {
 function renderHome() {
   renderTodayFocus();
   renderHomeNextAction();
+  renderHomeObjectives();
+  renderHomeCompletedToday();
   renderHomeSnapshot();
   renderProductivitySummary("homeProductivitySummary");
   renderHomeTimeline();
@@ -2630,6 +2789,295 @@ function renderHome() {
   renderHomeSocialReminder();
   renderHomeSuggestions();
   renderHomeStats();
+}
+
+function isObjectiveDone(objective) {
+  return objective.status === "Complete" || objective.status === "Skipped" || objective.status === "Deferred";
+}
+
+function getObjectiveRank(objective) {
+  const priorityScore = { Priority: 0, High: 1, Medium: 2, Low: 3 };
+  const typeScore = objective.focus ? -2 : objective.type === "Quick Win" ? 1 : objective.type === "Objective" ? 0 : 2;
+  return (priorityScore[objective.priority] ?? 2) * 10 + typeScore;
+}
+
+function getTodayObjectives() {
+  const today = getTodayISO();
+  return systemsData.objectives
+    .filter(objective => !isObjectiveDone(objective))
+    .filter(objective => !objective.dueDate || objective.dueDate <= today || objective.linkedPlannerBlockId)
+    .sort((a, b) => getObjectiveRank(a) - getObjectiveRank(b) || (a.dueTime || "99:99").localeCompare(b.dueTime || "99:99"));
+}
+
+function renderHomeObjectives() {
+  const box = document.getElementById("homeObjectives");
+  if (!box) return;
+  const today = getTodayISO();
+  const open = systemsData.objectives.filter(objective => !isObjectiveDone(objective));
+  const focus = open.find(objective => objective.focus && (!objective.dueDate || objective.dueDate <= today)) || null;
+  const top = getTodayObjectives().slice(0, 3);
+  const overdue = open.filter(objective => objective.dueDate && objective.dueDate < today).slice(0, 3);
+  const upcomingLinked = open
+    .filter(objective => objective.linkedPlannerBlockId)
+    .map(objective => ({
+      objective,
+      block: scheduleData.blocks.find(block => block.id === objective.linkedPlannerBlockId)
+    }))
+    .filter(item => item.block && item.block.date >= today)
+    .sort((a, b) => (a.block.date || "").localeCompare(b.block.date || "") || (a.block.start || "").localeCompare(b.block.start || ""))
+    .slice(0, 3)
+    .map(item => item.objective);
+
+  box.innerHTML = `
+    ${focus ? `<div class="focus-objective">${renderObjectiveCard(focus, true)}</div>` : ""}
+    <div class="objective-section">
+      <div class="objective-section-title"><strong>Top 3 priorities</strong><button class="secondary-btn" onclick="quickAddObjective('Task')">+ Task</button></div>
+      ${top.length ? top.map(objective => renderObjectiveCard(objective)).join("") : `<p class="muted-text">No priority objectives for today.</p>`}
+    </div>
+    ${overdue.length ? `<div class="objective-section"><strong>Overdue</strong>${overdue.map(objective => renderObjectiveCard(objective)).join("")}</div>` : ""}
+    ${upcomingLinked.length ? `<div class="objective-section"><strong>Upcoming planner-linked</strong>${upcomingLinked.map(objective => renderObjectiveCard(objective)).join("")}</div>` : ""}
+  `;
+}
+
+function renderObjectiveCard(objective, isFocus = false) {
+  const index = systemsData.objectives.findIndex(item => item.id === objective.id);
+  const block = objective.linkedPlannerBlockId ? scheduleData.blocks.find(item => item.id === objective.linkedPlannerBlockId) : null;
+  const habit = objective.linkedHabitId ? systemsData.habits.find(item => item.id === objective.linkedHabitId) : null;
+  const tracker = objective.linkedTrackerId ? systemsData.trackers.find(item => item.id === objective.linkedTrackerId) : null;
+  const meta = [
+    objective.priority,
+    objective.type,
+    objective.dueDate ? `${objective.dueDate}${objective.dueTime ? ` ${objective.dueTime}` : ""}` : "",
+    objective.estimatedMinutes ? `${objective.estimatedMinutes}m` : ""
+  ].filter(Boolean);
+  return `
+    <div class="objective-card ${isFocus ? "focus" : ""}">
+      <div class="objective-main">
+        <div>
+          <strong>${escapeHTML(objective.title)}</strong>
+          <p>${meta.map(escapeHTML).join(" • ")}</p>
+          ${block ? `<p>Planner: ${escapeHTML(block.title || "Block")} ${escapeHTML(block.start || "")}</p>` : ""}
+          ${habit ? `<p>Habit: ${escapeHTML(habit.name)}</p>` : ""}
+          ${tracker ? `<p>Tracker: ${escapeHTML(tracker.name)}</p>` : ""}
+          ${objective.notes ? `<p>${escapeHTML(objective.notes)}</p>` : ""}
+        </div>
+        <span class="objective-status">${escapeHTML(objective.status)}</span>
+      </div>
+      <div class="objective-actions">
+        <button onclick="setObjectiveStatus(${index}, 'Complete')">Done</button>
+        <button class="secondary-btn" onclick="setObjectiveStatus(${index}, 'In progress')">Start</button>
+        <button class="secondary-btn" onclick="deferObjective(${index})">Defer</button>
+        <button class="secondary-btn" onclick="toggleFocusObjective(${index})">${objective.focus ? "Unfocus" : "Focus"}</button>
+      </div>
+    </div>
+  `;
+}
+
+function getCompletedObjectiveType(objective) {
+  if (objective.linkedPlannerBlockId) return "Planner-linked";
+  if (objective.linkedHabitId) return "Habit-linked";
+  if (objective.type === "Objective") return "Objective";
+  return "Task";
+}
+
+function getObjectiveLinkedLabel(objective) {
+  const block = objective.linkedPlannerBlockId ? scheduleData.blocks.find(item => item.id === objective.linkedPlannerBlockId) : null;
+  const habit = objective.linkedHabitId ? systemsData.habits.find(item => item.id === objective.linkedHabitId) : null;
+  const tracker = objective.linkedTrackerId ? systemsData.trackers.find(item => item.id === objective.linkedTrackerId) : null;
+  if (block) return `Planner: ${block.title || "Block"}`;
+  if (habit) return `Habit: ${habit.name}`;
+  if (tracker) return `Tracker: ${tracker.name}`;
+  return "";
+}
+
+function getCompletedObjectivesToday() {
+  const today = getTodayISO();
+  return systemsData.objectives
+    .filter(objective => objective.status === "Complete" && objective.completedDate === today)
+    .sort((a, b) => (b.completedAt || "").localeCompare(a.completedAt || ""));
+}
+
+function setCompletedObjectiveFilter(filter) {
+  completedObjectiveFilter = filter;
+  renderHomeCompletedToday();
+}
+
+function renderHomeCompletedToday() {
+  const box = document.getElementById("homeCompletedToday");
+  if (!box) return;
+  const allCompleted = getCompletedObjectivesToday();
+  const filtered = allCompleted.filter(objective => {
+    const type = getCompletedObjectiveType(objective);
+    if (completedObjectiveFilter === "All") return true;
+    if (completedObjectiveFilter === "Tasks") return type === "Task";
+    if (completedObjectiveFilter === "Objectives") return type === "Objective";
+    if (completedObjectiveFilter === "Planner-linked") return type === "Planner-linked";
+    return true;
+  });
+  const filters = ["All", "Tasks", "Objectives", "Planner-linked"];
+  box.innerHTML = `
+    <details class="completed-today-panel" ${allCompleted.length ? "open" : ""}>
+      <summary>
+        <span>Completed Today <strong class="count-badge">${allCompleted.length}</strong></span>
+        <span class="muted-text small">Show finished work</span>
+      </summary>
+      <div class="completed-filter-row">
+        ${filters.map(filter => `
+          <button class="${completedObjectiveFilter === filter ? "" : "secondary-btn"}" onclick="setCompletedObjectiveFilter('${filter}')">${filter}</button>
+        `).join("")}
+      </div>
+      <div class="completed-objective-list">
+        ${filtered.length ? filtered.map(renderCompletedObjectiveCard).join("") : `<p class="muted-text">No completed tasks yet today.</p>`}
+      </div>
+    </details>
+  `;
+}
+
+function renderCompletedObjectiveCard(objective) {
+  const index = systemsData.objectives.findIndex(item => item.id === objective.id);
+  const type = getCompletedObjectiveType(objective);
+  const linkedLabel = getObjectiveLinkedLabel(objective);
+  return `
+    <div class="completed-objective-card">
+      <div>
+        <strong>${escapeHTML(objective.title)}</strong>
+        <p><span class="objective-type-badge">${escapeHTML(type)}</span> Completed ${escapeHTML(objective.completedAt || "today")}</p>
+        ${linkedLabel ? `<p>${escapeHTML(linkedLabel)}</p>` : ""}
+      </div>
+      <button class="secondary-btn" onclick="reopenObjective(${index})">Reopen</button>
+    </div>
+  `;
+}
+
+function quickAddObjective(type = "Task") {
+  const title = prompt(`${type} title:`);
+  if (!title || !title.trim()) return;
+  systemsData.objectives.push({
+    id: createId("objective"),
+    title: title.trim(),
+    type,
+    status: "Not started",
+    priority: type === "Objective" ? "High" : "Medium",
+    dueDate: getTodayISO(),
+    dueTime: "",
+    estimatedMinutes: "",
+    category: "",
+    tags: "",
+    notes: "",
+    linkedPlannerBlockId: "",
+    linkedHabitId: "",
+    linkedTrackerId: "",
+    trackerLogAmount: "",
+    completedDate: "",
+    completedAt: "",
+    autoCompleteFromPlanner: true,
+    autoCompleteFromHabit: true,
+    focus: false,
+    recurring: "",
+    subtasks: []
+  });
+  saveSystemsData();
+  main.innerHTML = getPageHTML("Home");
+  renderHome();
+}
+
+function setObjectiveStatus(index, status) {
+  const objective = systemsData.objectives[index];
+  if (!objective) return;
+  objective.status = status;
+  if (status === "Complete") {
+    objective.completedDate = getTodayISO();
+    objective.completedAt = new Date().toTimeString().slice(0, 5);
+    completeObjectiveIntegrations(objective);
+  } else {
+    objective.completedDate = "";
+    objective.completedAt = "";
+  }
+  saveSystemsData();
+  renderHome();
+}
+
+function reopenObjective(index) {
+  const objective = systemsData.objectives[index];
+  if (!objective) return;
+  objective.status = "Not started";
+  objective.completedDate = "";
+  objective.completedAt = "";
+  saveSystemsData();
+  renderHome();
+}
+
+function deferObjective(index) {
+  const objective = systemsData.objectives[index];
+  if (!objective) return;
+  objective.status = "Deferred";
+  objective.dueDate = getDateOffset(getTodayISO(), 1);
+  saveSystemsData();
+  renderHome();
+}
+
+function toggleFocusObjective(index) {
+  const objective = systemsData.objectives[index];
+  if (!objective) return;
+  const nextFocus = !objective.focus;
+  systemsData.objectives.forEach(item => item.focus = false);
+  objective.focus = nextFocus;
+  saveSystemsData();
+  renderHome();
+}
+
+function completeObjectiveIntegrations(objective) {
+  if (!objective.linkedTrackerId || !objective.trackerLogAmount) return;
+  const tracker = systemsData.trackers.find(item => item.id === objective.linkedTrackerId);
+  if (!tracker) return;
+  systemsData.logs.push({
+    id: createId("log"),
+    title: tracker.name,
+    type: tracker.category || "Custom",
+    valueType: tracker.category || "Custom",
+    value: String(objective.trackerLogAmount),
+    unit: tracker.unit || "",
+    date: getTodayISO(),
+    notes: `Objective complete — ${objective.title}`,
+    linkedHabitId: objective.linkedHabitId || "",
+    linkedItemType: "tracker",
+    linkedMetricId: "",
+    linkedTrackerId: tracker.id,
+    linkedGoalId: "",
+    linkedPlannerBlockId: objective.linkedPlannerBlockId || "",
+    logSource: "manual",
+    plannerAutoLogKey: "",
+    inactive: false
+  });
+  recalcTrackerCurrentFromLogs(tracker);
+}
+
+function autoCompleteObjectivesForPlannerBlock(block) {
+  let changed = false;
+  systemsData.objectives.forEach(objective => {
+    if (isObjectiveDone(objective) || !objective.autoCompleteFromPlanner) return;
+    if (objective.linkedPlannerBlockId !== block.id) return;
+    objective.status = "Complete";
+    objective.completedDate = getTodayISO();
+    objective.completedAt = new Date().toTimeString().slice(0, 5);
+    completeObjectiveIntegrations(objective);
+    changed = true;
+  });
+  if (changed) saveSystemsData();
+}
+
+function autoCompleteObjectivesForHabit(habit) {
+  let changed = false;
+  systemsData.objectives.forEach(objective => {
+    if (isObjectiveDone(objective) || !objective.autoCompleteFromHabit) return;
+    if (objective.linkedHabitId !== habit.id) return;
+    objective.status = "Complete";
+    objective.completedDate = getTodayISO();
+    objective.completedAt = new Date().toTimeString().slice(0, 5);
+    completeObjectiveIntegrations(objective);
+    changed = true;
+  });
+  if (changed) saveSystemsData();
 }
 
 function renderTodayFocus() {
@@ -2963,7 +3411,7 @@ function renderSystemsSheet() {
     log: editingLogIndex === null ? "Add Log" : "Edit Log",
     tracker: editingTrackerIndex === null ? "Add Tracker" : "Edit Tracker",
     trackerLog: "Manual tracker log",
-    goal: editingGoalIndex === null ? "Add Goal" : "Edit Goal"
+    goal: editingGoalIndex === null ? "Add Tracker" : "Edit Tracker"
   };
 
   return `
@@ -3051,29 +3499,18 @@ function getRecentPlannerBlocksForLogSelect(limit = 100) {
 
 function renderLogFormFields() {
   return `
-    <input id="logTitle" placeholder="Log title">
-    <select id="logType" onchange="updateLogLinkedItemOptions()">
-      <option>Weight</option>
-      <option>Sleep</option>
-      <option>Gym</option>
-      <option>Spending</option>
-      <option>Study</option>
-      <option>Health</option>
-      <option>Mood</option>
-      <option>Habit</option>
-      <option>Taper</option>
-      <option>Custom</option>
+    <select id="logLinkedItemId" onchange="syncLogFieldsFromTracker()">
+      <option value="">Choose tracker</option>
+      ${systemsData.trackers.map(t => `<option value="${t.id}">${escapeHTML(t.name)}</option>`).join("")}
     </select>
-    <input id="logValue" placeholder="Value">
-    <input id="logUnit" placeholder="Custom unit, ex: min, $, hrs, reps">
+    <div class="habit-meta-row">
+      <input id="logValue" placeholder="Amount">
+      <input id="logUnit" placeholder="Unit">
+    </div>
     <input id="logDate" type="date">
-    <select id="logLinkedItemType" onchange="updateLogLinkedItemOptions()">
-      <option value="">No linked item</option>
-      <option value="habit">Linked Habit</option>
-      <option value="tracker">Linked Tracker</option>
-      <option value="goal">Linked Goal</option>
-    </select>
-    <div id="logLinkedItemSelectWrap"></div>
+    <input id="logTitle" type="hidden">
+    <input id="logType" type="hidden">
+    <div id="logLinkedItemSelectWrap" style="display:none"></div>
     <label class="muted-text small" style="display:block;margin-top:8px">Optional planner block</label>
     <select id="logLinkedPlannerBlockId">
       <option value="">None</option>
@@ -3100,33 +3537,39 @@ function renderTrackerFormFields() {
       <input id="trackerStartValue" type="number" step="any" placeholder="Start value">
       <input id="trackerCurrentValue" type="number" step="any" placeholder="Current value">
     </div>
-    <input id="trackerTargetValue" type="number" step="any" placeholder="Target value">
-    <select id="trackerDirection">
-      <option value="increase">Progress: increase toward target</option>
-      <option value="decrease">Progress: decrease / taper toward target</option>
-    </select>
-    <select id="trackerLogValueMode">
-      <option value="increment">Log values add up (sessions, counts per period)</option>
-      <option value="absolute">Log values are measurements (weight, grams left, etc.)</option>
-    </select>
-    <select id="trackerResetType">
-      ${TRACKER_RESET_TYPES.map(r => `<option value="${escapeHTML(r)}">${escapeHTML(r)}</option>`).join("")}
-    </select>
-    <input id="trackerResetCustomNote" placeholder="Custom recurring detail (optional)">
     <div class="habit-meta-row">
-      <input id="trackerStartDate" type="date" placeholder="Start date">
-      <input id="trackerTargetDate" type="date" placeholder="Target / end date">
+      <input id="trackerTargetValue" type="number" step="any" placeholder="Target value (optional)">
+      <select id="trackerDirection">
+        <option value="increase">Increase toward target</option>
+        <option value="decrease">Decrease / taper toward target</option>
+      </select>
     </div>
-    <select id="trackerLinkedHabit">
-      <option value="">No linked habit</option>
-      ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
-    </select>
-    <label class="inline-check"><input type="checkbox" id="trackerAutoLogPlanner"> Auto-log when linked habit’s planner block is completed</label>
-    <div class="habit-meta-row">
-      <input id="trackerAutoLogAmount" type="number" step="any" placeholder="Auto-log amount (default 1)" value="1">
-      <input id="trackerAutoLogUnit" placeholder="Auto-log unit (blank = tracker unit)">
-    </div>
-    <label class="inline-check"><input type="checkbox" id="trackerPreventDupAuto" checked> Prevent duplicate auto-logs (same block & day)</label>
+    <details class="advanced-options">
+      <summary>Advanced options</summary>
+      <select id="trackerLogValueMode">
+        <option value="increment">Log amounts add up</option>
+        <option value="absolute">Logs are measurements</option>
+      </select>
+      <select id="trackerResetType">
+        ${TRACKER_RESET_TYPES.map(r => `<option value="${escapeHTML(r)}">${escapeHTML(r)}</option>`).join("")}
+      </select>
+      <input id="trackerResetCustomNote" placeholder="Reset detail (optional)">
+      <div class="habit-meta-row">
+        <input id="trackerStartDate" type="date" placeholder="Start date">
+        <input id="trackerTargetDate" type="date" placeholder="Target / end date">
+      </div>
+      <select id="trackerLinkedHabit">
+        <option value="">No linked habit</option>
+        ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
+      </select>
+      <label class="inline-check"><input type="checkbox" id="trackerAutoLogPlanner"> Auto-log when linked habit’s planner block is completed</label>
+      <div class="habit-meta-row">
+        <input id="trackerAutoLogAmount" type="number" step="any" placeholder="Auto-log amount" value="1">
+        <input id="trackerAutoLogUnit" placeholder="Auto-log unit">
+      </div>
+      <label class="inline-check"><input type="checkbox" id="trackerPreventDupAuto" checked> Prevent duplicate auto-logs</label>
+      <textarea id="trackerMilestones" placeholder="Milestones, one per line"></textarea>
+    </details>
     <textarea id="trackerNotes" placeholder="Notes"></textarea>
     <button id="trackerSaveButton" onclick="saveUnifiedTrackerFromModal()">${editingTrackerIndex === null ? "Save Tracker" : "Update Tracker"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
@@ -3312,9 +3755,7 @@ function renderSystemsAddMenu() {
           <h3>Add to Systems</h3>
           <button class="icon-btn" onclick="closeSystemsAddMenu()">x</button>
         </div>
-        <button onclick="openSystemsForm('habit')">Add Habit</button>
         <button onclick="openSystemsForm('tracker')">Add Tracker</button>
-        <button onclick="openSystemsForm('goal')">Add Goal</button>
         <button onclick="openSystemsForm('log')">Add Log</button>
       </div>
     </div>
@@ -3357,8 +3798,6 @@ function renderSystems() {
   renderHabitsList();
   renderTrackersSummaryCards();
   renderTrackersUnifiedList();
-  renderGoalsList();
-  renderGoalsList("trackersGoalsSection");
   fillDefaultLogDate();
   updateLogLinkedItemOptions();
   fillEditingLogForm();
@@ -3508,6 +3947,7 @@ function completeHabitToday(index) {
       recalcTrackerCurrentFromLogs(tracker);
     });
 
+  autoCompleteObjectivesForHabit(habit);
   saveSystemsData();
   renderSystems();
 }
@@ -3565,28 +4005,31 @@ function scheduleHabitInPlanner(index) {
 }
 
 function saveSystemLog() {
-  const title = document.getElementById("logTitle").value.trim();
   const value = document.getElementById("logValue").value.trim();
-  const unit = document.getElementById("logUnit").value.trim();
-  const date = document.getElementById("logDate").value || getTodayISO();
-  if (!title && !value) return;
-  const linkedItemType = document.getElementById("logLinkedItemType")?.value || "";
   const linkedItemId = document.getElementById("logLinkedItemId")?.value || "";
+  const tracker = systemsData.trackers.find(t => t.id === linkedItemId);
+  const title = tracker?.name || document.getElementById("logTitle").value.trim();
+  const unit = document.getElementById("logUnit").value.trim() || tracker?.unit || "";
+  const date = document.getElementById("logDate").value || getTodayISO();
+  if (!linkedItemId || !value) {
+    alert("Choose a tracker and enter an amount.");
+    return;
+  }
   const prev = editingLogIndex !== null ? systemsData.logs[editingLogIndex] : null;
 
   const payload = {
     title,
-    type: document.getElementById("logType").value,
-    valueType: document.getElementById("logType").value,
+    type: tracker?.category || document.getElementById("logType").value || "Custom",
+    valueType: tracker?.category || document.getElementById("logType").value || "Custom",
     value,
     unit,
     date,
     notes: document.getElementById("logNotes").value.trim(),
-    linkedItemType,
-    linkedHabitId: linkedItemType === "habit" ? linkedItemId : "",
+    linkedItemType: "tracker",
+    linkedHabitId: tracker?.linkedHabitId || "",
     linkedMetricId: "",
-    linkedTrackerId: linkedItemType === "tracker" ? linkedItemId : "",
-    linkedGoalId: linkedItemType === "goal" ? linkedItemId : "",
+    linkedTrackerId: linkedItemId,
+    linkedGoalId: "",
     linkedPlannerBlockId: document.getElementById("logLinkedPlannerBlockId")?.value || "",
     logSource: prev?.logSource ?? "manual",
     plannerAutoLogKey: prev?.plannerAutoLogKey ?? "",
@@ -3615,36 +4058,19 @@ function saveSystemLog() {
 }
 
 function updateLogLinkedItemOptions() {
-  const wrap = document.getElementById("logLinkedItemSelectWrap");
-  const type = document.getElementById("logLinkedItemType")?.value || "";
-  const logType = document.getElementById("logType")?.value || "";
-  if (!wrap) return;
+  syncLogFieldsFromTracker();
+}
 
-  if (!type) {
-    wrap.innerHTML = "";
-    return;
-  }
-
-  const source = type === "habit"
-    ? systemsData.habits
-    : type === "tracker"
-      ? systemsData.trackers
-      : systemsData.goals;
-  const suggestionMatcher = logType === "Weight"
-    ? isWeightRelated
-    : logType === "Taper"
-      ? isTaperRelated
-      : () => false;
-  const suggestedFirst = logType === "Weight" || logType === "Taper"
-    ? [...source].sort((a, b) => Number(suggestionMatcher(b)) - Number(suggestionMatcher(a)))
-    : source;
-
-  wrap.innerHTML = `
-    <select id="logLinkedItemId">
-      <option value="">Choose ${type}</option>
-      ${suggestedFirst.map(item => `<option value="${item.id}">${escapeHTML(item.name)}${suggestionMatcher(item) ? " • suggested" : ""}</option>`).join("")}
-    </select>
-  `;
+function syncLogFieldsFromTracker() {
+  const trackerId = document.getElementById("logLinkedItemId")?.value || "";
+  const tracker = systemsData.trackers.find(t => t.id === trackerId);
+  if (!tracker) return;
+  const title = document.getElementById("logTitle");
+  const type = document.getElementById("logType");
+  const unit = document.getElementById("logUnit");
+  if (title) title.value = tracker.name || "";
+  if (type) type.value = tracker.category || "Custom";
+  if (unit && !unit.value) unit.value = tracker.unit || "";
 }
 
 function isWeightRelated(item) {
@@ -3731,8 +4157,27 @@ function normalizeUnifiedTrackerRecord(tracker) {
     autoLogOnPlannerComplete: Boolean(tracker.autoLogOnPlannerComplete),
     autoLogAmount: tracker.autoLogAmount !== undefined && tracker.autoLogAmount !== null ? String(tracker.autoLogAmount) : "1",
     autoLogUnit: tracker.autoLogUnit !== undefined && tracker.autoLogUnit !== null ? String(tracker.autoLogUnit) : "",
-    preventDuplicateAutoLogs: tracker.preventDuplicateAutoLogs !== false
+    preventDuplicateAutoLogs: tracker.preventDuplicateAutoLogs !== false,
+    archived: Boolean(tracker.archived),
+    legacyGoalId: tracker.legacyGoalId || "",
+    milestones: Array.isArray(tracker.milestones) ? tracker.milestones.map(milestone => ({
+      id: milestone.id || createId("milestone"),
+      title: milestone.title || "",
+      completed: Boolean(milestone.completed)
+    })) : []
   };
+}
+
+function mapGoalResetCycleToTrackerReset(resetCycle) {
+  if (resetCycle === "daily") return "Daily";
+  if (resetCycle === "weekly") return "Weekly";
+  if (resetCycle === "monthly") return "Monthly";
+  return inferResetTypeFromRecurringText(resetCycle);
+}
+
+function mapGoalTypeToTrackerDirection(goal) {
+  if (goal.goalType === "Decrease toward target" || goal.goalType === "Taper") return "decrease";
+  return inferTrackerDirection(goal.category, goal.startValue, goal.targetValue);
 }
 
 function migrateSystemsToUnifiedTrackers() {
@@ -3740,9 +4185,63 @@ function migrateSystemsToUnifiedTrackers() {
   const metrics = systemsData.metrics || [];
   const oldTrackers = systemsData.trackers || [];
   const trackerIds = new Set();
+  systemsData.trackers.forEach(t => trackerIds.add(t.id));
+
+  function migrateGoalsIntoTrackers() {
+    if (systemsData._goalsAsTrackersV1) return false;
+    let changed = false;
+    systemsData.goals.forEach(goal => {
+      if (!goal?.id) return;
+      const existing = goal.linkedTrackerId
+        ? systemsData.trackers.find(t => t.id === goal.linkedTrackerId)
+        : systemsData.trackers.find(t => t.legacyGoalId === goal.id);
+      if (existing) {
+        existing.targetValue = existing.targetValue || goal.targetValue || "";
+        existing.milestones = existing.milestones?.length ? existing.milestones : (goal.milestones || []);
+        existing.legacyGoalId = goal.id;
+        trackerIds.add(existing.id);
+        changed = true;
+        return;
+      }
+      const tracker = normalizeUnifiedTrackerRecord({
+        id: createId("tracker"),
+        name: goal.name,
+        category: goal.category || "Goal",
+        unit: goal.unit,
+        startValue: goal.startValue ?? "",
+        currentValue: goal.currentValue ?? "0",
+        targetValue: goal.targetValue ?? "",
+        resetType: mapGoalResetCycleToTrackerReset(goal.resetCycle),
+        resetCustomNote: goal.recurringTarget || "",
+        startDate: goal.startDate || "",
+        targetDate: goal.deadline || "",
+        linkedHabitId: goal.linkedHabitId || "",
+        notes: goal.notes || "",
+        direction: mapGoalTypeToTrackerDirection(goal),
+        logValueMode: goal.goalType === "Do not exceed limit" ? "increment" : "absolute",
+        legacyGoalId: goal.id,
+        milestones: goal.milestones || []
+      });
+      systemsData.trackers.push(tracker);
+      trackerIds.add(tracker.id);
+      systemsData.logs.forEach(log => {
+        if (log.linkedGoalId === goal.id) {
+          log.linkedTrackerId = tracker.id;
+          log.linkedItemType = "tracker";
+        }
+      });
+      changed = true;
+    });
+    systemsData._goalsAsTrackersV1 = true;
+    return changed;
+  }
+
+  let migratedGoals = false;
 
   if (hadUnifiedFlag && !metrics.length) {
+    migratedGoals = migrateGoalsIntoTrackers();
     recalcAllTrackerCurrentsFromLogs();
+    if (migratedGoals) saveSystemsData();
     return;
   }
 
@@ -3883,6 +4382,8 @@ function migrateSystemsToUnifiedTrackers() {
       });
     });
   }
+
+  migratedGoals = migrateGoalsIntoTrackers();
 
   systemsData.metrics = [];
   systemsData.logs.forEach(log => {
@@ -4029,12 +4530,17 @@ function renderSystemsDashboard() {
   const mostSkipped = getMostSkippedHabit();
 
   const trackerProgresses = systemsData.trackers.map(t => getTrackerProgress(t));
-  const allProgresses = trackerProgresses;
-  const avgProgress = trackerProgresses.length
-    ? Math.round(trackerProgresses.reduce((s, p) => s + p, 0) / trackerProgresses.length)
-    : 0;
-  const onTrack = systemsData.trackers.filter(t => getTrackerProgress(t) >= 50).length;
   const logsThisWeek = systemsData.logs.filter(log => weekDates.includes(log.date)).length;
+  const activeTrackers = systemsData.trackers.filter(t => !isTrackerComplete(t)).length;
+  const completedTrackers = systemsData.trackers.filter(t => isTrackerComplete(t)).length;
+  const trackersThisWeek = systemsData.trackers.filter(t =>
+    getSortedLogsForTracker(t.id).some(log => weekDates.includes(log.date))
+  ).length;
+  const streakLinkedTrackers = systemsData.trackers.filter(t => {
+    if (!t.linkedHabitId) return false;
+    const habit = systemsData.habits.find(h => h.id === t.linkedHabitId);
+    return habit && getHabitStreak(habit) > 0;
+  }).length;
   const insights = getSmartSystemsInsights();
 
   const recentLogs = [...systemsData.logs]
@@ -4043,22 +4549,10 @@ function renderSystemsDashboard() {
 
   box.innerHTML = `
     <div class="systems-summary-grid">
-      <div class="progress-ring-card">
-        <div class="progress-ring" style="--pct:${activeHabits.length ? Math.round((completedToday / activeHabits.length) * 100) : 0}%">
-          <span>${activeHabits.length ? Math.round((completedToday / activeHabits.length) * 100) : 0}%</span>
-        </div>
-        <strong>Today</strong>
-        <p>${completedToday}/${activeHabits.length} habits complete</p>
-      </div>
-      <div><strong>${activeHabits.length}</strong><span>Active habits</span></div>
-      <div><strong>${weeklyCompletionPct}%</strong><span>Weekly habits</span></div>
-      <div><strong>${bestStreak}</strong><span>Best streak</span></div>
-      <div><strong>${missedHabits.length}</strong><span>Missed today</span></div>
-      <div><strong>${skippedToday.length}</strong><span>Skipped today</span></div>
-      <div><strong>${logsThisWeek}</strong><span>Logs this week</span></div>
-      <div><strong>${systemsData.trackers.length}</strong><span>Trackers</span></div>
-      <div><strong>${onTrack}/${systemsData.trackers.length}</strong><span>On track</span></div>
-      <div><strong>${allProgresses.length ? Math.round(allProgresses.reduce((s, p) => s + p, 0) / allProgresses.length) : avgProgress}%</strong><span>Tracker progress</span></div>
+      <div><strong>${activeTrackers}</strong><span>Active Trackers</span></div>
+      <div><strong>${completedTrackers}</strong><span>Completed</span></div>
+      <div><strong>${trackersThisWeek || logsThisWeek}</strong><span>This Week</span></div>
+      <div><strong>${streakLinkedTrackers}</strong><span>Streak-linked</span></div>
     </div>
     <div class="systems-highlight-grid">
       <div class="system-highlight">
@@ -4744,7 +5238,7 @@ function renderGoalsList(elementId = "goalsList") {
   if (!box) return;
 
   if (!systemsData.goals.length) {
-    box.innerHTML = `<div class="empty-state"><p>No goals saved yet.</p><button onclick="openSystemsForm('goal')">Create first goal</button></div>`;
+    box.innerHTML = `<div class="empty-state"><p>No tracker goals yet.</p><button onclick="openSystemsForm('tracker')">Create tracker</button></div>`;
     return;
   }
 
@@ -5043,11 +5537,10 @@ function renderTrackersSummaryCards() {
   const weekDates = getLastNDates(7);
   const trackers = systemsData.trackers;
   const active = trackers.filter(t => !isTrackerComplete(t)).length;
-  const completedGoals = trackers.filter(t => t.category === "Goal" && isTrackerComplete(t)).length;
+  const completedGoals = trackers.filter(t => isTrackerComplete(t)).length;
   const thisWeek = trackers.filter(t =>
     getSortedLogsForTracker(t.id).some(log => weekDates.includes(log.date))
   ).length;
-  const overdue = trackers.filter(t => isTrackerBehind(t)).length;
   const streakLinked = trackers.filter(t => {
     if (!t.linkedHabitId) return false;
     const habit = systemsData.habits.find(h => h.id === t.linkedHabitId);
@@ -5058,10 +5551,9 @@ function renderTrackersSummaryCards() {
   box.innerHTML = `
     <div class="systems-summary-grid trackers-dash">
       <div><strong>${active}</strong><span>Active trackers</span></div>
-      <div><strong>${completedGoals}</strong><span>Completed goals</span></div>
-      <div><strong>${thisWeek}</strong><span>This week progress</span></div>
-      <div><strong>${overdue}</strong><span>Overdue / behind</span></div>
-      <div><strong>${streakLinked}</strong><span>Streak-linked progress</span></div>
+      <div><strong>${completedGoals}</strong><span>Completed</span></div>
+      <div><strong>${thisWeek}</strong><span>This week</span></div>
+      <div><strong>${streakLinked}</strong><span>Streak-linked</span></div>
     </div>
   `;
   populateTrackerCategoryFilterMount();
@@ -5092,41 +5584,64 @@ function renderSingleTrackerCard(tracker) {
   const tLogs = getSortedLogsForTracker(tracker.id);
   const mini = tLogs.map(getLogNumber).filter(v => !isNaN(v)).slice(-10);
   const idx = systemsData.trackers.findIndex(t => t.id === tracker.id);
-  const dirLabel = tracker.direction === "decrease" ? "Taper / decrease" : "Increase";
+  const hasTarget = tracker.targetValue !== "" && tracker.targetValue !== undefined && tracker.targetValue !== null;
+  const habit = tracker.linkedHabitId ? systemsData.habits.find(h => h.id === tracker.linkedHabitId) : null;
+  const streak = habit ? getHabitStreak(habit) : 0;
+  const currentLabel = `${escapeHTML(String(tracker.currentValue || 0))}${unit ? ` ${unit}` : ""}`;
+  const startLabel = tracker.startValue !== "" && tracker.startValue !== undefined ? `${escapeHTML(String(tracker.startValue))}${unit ? ` ${unit}` : ""}` : "Start";
+  const targetLabel = hasTarget ? `${escapeHTML(String(tracker.targetValue))}${unit ? ` ${unit}` : ""}` : "No target";
+  const milestones = Array.isArray(tracker.milestones) ? tracker.milestones.filter(m => m.title) : [];
   const logsHtml = tLogs.length
     ? `<div class="tracker-log-history">${tLogs.slice().reverse().map(log => renderTrackerLogEntryRow(tracker, log)).join("")}</div>`
     : `<p class="muted-text small">No log entries yet.</p>`;
 
   return `
     <div class="system-item tracker-card">
-      <div class="item-title">
-        <strong>${escapeHTML(tracker.name)}</strong>
-        <span class="metric-type-pill">${escapeHTML(tracker.category || "Custom")}</span>
+      <div class="tracker-card-header">
+        <div>
+          <strong>${escapeHTML(tracker.name)}</strong>
+          <div class="habit-pill-row">
+            <span class="metric-type-pill">${escapeHTML(tracker.category || "Custom")}</span>
+            ${tracker.resetType && tracker.resetType !== "No reset" ? `<span class="metric-type-pill">${escapeHTML(tracker.resetType)}</span>` : ""}
+            ${habit ? `<span class="metric-type-pill">Habit: ${escapeHTML(habit.name)}</span>` : ""}
+            ${streak ? `<span class="streak-badge">${streak} streak</span>` : ""}
+          </div>
+        </div>
+        <div class="tracker-current-value">${currentLabel}</div>
       </div>
-      <p class="muted-text small">${dirLabel} • ${escapeHTML(tracker.resetType || "No reset")} • Logs: <strong>${escapeHTML(tracker.logValueMode)}</strong></p>
-      <p>${escapeHTML(String(tracker.currentValue || 0))} ${unit} → ${escapeHTML(String(tracker.targetValue || ""))} ${unit}</p>
-      <div class="tracker-progress-bar">
-        <div class="tracker-progress-fill" style="width:${pct}%"></div>
-      </div>
-      <p class="tracker-pct">${pct}% toward target</p>
+      ${hasTarget ? `
+        <div class="tracker-progress-bar">
+          <div class="tracker-progress-fill" style="width:${pct}%"></div>
+        </div>
+        <div class="tracker-scale-row">
+          <span>${startLabel}</span>
+          <strong>${currentLabel}</strong>
+          <span>${targetLabel}</span>
+        </div>
+        <p class="tracker-pct">${pct}% ${tracker.direction === "decrease" ? "toward reduction target" : "toward target"}</p>
+      ` : `<p class="muted-text small">Current value: <strong>${currentLabel}</strong></p>`}
       ${mini.length ? renderMiniBars(mini) : ""}
       ${tracker.startDate || tracker.targetDate ? `<p class="muted-text">${escapeHTML(tracker.startDate || "—")} → ${escapeHTML(tracker.targetDate || "—")}</p>` : ""}
-      ${tracker.linkedHabitId ? `<p class="muted-text">Linked habit: ${escapeHTML((systemsData.habits.find(h => h.id === tracker.linkedHabitId) || {}).name || "")}</p>` : ""}
+      ${milestones.length ? `<p class="muted-text">Milestones: ${milestones.slice(0, 3).map(m => escapeHTML(m.title)).join(" • ")}${milestones.length > 3 ? " • …" : ""}</p>` : ""}
       ${tracker.resetCustomNote ? `<p class="muted-text">${escapeHTML(tracker.resetCustomNote)}</p>` : ""}
       ${tracker.notes ? `<p>${escapeHTML(tracker.notes)}</p>` : ""}
-      <div class="button-row three-actions">
-        <button onclick="openSystemsForm('trackerLog', '${tracker.id}')">Manual log</button>
-        <button onclick="logTrackerById('${tracker.id}')">Quick log</button>
-        <button onclick="quickIncrementTracker('${tracker.id}')">+1</button>
-      </div>
-      <div class="button-row">
-        <button onclick="openSystemsForm('tracker', ${idx})">Edit tracker</button>
+      <div class="button-row tracker-footer-actions">
+        <button onclick="openSystemsForm('trackerLog', '${tracker.id}')">Log</button>
+        <button class="secondary-btn" onclick="openSystemsForm('tracker', ${idx})">Edit</button>
+        <button class="secondary-btn" onclick="toggleTrackerLogs('${tracker.id}')">View Logs</button>
         <button class="danger-btn" onclick="deleteTrackerById('${tracker.id}')">Delete</button>
       </div>
-      <h4 class="tracker-subhead">Log history</h4>
-      ${logsHtml}
+      <div id="trackerLogs-${escapeHTML(tracker.id)}" class="tracker-logs-collapsed">
+        <h4 class="tracker-subhead">Log history</h4>
+        ${logsHtml}
+      </div>
     </div>
   `;
+}
+
+function toggleTrackerLogs(id) {
+  const el = document.getElementById(`trackerLogs-${id}`);
+  if (el) el.classList.toggle("tracker-logs-collapsed");
 }
 
 function renderTrackersUnifiedList() {
@@ -5176,7 +5691,16 @@ function saveUnifiedTrackerFromModal() {
     autoLogOnPlannerComplete: Boolean(document.getElementById("trackerAutoLogPlanner")?.checked),
     autoLogAmount: document.getElementById("trackerAutoLogAmount")?.value ?? "1",
     autoLogUnit: document.getElementById("trackerAutoLogUnit")?.value.trim() ?? "",
-    preventDuplicateAutoLogs: document.getElementById("trackerPreventDupAuto")?.checked !== false
+    preventDuplicateAutoLogs: document.getElementById("trackerPreventDupAuto")?.checked !== false,
+    milestones: (document.getElementById("trackerMilestones")?.value || "")
+      .split("\n")
+      .map(item => item.trim())
+      .filter(Boolean)
+      .map((title, index) => ({
+        id: prev?.milestones?.[index]?.id || createId("milestone"),
+        title,
+        completed: Boolean(prev?.milestones?.[index]?.completed)
+      }))
   };
   const tracker = normalizeUnifiedTrackerRecord(trackerRaw);
   rememberTrackerCategory(tracker.category);
@@ -5225,6 +5749,7 @@ function fillEditingTrackerForm() {
   if (el("trackerAutoLogAmount")) el("trackerAutoLogAmount").value = t.autoLogAmount ?? "1";
   if (el("trackerAutoLogUnit")) el("trackerAutoLogUnit").value = t.autoLogUnit || "";
   if (el("trackerPreventDupAuto")) el("trackerPreventDupAuto").checked = t.preventDuplicateAutoLogs !== false;
+  if (el("trackerMilestones")) el("trackerMilestones").value = (t.milestones || []).map(item => item.title || "").join("\n");
   el("trackerNotes").value = t.notes || "";
   const btn = el("trackerSaveButton");
   if (btn) btn.textContent = "Update Tracker";
@@ -5264,8 +5789,9 @@ function fillEditingLogForm() {
   if (li) li.value = lt;
   updateLogLinkedItemOptions();
   const wrap = document.getElementById("logLinkedItemId");
-  const idVal = log.linkedGoalId || log.linkedHabitId || getLogLinkedTrackerId(log) || "";
+  const idVal = getLogLinkedTrackerId(log) || log.linkedGoalId || "";
   if (wrap) wrap.value = idVal;
+  syncLogFieldsFromTracker();
   const plannerSel = document.getElementById("logLinkedPlannerBlockId");
   if (plannerSel) plannerSel.value = log.linkedPlannerBlockId || "";
 }
