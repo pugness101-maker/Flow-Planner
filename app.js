@@ -70,7 +70,8 @@ let systemsData = JSON.parse(localStorage.getItem("flowSystemsData")) || {
   metrics: [],
   objectives: [],
   savedTrackerCategories: [],
-  savedTrackerUnits: []
+  savedTrackerUnits: [],
+  unitSortMode: "defaults"
 };
 
 if (!Array.isArray(systemsData.habits)) systemsData.habits = [];
@@ -81,9 +82,32 @@ if (!Array.isArray(systemsData.metrics)) systemsData.metrics = [];
 if (!Array.isArray(systemsData.objectives)) systemsData.objectives = [];
 if (!Array.isArray(systemsData.savedTrackerCategories)) systemsData.savedTrackerCategories = [];
 if (!Array.isArray(systemsData.savedTrackerUnits)) systemsData.savedTrackerUnits = [];
+if (!systemsData.unitSortMode) systemsData.unitSortMode = "defaults";
 
 const TRACKER_CATEGORIES = ["Goal", "Counter", "Taper", "Habit-linked", "Milestone", "Body Metric", "Finance", "Custom"];
-const DEFAULT_TRACKER_UNITS = ["classes", "hours", "dollars", "lbs", "oz", "grams", "days", "sessions", "%"];
+const DEFAULT_TRACKER_UNITS = [
+  "classes",
+  "hours",
+  "hrs",
+  "minutes",
+  "min",
+  "dollars",
+  "$",
+  "lbs",
+  "oz",
+  "grams",
+  "g",
+  "mg",
+  "days",
+  "sessions",
+  "reps",
+  "%",
+  "completion",
+  "pages",
+  "chapters",
+  "miles",
+  "steps"
+];
 const TRACKER_RESET_TYPES = ["No reset", "Daily", "Weekly", "Monthly", "Custom recurring", "Milestone-based"];
 
 systemsData.goals = systemsData.goals.map(goal => ({
@@ -101,6 +125,8 @@ systemsData.goals = systemsData.goals.map(goal => ({
   linkedTrackerId: goal.linkedTrackerId || "",
   linkedHabitId: goal.linkedHabitId || "",
   linkedPlannerBlockId: goal.linkedPlannerBlockId || "",
+  linkedRoutineId: goal.linkedRoutineId || "",
+  linkedObjectiveId: goal.linkedObjectiveId || "",
   milestones: Array.isArray(goal.milestones) ? goal.milestones : [],
   recurringTarget: goal.recurringTarget || "",
   notes: goal.notes || ""
@@ -131,6 +157,11 @@ systemsData.habits = systemsData.habits.map(habit => ({
   target: habit.target || "",
   unit: habit.unit || "",
   linkedGoalId: habit.linkedGoalId || "",
+  linkedTrackerId: habit.linkedTrackerId || "",
+  linkedRoutineId: habit.linkedRoutineId || "",
+  linkedPlannerBlockId: habit.linkedPlannerBlockId || "",
+  autoLogTrackerOnComplete: Boolean(habit.autoLogTrackerOnComplete),
+  trackerLogAmount: habit.trackerLogAmount !== undefined && habit.trackerLogAmount !== null ? String(habit.trackerLogAmount) : "",
   paused: Boolean(habit.paused),
   skippedDates: Array.isArray(habit.skippedDates) ? habit.skippedDates : [],
   completionHistory: Array.isArray(habit.completionHistory) ? habit.completionHistory : [],
@@ -156,8 +187,10 @@ systemsData.objectives = systemsData.objectives.map(objective => ({
   tags: objective.tags || "",
   notes: objective.notes || "",
   linkedPlannerBlockId: objective.linkedPlannerBlockId || "",
+  linkedRoutineId: objective.linkedRoutineId || "",
   linkedHabitId: objective.linkedHabitId || "",
   linkedTrackerId: objective.linkedTrackerId || "",
+  linkedGoalId: objective.linkedGoalId || "",
   trackerLogAmount: objective.trackerLogAmount || "",
   completedDate: objective.completedDate || "",
   completedAt: objective.completedAt || "",
@@ -202,6 +235,8 @@ systemsData.logs = systemsData.logs.map(log => ({
   linkedTrackerId: log.linkedTrackerId || log.trackerId || "",
   linkedGoalId: log.linkedGoalId || "",
   linkedPlannerBlockId: log.linkedPlannerBlockId || "",
+  linkedRoutineId: log.linkedRoutineId || "",
+  linkedObjectiveId: log.linkedObjectiveId || "",
   logSource: log.logSource || inferLegacyLogSource(log),
   plannerAutoLogKey: log.plannerAutoLogKey || "",
   inactive: Boolean(log.inactive)
@@ -235,6 +270,18 @@ scheduleData.blocks.forEach(block => {
   if (!block.type) block.type = block.routineId ? "routine" : "task";
   if (!block.category) block.category = "Personal";
   if (!block.notes) block.notes = "";
+  block.linkedRoutineId = block.linkedRoutineId || block.routineId || "";
+  block.routineId = block.routineId || block.linkedRoutineId || "";
+  block.linkedHabitId = block.linkedHabitId || block.systemHabitId || "";
+  block.systemHabitId = block.systemHabitId || block.linkedHabitId || "";
+  block.linkedTrackerId = block.linkedTrackerId || block.systemTrackerId || "";
+  block.systemTrackerId = block.systemTrackerId || block.linkedTrackerId || "";
+  block.linkedGoalId = block.linkedGoalId || block.systemGoalId || "";
+  block.systemGoalId = block.systemGoalId || block.linkedGoalId || "";
+  block.linkedObjectiveId = block.linkedObjectiveId || block.systemObjectiveId || "";
+  block.systemObjectiveId = block.systemObjectiveId || block.linkedObjectiveId || "";
+  block.trackerAutoLogMode = block.trackerAutoLogMode || "none";
+  block.trackerLogAmount = block.trackerLogAmount !== undefined && block.trackerLogAmount !== null ? String(block.trackerLogAmount) : "";
 });
 
 scheduleData.routines.forEach(routine => {
@@ -248,7 +295,17 @@ scheduleData.routines.forEach(routine => {
   if (!Array.isArray(routine.completedDates)) routine.completedDates = [];
   if (typeof routine.streak !== "number") routine.streak = 0;
   if (typeof routine.autoAdd !== "boolean") routine.autoAdd = false;
+  routine.linkedHabitId = routine.linkedHabitId || "";
+  routine.linkedTrackerId = routine.linkedTrackerId || "";
+  routine.linkedGoalId = routine.linkedGoalId || "";
+  routine.linkedObjectiveId = routine.linkedObjectiveId || "";
+  routine.category = routine.category || routine.type || "Custom";
+  routine.syncFutureBlocks = Boolean(routine.syncFutureBlocks);
+  routine.trackerAutoLogMode = routine.trackerAutoLogMode || "none";
+  routine.trackerLogAmount = routine.trackerLogAmount !== undefined && routine.trackerLogAmount !== null ? String(routine.trackerLogAmount) : "";
 });
+
+collectExistingUnitsIntoSettings();
 
 function saveScheduleData() {
   localStorage.setItem("flowScheduleData", JSON.stringify(scheduleData));
@@ -275,6 +332,7 @@ let routineCopySourceDay = null;
 let editingMetricIndex = null;
 let editingLogIndex = null;
 let manualLogTrackerId = null;
+let editingObjectiveIndex = null;
 let trackerCategoryFilter = "All";
 let completedObjectiveFilter = "All";
 let activePlannerSection = "Day";
@@ -307,6 +365,49 @@ function saveSocialData() {
 function saveSystemsData() {
   localStorage.setItem("flowSystemsData", JSON.stringify(systemsData));
   syncSupabaseData();
+}
+
+function getPlannerBlockHabitId(block) {
+  return block?.linkedHabitId || block?.systemHabitId || "";
+}
+
+function getPlannerBlockTrackerId(block) {
+  return block?.linkedTrackerId || block?.systemTrackerId || "";
+}
+
+function getPlannerBlockGoalId(block) {
+  return block?.linkedGoalId || block?.systemGoalId || "";
+}
+
+function getPlannerBlockObjectiveId(block) {
+  return block?.linkedObjectiveId || block?.systemObjectiveId || "";
+}
+
+function getLinkedItemName(collection, id, fallback = "") {
+  if (!id) return "";
+  const item = collection.find(entry => entry.id === id);
+  return item ? (item.name || item.title || fallback) : fallback;
+}
+
+function renderLinkOptions(collection, selectedId = "", emptyLabel = "None") {
+  return `<option value="">${emptyLabel}</option>${collection.map(item =>
+    `<option value="${escapeHTML(item.id)}" ${item.id === selectedId ? "selected" : ""}>${escapeHTML(item.name || item.title || "Untitled")}</option>`
+  ).join("")}`;
+}
+
+function renderConnectionBadges(links = {}) {
+  const badges = [
+    links.routineId ? ["Routine", getLinkedItemName(scheduleData.routines, links.routineId)] : null,
+    links.habitId ? ["Habit", getLinkedItemName(systemsData.habits, links.habitId)] : null,
+    links.trackerId ? ["Tracker", getLinkedItemName(systemsData.trackers, links.trackerId)] : null,
+    links.goalId ? ["Goal", getLinkedItemName(systemsData.goals, links.goalId)] : null,
+    links.objectiveId ? ["Objective", getLinkedItemName(systemsData.objectives, links.objectiveId)] : null,
+    links.plannerBlockId ? ["Planner", getLinkedItemName(scheduleData.blocks, links.plannerBlockId)] : null
+  ].filter(item => item && item[1]);
+  if (!badges.length) return "";
+  return `<div class="linked-badge-row">${badges.map(([label, name]) =>
+    `<span class="linked-badge" title="${escapeHTML(label)}">${escapeHTML(label)}: ${escapeHTML(name)}</span>`
+  ).join("")}</div>`;
 }
 
 function syncSupabaseData() {
@@ -484,6 +585,29 @@ const pages = {
           <div id="dayTimeRows"></div>
         </div>
         <textarea id="routineTasks" placeholder="Tasks/steps, one per line"></textarea>
+        <details class="advanced-options link-options" open>
+          <summary>Linked items and sync</summary>
+          <label class="muted-text small">Linked habit</label>
+          <select id="routineLinkedHabit">${renderLinkOptions(systemsData.habits, "", "No linked habit")}</select>
+          <label class="muted-text small">Linked tracker</label>
+          <select id="routineLinkedTracker">${renderLinkOptions(systemsData.trackers, "", "No linked tracker")}</select>
+          <label class="muted-text small">Linked goal</label>
+          <select id="routineLinkedGoal">${renderLinkOptions(systemsData.goals, "", "No linked goal")}</select>
+          <label class="muted-text small">Linked objective</label>
+          <select id="routineLinkedObjective">${renderLinkOptions(systemsData.objectives, "", "No linked objective")}</select>
+          <div class="habit-meta-row">
+            <select id="routineTrackerAutoMode">
+              <option value="none">Tracker logging off</option>
+              <option value="fixed">Auto-log fixed amount</option>
+              <option value="duration">Auto-log duration</option>
+            </select>
+            <input id="routineTrackerLogAmount" type="number" step="any" placeholder="Fixed amount">
+          </div>
+          <label class="inline-check">
+            <input type="checkbox" id="routineSyncFutureBlocks">
+            Update future blocks from this routine?
+          </label>
+        </details>
         <textarea id="routineNotes" placeholder="Notes"></textarea>
         <label class="inline-check">
           <input type="checkbox" id="routineAutoAdd">
@@ -491,8 +615,8 @@ const pages = {
         </label>
         <button id="routineSaveButton" onclick="saveRoutine()">Save Routine</button>
         <button class="secondary-btn" onclick="resetRoutineForm()">Clear Routine Form</button>
-        <button onclick="autoFillSelectedDay()">Auto-fill Selected Day</button>
-        <button onclick="autoFillThisWeek()">Auto-fill This Week</button>
+        <button onclick="autoFillSelectedDay()">Fill Selected Date</button>
+        <button onclick="autoFillThisWeek()">Fill This Week</button>
       </div>
       <div class="card">
         <h3>Saved Routines</h3>
@@ -502,7 +626,7 @@ const pages = {
   `,
 
   Systems: () => `
-    ${renderSubTabs("Systems", ["Overview", "Habits", "Trackers"], activeSystemsSection)}
+    ${renderSubTabs("Systems", ["Overview", "Habits", "Trackers", "Objectives", "Activity"], activeSystemsSection)}
     ${renderSystemsSheet()}
     ${systemsAddMenuOpen ? renderSystemsAddMenu() : ""}
     <div class="systems-hero card">
@@ -516,7 +640,7 @@ const pages = {
     ${activeSystemsSection === "Overview" ? `
       <div class="systems-dashboard-grid">
         <div class="card wide-card">
-          <h3>Overview</h3>
+          <h3>Systems Dashboard</h3>
           <div id="systemsDashboard"></div>
         </div>
         <div class="card">
@@ -524,6 +648,10 @@ const pages = {
           <div id="habitsList"></div>
         </div>
         <div class="card">
+          <h3>Activity Feed</h3>
+          <div id="activityFeed"></div>
+        </div>
+        <div class="card wide-card">
           <h3>Tracker Forecasts</h3>
           <div id="trackersUnifiedList"></div>
         </div>
@@ -553,6 +681,30 @@ const pages = {
       <div id="trackersSummaryCards" class="card trackers-summary-cards"></div>
       <div class="card list-controls" id="trackerCategoryFilterMount"></div>
       <div id="trackersUnifiedList"></div>
+    ` : ""}
+    ${activeSystemsSection === "Objectives" ? `
+      <div class="section-toolbar card">
+        <div>
+          <h3>Tasks & Objectives</h3>
+          <p class="muted-text">Actionable work that can complete planner blocks, habits, and tracker progress.</p>
+        </div>
+        <button onclick="openSystemsForm('objective')">Add Objective</button>
+      </div>
+      <div class="card">
+        <div id="systemsObjectives"></div>
+      </div>
+    ` : ""}
+    ${activeSystemsSection === "Activity" ? `
+      <div class="section-toolbar card">
+        <div>
+          <h3>Activity Feed</h3>
+          <p class="muted-text">Completed habits, planner blocks, tracker logs, objectives, and streak events in one timeline.</p>
+        </div>
+        <button onclick="openSystemsForm('log')">Add Log</button>
+      </div>
+      <div class="card">
+        <div id="activityFeed"></div>
+      </div>
     ` : ""}
     <button class="floating-add-btn systems-fab" onclick="openSystemsAddMenu()">+</button>
   `,
@@ -928,6 +1080,30 @@ function renderPlannerBlockSheet() {
           <option>Personal</option>
           <option>Errand</option>
         </select>
+        <details class="advanced-options link-options" open>
+          <summary>Linked items</summary>
+          <label class="muted-text small">Routine</label>
+          <select id="blockLinkedRoutine">${renderLinkOptions(scheduleData.routines, "", "No linked routine")}</select>
+          <label class="muted-text small">Habit</label>
+          <select id="blockLinkedHabit">${renderLinkOptions(systemsData.habits, "", "No linked habit")}</select>
+          <label class="muted-text small">Tracker</label>
+          <select id="blockLinkedTracker" onchange="syncBlockTrackerDefaults()">${renderLinkOptions(systemsData.trackers, "", "No linked tracker")}</select>
+          <label class="muted-text small">Goal</label>
+          <select id="blockLinkedGoal">${renderLinkOptions(systemsData.goals, "", "No linked goal")}</select>
+          <label class="muted-text small">Objective</label>
+          <select id="blockLinkedObjective">${renderLinkOptions(systemsData.objectives, "", "No linked objective")}</select>
+          <div class="habit-meta-row">
+            <select id="blockTrackerAutoMode">
+              <option value="none">Tracker logging off</option>
+              <option value="fixed">Auto-log fixed amount on completion</option>
+              <option value="duration">Auto-log block duration on completion</option>
+            </select>
+            <input id="blockTrackerLogAmount" type="number" step="any" placeholder="Fixed amount">
+          </div>
+          <label class="inline-check"><input type="checkbox" id="blockCreateHabit"> Create linked habit from this block</label>
+          <label class="inline-check"><input type="checkbox" id="blockCreateTracker"> Create linked tracker from this block</label>
+          <label class="inline-check"><input type="checkbox" id="blockCreateObjective"> Create linked objective from this block</label>
+        </details>
         <textarea id="blockNotes" placeholder="Notes"></textarea>
         <textarea id="blockTasks" placeholder="Tasks, one per line"></textarea>
         <button id="blockSaveButton" onclick="addTimeBlock()">${editingBlockIndex === null ? "Save Time Block" : "Update Time Block"}</button>
@@ -944,6 +1120,12 @@ function addTimeBlock() {
   const end = document.getElementById("blockEnd")?.value || "";
   const category = document.getElementById("blockCategory")?.value || "Personal";
   const notes = document.getElementById("blockNotes")?.value.trim() || "";
+  const createdLinks = maybeCreateLinkedItemsForBlock(title, category);
+  const linkedRoutineId = document.getElementById("blockLinkedRoutine")?.value || "";
+  const linkedHabitId = createdLinks.habitId || document.getElementById("blockLinkedHabit")?.value || "";
+  const linkedTrackerId = createdLinks.trackerId || document.getElementById("blockLinkedTracker")?.value || "";
+  const linkedGoalId = document.getElementById("blockLinkedGoal")?.value || "";
+  const linkedObjectiveId = createdLinks.objectiveId || document.getElementById("blockLinkedObjective")?.value || "";
   const tasks = (document.getElementById("blockTasks")?.value || "")
     .split("\n")
     .map(task => task.trim())
@@ -967,6 +1149,18 @@ function addTimeBlock() {
     end,
     category,
     notes,
+    routineId: linkedRoutineId || existing?.routineId || "",
+    linkedRoutineId: linkedRoutineId || existing?.linkedRoutineId || "",
+    systemHabitId: linkedHabitId,
+    linkedHabitId,
+    systemTrackerId: linkedTrackerId,
+    linkedTrackerId,
+    systemGoalId: linkedGoalId,
+    linkedGoalId,
+    systemObjectiveId: linkedObjectiveId,
+    linkedObjectiveId,
+    trackerAutoLogMode: document.getElementById("blockTrackerAutoMode")?.value || "none",
+    trackerLogAmount: document.getElementById("blockTrackerLogAmount")?.value || "",
     type: existing ? existing.type || "task" : "task",
     completed: existing ? existing.completed : false,
     tasks: tasks.length ? mergeEditedTasks(tasks, previousTasks) : previousTasks
@@ -978,6 +1172,16 @@ function addTimeBlock() {
     scheduleData.blocks[editingBlockIndex] = block;
     editingBlockIndex = null;
   }
+  if (createdLinks.objectiveId) {
+    const objective = systemsData.objectives.find(item => item.id === createdLinks.objectiveId);
+    if (objective) objective.linkedPlannerBlockId = block.id;
+    saveSystemsData();
+  }
+  if (createdLinks.habitId) {
+    const habit = systemsData.habits.find(item => item.id === createdLinks.habitId);
+    if (habit) habit.linkedPlannerBlockId = block.id;
+    saveSystemsData();
+  }
 
   selectedPlannerDate = date;
   visiblePlannerMonth = date.slice(0, 7);
@@ -987,6 +1191,76 @@ function addTimeBlock() {
   activePlannerSection = "Day";
   main.innerHTML = getPageHTML("Planner");
   renderPlanner();
+}
+
+function maybeCreateLinkedItemsForBlock(title, category) {
+  const links = { habitId: "", trackerId: "", objectiveId: "" };
+  if (document.getElementById("blockCreateHabit")?.checked) {
+    const habit = {
+      id: createId("habit"),
+      name: title,
+      category,
+      frequency: "Daily",
+      targetFrequency: "Daily",
+      target: title,
+      unit: "times",
+      linkedGoalId: document.getElementById("blockLinkedGoal")?.value || "",
+      linkedTrackerId: "",
+      linkedRoutineId: document.getElementById("blockLinkedRoutine")?.value || "",
+      linkedPlannerBlockId: "",
+      autoLogTrackerOnComplete: false,
+      trackerLogAmount: "",
+      notes: "Created from Planner block",
+      completions: [],
+      skippedDates: [],
+      completionHistory: [],
+      paused: false
+    };
+    systemsData.habits.push(habit);
+    links.habitId = habit.id;
+  }
+  if (document.getElementById("blockCreateTracker")?.checked) {
+    const tracker = normalizeUnifiedTrackerRecord({
+      id: createId("tracker"),
+      name: title,
+      category: category || "Custom",
+      unit: "hours",
+      startValue: "0",
+      currentValue: "0",
+      targetValue: "",
+      linkedHabitId: links.habitId || document.getElementById("blockLinkedHabit")?.value || "",
+      autoLogOnPlannerComplete: true,
+      autoLogAmount: "1",
+      logValueMode: "increment",
+      notes: "Created from Planner block"
+    });
+    systemsData.trackers.push(tracker);
+    links.trackerId = tracker.id;
+    const habit = links.habitId ? systemsData.habits.find(h => h.id === links.habitId) : null;
+    if (habit) habit.linkedTrackerId = tracker.id;
+  }
+  if (document.getElementById("blockCreateObjective")?.checked) {
+    const objective = createObjectiveRecord({
+      title,
+      category,
+      linkedPlannerBlockId: "",
+      linkedRoutineId: document.getElementById("blockLinkedRoutine")?.value || "",
+      linkedHabitId: links.habitId || document.getElementById("blockLinkedHabit")?.value || "",
+      linkedTrackerId: links.trackerId || document.getElementById("blockLinkedTracker")?.value || "",
+      linkedGoalId: document.getElementById("blockLinkedGoal")?.value || ""
+    });
+    systemsData.objectives.push(objective);
+    links.objectiveId = objective.id;
+  }
+  if (links.habitId || links.trackerId || links.objectiveId) saveSystemsData();
+  return links;
+}
+
+function syncBlockTrackerDefaults() {
+  const tracker = systemsData.trackers.find(t => t.id === document.getElementById("blockLinkedTracker")?.value);
+  if (!tracker) return;
+  const amount = document.getElementById("blockTrackerLogAmount");
+  if (amount && !amount.value) amount.value = tracker.autoLogAmount || "1";
 }
 
 function mergeEditedTasks(newTasks, oldTasks) {
@@ -1018,6 +1292,13 @@ function fillEditingTimeBlockForm() {
   document.getElementById("blockStart").value = block.start || "";
   document.getElementById("blockEnd").value = block.end || "";
   document.getElementById("blockCategory").value = block.category || "Personal";
+  if (document.getElementById("blockLinkedRoutine")) document.getElementById("blockLinkedRoutine").value = block.linkedRoutineId || block.routineId || "";
+  if (document.getElementById("blockLinkedHabit")) document.getElementById("blockLinkedHabit").value = getPlannerBlockHabitId(block);
+  if (document.getElementById("blockLinkedTracker")) document.getElementById("blockLinkedTracker").value = getPlannerBlockTrackerId(block);
+  if (document.getElementById("blockLinkedGoal")) document.getElementById("blockLinkedGoal").value = getPlannerBlockGoalId(block);
+  if (document.getElementById("blockLinkedObjective")) document.getElementById("blockLinkedObjective").value = getPlannerBlockObjectiveId(block);
+  if (document.getElementById("blockTrackerAutoMode")) document.getElementById("blockTrackerAutoMode").value = block.trackerAutoLogMode || "none";
+  if (document.getElementById("blockTrackerLogAmount")) document.getElementById("blockTrackerLogAmount").value = block.trackerLogAmount || "";
   document.getElementById("blockNotes").value = block.notes || "";
   document.getElementById("blockTasks").value = (block.tasks || []).map(task => task.text).join("\n");
   document.getElementById("blockSaveButton").textContent = "Update Time Block";
@@ -1203,6 +1484,13 @@ function renderVisualTimeBlock(block, index, isOverlapping, timelineStart, pxPer
           <span class="block-status ${block.completed ? "status-complete" : "status-open"}">${block.completed ? "Complete" : "Open"}</span>
           ${isOverlapping ? `<span class="overlap-pill">Overlap</span>` : ""}
         </div>
+        ${renderConnectionBadges({
+          routineId: block.linkedRoutineId || block.routineId,
+          habitId: getPlannerBlockHabitId(block),
+          trackerId: getPlannerBlockTrackerId(block),
+          goalId: getPlannerBlockGoalId(block),
+          objectiveId: getPlannerBlockObjectiveId(block)
+        })}
         ${renderTaskPreview(block)}
       </div>
       <div class="block-actions" onclick="event.stopPropagation()">
@@ -1256,7 +1544,7 @@ function toggleTaskComplete(blockIndex, taskIndex) {
   blk.completed = blk.tasks.length
     ? blk.tasks.every(item => item.completed)
     : blk.completed;
-  if (blk.completed && !wasComplete && blk.systemHabitId) {
+  if (blk.completed && !wasComplete && getPlannerBlockHabitId(blk)) {
     completeHabitFromPlannerBlock(blk);
     autoLogTrackersForPlannerBlock(blk);
   } else if (!blk.completed && wasComplete) {
@@ -1275,7 +1563,7 @@ function toggleBlockComplete(index) {
     ...task,
     completed: block.completed ? true : task.completed
   }));
-  if (block.completed && !wasComplete && block.systemHabitId) {
+  if (block.completed && !wasComplete && getPlannerBlockHabitId(block)) {
     completeHabitFromPlannerBlock(block);
     autoLogTrackersForPlannerBlock(block);
   } else if (!block.completed && wasComplete) {
@@ -1287,7 +1575,7 @@ function toggleBlockComplete(index) {
 }
 
 function completeHabitFromPlannerBlock(block) {
-  const habit = systemsData.habits.find(item => item.id === block.systemHabitId);
+  const habit = systemsData.habits.find(item => item.id === getPlannerBlockHabitId(block));
   if (!habit || habit.paused) return;
   const date = block.date || getTodayISO();
   if (!Array.isArray(habit.completions)) habit.completions = [];
@@ -1320,11 +1608,14 @@ function completeHabitFromPlannerBlock(block) {
       linkedTrackerId: "",
       linkedGoalId: "",
       linkedPlannerBlockId: block.id,
+      linkedRoutineId: block.linkedRoutineId || block.routineId || "",
+      linkedObjectiveId: getPlannerBlockObjectiveId(block),
       logSource: "habit",
       plannerAutoLogKey: "",
       inactive: false
     });
   }
+  autoCompleteObjectivesForHabit(habit);
   saveSystemsData();
 }
 
@@ -1782,6 +2073,7 @@ function createRoutinePlannerBlock(routine, date, range) {
   return {
     id: createId("block"),
     routineId: routine.id,
+    linkedRoutineId: routine.id,
     title: routine.name,
     date,
     start: range.start,
@@ -1789,9 +2081,46 @@ function createRoutinePlannerBlock(routine, date, range) {
     category: routine.type,
     notes: routine.notes || "",
     type: "routine",
+    systemHabitId: routine.linkedHabitId || "",
+    linkedHabitId: routine.linkedHabitId || "",
+    systemTrackerId: routine.linkedTrackerId || "",
+    linkedTrackerId: routine.linkedTrackerId || "",
+    systemGoalId: routine.linkedGoalId || "",
+    linkedGoalId: routine.linkedGoalId || "",
+    systemObjectiveId: routine.linkedObjectiveId || "",
+    linkedObjectiveId: routine.linkedObjectiveId || "",
+    trackerAutoLogMode: routine.trackerAutoLogMode || "none",
+    trackerLogAmount: routine.trackerLogAmount || "",
     completed: false,
     tasks: routine.tasks.map(task => ({ text: task, completed: false }))
   };
+}
+
+function updateFutureBlocksFromRoutine(routine) {
+  const today = getTodayISO();
+  scheduleData.blocks.forEach(block => {
+    if ((block.routineId || block.linkedRoutineId) !== routine.id) return;
+    if ((block.date || "") < today) return;
+    block.title = routine.name;
+    block.category = routine.type || routine.category || block.category;
+    block.notes = routine.notes || "";
+    block.tasks = (routine.tasks || []).map(task => {
+      const existing = (block.tasks || []).find(item => item.text === task);
+      return { text: task, completed: Boolean(existing?.completed) };
+    });
+    block.linkedRoutineId = routine.id;
+    block.routineId = routine.id;
+    block.systemHabitId = routine.linkedHabitId || "";
+    block.linkedHabitId = routine.linkedHabitId || "";
+    block.systemTrackerId = routine.linkedTrackerId || "";
+    block.linkedTrackerId = routine.linkedTrackerId || "";
+    block.systemGoalId = routine.linkedGoalId || "";
+    block.linkedGoalId = routine.linkedGoalId || "";
+    block.systemObjectiveId = routine.linkedObjectiveId || "";
+    block.linkedObjectiveId = routine.linkedObjectiveId || "";
+    block.trackerAutoLogMode = routine.trackerAutoLogMode || "none";
+    block.trackerLogAmount = routine.trackerLogAmount || "";
+  });
 }
 
 function addRoutineBlocksForDate(routine, date, dayIndex) {
@@ -1926,6 +2255,14 @@ function saveRoutine() {
     dayTimes,
     timesByDay: buildRoutineTimesByDay(dayTimes),
     tasks,
+    linkedHabitId: document.getElementById("routineLinkedHabit")?.value || "",
+    linkedTrackerId: document.getElementById("routineLinkedTracker")?.value || "",
+    linkedGoalId: document.getElementById("routineLinkedGoal")?.value || "",
+    linkedObjectiveId: document.getElementById("routineLinkedObjective")?.value || "",
+    category: type,
+    trackerAutoLogMode: document.getElementById("routineTrackerAutoMode")?.value || "none",
+    trackerLogAmount: document.getElementById("routineTrackerLogAmount")?.value || "",
+    syncFutureBlocks: Boolean(document.getElementById("routineSyncFutureBlocks")?.checked),
     notes,
     autoAdd,
     completions: existing ? (existing.completions || {}) : {},
@@ -1937,6 +2274,9 @@ function saveRoutine() {
     scheduleData.routines.push(routine);
   } else {
     scheduleData.routines[editingRoutineIndex] = routine;
+    if (routine.syncFutureBlocks || confirm("Update future blocks from this routine?")) {
+      updateFutureBlocksFromRoutine(routine);
+    }
   }
 
   editingRoutineIndex = null;
@@ -1974,6 +2314,12 @@ function renderRoutines() {
             <p>${escapeHTML(routine.type)}</p>
             <p>${renderRoutineScheduleSummary(routine)}</p>
             ${routine.autoAdd ? `<span class="auto-add-badge">Auto-add on</span>` : ""}
+            ${renderConnectionBadges({
+              habitId: routine.linkedHabitId,
+              trackerId: routine.linkedTrackerId,
+              goalId: routine.linkedGoalId,
+              objectiveId: routine.linkedObjectiveId
+            })}
             ${stepsTotal ? `
               <div class="routine-steps">
                 <p class="steps-label"><strong>Today's steps</strong> <span class="muted-text">${stepsCompleted}/${stepsTotal}</span></p>
@@ -2085,6 +2431,13 @@ function fillEditingRoutineForm() {
   if (sameTimeEl) sameTimeEl.checked = !usesCustomRoutineTimes(routine);
   const autoAddEl = document.getElementById("routineAutoAdd");
   if (autoAddEl) autoAddEl.checked = routine.autoAdd || false;
+  if (document.getElementById("routineLinkedHabit")) document.getElementById("routineLinkedHabit").value = routine.linkedHabitId || "";
+  if (document.getElementById("routineLinkedTracker")) document.getElementById("routineLinkedTracker").value = routine.linkedTrackerId || "";
+  if (document.getElementById("routineLinkedGoal")) document.getElementById("routineLinkedGoal").value = routine.linkedGoalId || "";
+  if (document.getElementById("routineLinkedObjective")) document.getElementById("routineLinkedObjective").value = routine.linkedObjectiveId || "";
+  if (document.getElementById("routineTrackerAutoMode")) document.getElementById("routineTrackerAutoMode").value = routine.trackerAutoLogMode || "none";
+  if (document.getElementById("routineTrackerLogAmount")) document.getElementById("routineTrackerLogAmount").value = routine.trackerLogAmount || "";
+  if (document.getElementById("routineSyncFutureBlocks")) document.getElementById("routineSyncFutureBlocks").checked = Boolean(routine.syncFutureBlocks);
   document.querySelectorAll("input[name='routineDay']").forEach(input => {
     input.checked = routine.repeatDays.includes(Number(input.value));
   });
@@ -3541,6 +3894,7 @@ function setObjectiveStatus(index, status) {
     objective.completedAt = "";
   }
   saveSystemsData();
+  renderSystems();
   renderHome();
 }
 
@@ -3551,6 +3905,7 @@ function reopenObjective(index) {
   objective.completedDate = "";
   objective.completedAt = "";
   saveSystemsData();
+  renderSystems();
   renderHome();
 }
 
@@ -3562,6 +3917,7 @@ function deferObjective(index) {
   objective.deferredCount = (objective.deferredCount || 0) + 1;
   objective.updatedAt = new Date().toISOString();
   saveSystemsData();
+  renderSystems();
   renderHome();
 }
 
@@ -3572,32 +3928,61 @@ function toggleFocusObjective(index) {
   systemsData.objectives.forEach(item => item.focus = false);
   objective.focus = nextFocus;
   saveSystemsData();
+  renderSystems();
   renderHome();
 }
 
 function completeObjectiveIntegrations(objective) {
+  const today = getTodayISO();
+  if (objective.linkedPlannerBlockId) {
+    const block = scheduleData.blocks.find(item => item.id === objective.linkedPlannerBlockId);
+    if (block && !block.completed) {
+      block.completed = true;
+      block.tasks = (block.tasks || []).map(task => ({ ...task, completed: true }));
+      saveScheduleData();
+    }
+  }
+  if (objective.linkedHabitId) {
+    const habit = systemsData.habits.find(item => item.id === objective.linkedHabitId);
+    if (habit && !habit.completions.includes(today)) {
+      habit.completions.push(today);
+      if (!Array.isArray(habit.completionHistory)) habit.completionHistory = [];
+      habit.completionHistory.push({
+        date: today,
+        time: new Date().toTimeString().slice(0, 5),
+        plannerBlockId: objective.linkedPlannerBlockId || ""
+      });
+    }
+  }
   if (!objective.linkedTrackerId || !objective.trackerLogAmount) return;
   const tracker = systemsData.trackers.find(item => item.id === objective.linkedTrackerId);
   if (!tracker) return;
-  systemsData.logs.push({
-    id: createId("log"),
-    title: tracker.name,
-    type: tracker.category || "Custom",
-    valueType: tracker.category || "Custom",
-    value: String(objective.trackerLogAmount),
-    unit: tracker.unit || "",
-    date: getTodayISO(),
-    notes: `Objective complete — ${objective.title}`,
-    linkedHabitId: objective.linkedHabitId || "",
-    linkedItemType: "tracker",
-    linkedMetricId: "",
-    linkedTrackerId: tracker.id,
-    linkedGoalId: "",
-    linkedPlannerBlockId: objective.linkedPlannerBlockId || "",
-    logSource: "manual",
-    plannerAutoLogKey: "",
-    inactive: false
-  });
+  const dup = systemsData.logs.some(log =>
+    log.linkedObjectiveId === objective.id && getLogLinkedTrackerId(log) === tracker.id && log.date === today
+  );
+  if (!dup) {
+    systemsData.logs.push({
+      id: createId("log"),
+      title: tracker.name,
+      type: tracker.category || "Custom",
+      valueType: tracker.category || "Custom",
+      value: String(objective.trackerLogAmount),
+      unit: tracker.unit || "",
+      date: today,
+      notes: `Objective complete — ${objective.title}`,
+      linkedHabitId: objective.linkedHabitId || "",
+      linkedItemType: "tracker",
+      linkedMetricId: "",
+      linkedTrackerId: tracker.id,
+      linkedGoalId: objective.linkedGoalId || "",
+      linkedPlannerBlockId: objective.linkedPlannerBlockId || "",
+      linkedRoutineId: objective.linkedRoutineId || "",
+      linkedObjectiveId: objective.id,
+      logSource: "manual",
+      plannerAutoLogKey: "",
+      inactive: false
+    });
+  }
   recalcTrackerCurrentFromLogs(tracker);
 }
 
@@ -3960,7 +4345,8 @@ function renderSystemsSheet() {
     log: editingLogIndex === null ? "Add Log" : "Edit Log",
     tracker: editingTrackerIndex === null ? "Add Tracker" : "Edit Tracker",
     trackerLog: "Manual tracker log",
-    goal: editingGoalIndex === null ? "Add Tracker" : "Edit Tracker"
+    goal: editingGoalIndex === null ? "Add Goal" : "Edit Goal",
+    objective: editingObjectiveIndex === null ? "Add Objective" : "Edit Objective"
   };
 
   return `
@@ -3976,6 +4362,7 @@ function renderSystemsSheet() {
         ${activeSystemsForm === "tracker" ? renderTrackerFormFields() : ""}
         ${activeSystemsForm === "trackerLog" ? renderTrackerManualLogFormFields() : ""}
         ${activeSystemsForm === "goal" ? renderGoalFormFields() : ""}
+        ${activeSystemsForm === "objective" ? renderObjectiveFormFields() : ""}
       </div>
     </div>
   `;
@@ -4013,6 +4400,7 @@ function renderHabitFormFields() {
       <option value="Weekly">Target frequency: Weekly</option>
       <option value="Custom">Target frequency: Custom</option>
     </select>
+<<<<<<< HEAD
     
     <p style="margin-top:12px;margin-bottom:4px;font-weight:600;font-size:13px">Completion Type</p>
     <div class="completion-type-toggle">
@@ -4067,17 +4455,37 @@ function renderHabitFormFields() {
       <select id="habitUnitOld">
         <option value="">Unit (legacy)</option>
       </select>
+=======
+    <input id="habitTarget" placeholder="Target (e.g. 30, 8 glasses)">
+    <div class="habit-meta-row">
+      ${renderUnitComboInput("habitUnit")}
+>>>>>>> 406e2f6 (codex)
       <select id="habitLinkedGoalId">
         <option value="">Link to goal</option>
         ${systemsData.goals.map(g => `<option value="${g.id}">${escapeHTML(g.name)}</option>`).join("")}
       </select>
     </div>
+<<<<<<< HEAD
     <div class="habit-meta-row">
       <select id="habitLinkedGoalIdNew">
         <option value="">Link to goal</option>
         ${systemsData.goals.map(g => `<option value="${g.id}">${escapeHTML(g.name)}</option>`).join("")}
       </select>
     </div>
+=======
+    ${renderSharedUnitDatalist()}
+    <details class="advanced-options link-options">
+      <summary>More links</summary>
+      <label class="muted-text small">Linked tracker</label>
+      <select id="habitLinkedTrackerId">${renderLinkOptions(systemsData.trackers, "", "No linked tracker")}</select>
+      <label class="muted-text small">Linked routine</label>
+      <select id="habitLinkedRoutineId">${renderLinkOptions(scheduleData.routines, "", "No linked routine")}</select>
+      <label class="muted-text small">Linked planner block</label>
+      <select id="habitLinkedPlannerBlockId">${renderLinkOptions(scheduleData.blocks.filter(b => !b.isBuffer), "", "No linked planner block")}</select>
+      <label class="inline-check"><input type="checkbox" id="habitAutoLogTracker"> Update linked tracker when completed</label>
+      <input id="habitTrackerLogAmount" type="number" step="any" placeholder="Tracker amount on habit completion">
+    </details>
+>>>>>>> 406e2f6 (codex)
     <textarea id="habitNotes" placeholder="Notes"></textarea>
     <button id="habitSaveButton" onclick="saveHabit()">${editingHabitIndex === null ? "Save Habit" : "Update Habit"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
@@ -4105,8 +4513,9 @@ function renderLogFormFields() {
     </select>
     <div class="habit-meta-row">
       <input id="logValue" placeholder="Amount">
-      <input id="logUnit" placeholder="Unit">
+      ${renderUnitComboInput("logUnit")}
     </div>
+    ${renderSharedUnitDatalist()}
     <input id="logDate" type="date">
     <input id="logTitle" type="hidden">
     <input id="logType" type="hidden">
@@ -4131,8 +4540,8 @@ function renderTrackerFormFields() {
     <input id="trackerCategory" list="trackerCategoryList" autocomplete="off" placeholder="e.g. Counter, MMA…">
     <datalist id="trackerCategoryList">${buildTrackerCategoryDatalistInnerHtml()}</datalist>
     <label class="muted-text small">Unit</label>
-    <input id="trackerUnit" list="trackerUnitList" autocomplete="off" placeholder="e.g. classes, hours…">
-    <datalist id="trackerUnitList">${buildTrackerUnitDatalistInnerHtml()}</datalist>
+    ${renderUnitComboInput("trackerUnit", "", "e.g. classes, hours...")}
+    ${renderSharedUnitDatalist()}
     <div class="habit-meta-row">
       <input id="trackerStartValue" type="number" step="any" placeholder="Start value">
       <input id="trackerCurrentValue" type="number" step="any" placeholder="Current value">
@@ -4162,10 +4571,15 @@ function renderTrackerFormFields() {
         <option value="">No linked habit</option>
         ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
       </select>
+      <label class="muted-text small">Additional links</label>
+      <select id="trackerLinkedGoal">${renderLinkOptions(systemsData.goals, "", "No linked goal")}</select>
+      <select id="trackerLinkedRoutine">${renderLinkOptions(scheduleData.routines, "", "No linked routine")}</select>
+      <select id="trackerLinkedPlanner">${renderLinkOptions(scheduleData.blocks.filter(b => !b.isBuffer), "", "No linked planner block")}</select>
+      <select id="trackerLinkedObjective">${renderLinkOptions(systemsData.objectives, "", "No linked objective")}</select>
       <label class="inline-check"><input type="checkbox" id="trackerAutoLogPlanner"> Auto-log when linked habit’s planner block is completed</label>
       <div class="habit-meta-row">
         <input id="trackerAutoLogAmount" type="number" step="any" placeholder="Auto-log amount" value="1">
-        <input id="trackerAutoLogUnit" placeholder="Auto-log unit">
+        ${renderUnitComboInput("trackerAutoLogUnit", "", "Auto-log unit")}
       </div>
       <label class="inline-check"><input type="checkbox" id="trackerPreventDupAuto" checked> Prevent duplicate auto-logs</label>
       <textarea id="trackerMilestones" placeholder="Milestones, one per line"></textarea>
@@ -4183,7 +4597,11 @@ function renderTrackerManualLogFormFields() {
   return `
     <p class="muted-text">Manual entry for <strong>${escapeHTML(tracker.name)}</strong></p>
     <input id="manualLogDate" type="date" onchange="refreshManualLogPlannerBlockOptions()">
-    <input id="manualLogValue" type="number" step="any" placeholder="Value / amount" required>
+    <div class="habit-meta-row">
+      <input id="manualLogValue" type="number" step="any" placeholder="Value / amount" required>
+      ${renderUnitComboInput("manualLogUnit", tracker.unit || "", "Unit")}
+    </div>
+    ${renderSharedUnitDatalist()}
     <textarea id="manualLogNotes" placeholder="Notes"></textarea>
     <label class="muted-text small">Optional linked habit</label>
     <select id="manualLogLinkedHabit">
@@ -4220,6 +4638,7 @@ function saveTrackerManualLog() {
     return;
   }
   const date = document.getElementById("manualLogDate")?.value || getTodayISO();
+  const unit = document.getElementById("manualLogUnit")?.value.trim() || tracker.unit || "";
   const notes = document.getElementById("manualLogNotes")?.value.trim() || "";
   const habitId = document.getElementById("manualLogLinkedHabit")?.value || "";
   const blockId = document.getElementById("manualLogPlannerBlock")?.value || "";
@@ -4230,19 +4649,22 @@ function saveTrackerManualLog() {
     type: tracker.category || "Custom",
     valueType: tracker.category || "Custom",
     value,
-    unit: tracker.unit || "",
+    unit,
     date,
     notes: notes || "Manual tracker log",
     linkedHabitId: habitId,
     linkedItemType: "tracker",
     linkedMetricId: "",
     linkedTrackerId: tracker.id,
-    linkedGoalId: "",
+    linkedGoalId: tracker.linkedGoalId || getPlannerBlockGoalId(block) || "",
     linkedPlannerBlockId: blockId,
+    linkedRoutineId: tracker.linkedRoutineId || block?.linkedRoutineId || block?.routineId || "",
+    linkedObjectiveId: tracker.linkedObjectiveId || getPlannerBlockObjectiveId(block) || "",
     logSource: "manual",
     plannerAutoLogKey: "",
     inactive: false
   });
+  rememberTrackerUnit(unit);
   recalcTrackerCurrentFromLogs(tracker);
   manualLogTrackerId = null;
   activeSystemsForm = null;
@@ -4285,8 +4707,9 @@ function renderGoalFormFields() {
     </div>
     <div class="habit-meta-row">
       <input id="goalTargetValue" type="number" placeholder="Target amount / limit / maximum">
-      <input id="goalUnit" placeholder="Unit">
+      ${renderUnitComboInput("goalUnit")}
     </div>
+    ${renderSharedUnitDatalist()}
     <select id="goalResetCycle">
       <option value="daily">Reset cycle: daily</option>
       <option value="weekly">Reset cycle: weekly</option>
@@ -4305,11 +4728,191 @@ function renderGoalFormFields() {
       <option value="">No linked habit</option>
       ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
     </select>
+    <details class="advanced-options link-options">
+      <summary>More links</summary>
+      <label class="muted-text small">Linked routine</label>
+      <select id="goalLinkedRoutine">${renderLinkOptions(scheduleData.routines, "", "No linked routine")}</select>
+      <label class="muted-text small">Linked planner block</label>
+      <select id="goalLinkedPlanner">${renderLinkOptions(scheduleData.blocks.filter(b => !b.isBuffer), "", "No linked planner block")}</select>
+      <label class="muted-text small">Linked objective</label>
+      <select id="goalLinkedObjective">${renderLinkOptions(systemsData.objectives, "", "No linked objective")}</select>
+    </details>
     <textarea id="goalMilestones" placeholder="Milestones, one per line"></textarea>
     <textarea id="goalNotes" placeholder="Notes"></textarea>
     <button id="goalSaveButton" onclick="saveGoal()">${editingGoalIndex === null ? "Save Goal" : "Update Goal"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
   `;
+}
+
+function createObjectiveRecord(overrides = {}) {
+  return {
+    id: overrides.id || createId("objective"),
+    title: overrides.title || "",
+    type: overrides.type || "Task",
+    status: overrides.status || "Not started",
+    priority: overrides.priority || "Medium",
+    dueDate: overrides.dueDate || getTodayISO(),
+    dueTime: overrides.dueTime || "",
+    estimatedMinutes: overrides.estimatedMinutes || "",
+    category: overrides.category || "",
+    tags: overrides.tags || "",
+    notes: overrides.notes || "",
+    linkedPlannerBlockId: overrides.linkedPlannerBlockId || "",
+    linkedRoutineId: overrides.linkedRoutineId || "",
+    linkedHabitId: overrides.linkedHabitId || "",
+    linkedTrackerId: overrides.linkedTrackerId || "",
+    linkedGoalId: overrides.linkedGoalId || "",
+    trackerLogAmount: overrides.trackerLogAmount || "",
+    completedDate: overrides.completedDate || "",
+    completedAt: overrides.completedAt || "",
+    autoCompleteFromPlanner: overrides.autoCompleteFromPlanner !== false,
+    autoCompleteFromHabit: overrides.autoCompleteFromHabit !== false,
+    focus: Boolean(overrides.focus),
+    recurring: overrides.recurring || "",
+    subtasks: Array.isArray(overrides.subtasks) ? overrides.subtasks : []
+  };
+}
+
+function renderObjectiveFormFields() {
+  return `
+    <input id="objectiveTitle" placeholder="Task / objective title">
+    <div class="habit-meta-row">
+      <select id="objectiveType">
+        <option>Task</option>
+        <option>Objective</option>
+        <option>Quick Win</option>
+      </select>
+      <select id="objectivePriority">
+        <option>Priority</option>
+        <option>High</option>
+        <option>Medium</option>
+        <option>Low</option>
+      </select>
+    </div>
+    <div class="habit-meta-row">
+      <input id="objectiveDueDate" type="date">
+      <input id="objectiveDueTime" type="time">
+    </div>
+    <input id="objectiveCategory" placeholder="System/category">
+    <input id="objectiveEstimatedMinutes" type="number" min="0" step="5" placeholder="Estimated minutes">
+    <details class="advanced-options link-options" open>
+      <summary>Linked items</summary>
+      <label class="muted-text small">Planner block</label>
+      <select id="objectiveLinkedPlanner">${renderLinkOptions(scheduleData.blocks.filter(b => !b.isBuffer), "", "No linked planner block")}</select>
+      <label class="muted-text small">Routine</label>
+      <select id="objectiveLinkedRoutine">${renderLinkOptions(scheduleData.routines, "", "No linked routine")}</select>
+      <label class="muted-text small">Habit</label>
+      <select id="objectiveLinkedHabit">${renderLinkOptions(systemsData.habits, "", "No linked habit")}</select>
+      <label class="muted-text small">Tracker</label>
+      <select id="objectiveLinkedTracker">${renderLinkOptions(systemsData.trackers, "", "No linked tracker")}</select>
+      <label class="muted-text small">Goal</label>
+      <select id="objectiveLinkedGoal">${renderLinkOptions(systemsData.goals, "", "No linked goal")}</select>
+      <input id="objectiveTrackerLogAmount" type="number" step="any" placeholder="Tracker amount on completion">
+      <label class="inline-check"><input type="checkbox" id="objectiveAutoPlanner" checked> Complete when planner block is completed</label>
+      <label class="inline-check"><input type="checkbox" id="objectiveAutoHabit" checked> Complete when linked habit is completed</label>
+    </details>
+    <textarea id="objectiveNotes" placeholder="Notes"></textarea>
+    <button id="objectiveSaveButton" onclick="saveObjectiveFromModal()">${editingObjectiveIndex === null ? "Save Objective" : "Update Objective"}</button>
+    <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
+  `;
+}
+
+function saveObjectiveFromModal() {
+  const title = document.getElementById("objectiveTitle")?.value.trim() || "";
+  if (!title) {
+    alert("Add an objective title.");
+    return;
+  }
+  const prev = editingObjectiveIndex !== null ? systemsData.objectives[editingObjectiveIndex] : null;
+  const objective = createObjectiveRecord({
+    ...(prev || {}),
+    id: prev?.id || createId("objective"),
+    title,
+    type: document.getElementById("objectiveType")?.value || "Task",
+    priority: document.getElementById("objectivePriority")?.value || "Medium",
+    dueDate: document.getElementById("objectiveDueDate")?.value || "",
+    dueTime: document.getElementById("objectiveDueTime")?.value || "",
+    estimatedMinutes: document.getElementById("objectiveEstimatedMinutes")?.value || "",
+    category: document.getElementById("objectiveCategory")?.value.trim() || "",
+    notes: document.getElementById("objectiveNotes")?.value.trim() || "",
+    linkedPlannerBlockId: document.getElementById("objectiveLinkedPlanner")?.value || "",
+    linkedRoutineId: document.getElementById("objectiveLinkedRoutine")?.value || "",
+    linkedHabitId: document.getElementById("objectiveLinkedHabit")?.value || "",
+    linkedTrackerId: document.getElementById("objectiveLinkedTracker")?.value || "",
+    linkedGoalId: document.getElementById("objectiveLinkedGoal")?.value || "",
+    trackerLogAmount: document.getElementById("objectiveTrackerLogAmount")?.value || "",
+    autoCompleteFromPlanner: document.getElementById("objectiveAutoPlanner")?.checked !== false,
+    autoCompleteFromHabit: document.getElementById("objectiveAutoHabit")?.checked !== false
+  });
+  if (editingObjectiveIndex === null) systemsData.objectives.push(objective);
+  else systemsData.objectives[editingObjectiveIndex] = objective;
+  editingObjectiveIndex = null;
+  activeSystemsForm = null;
+  saveSystemsData();
+  activeSystemsSection = "Objectives";
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function fillEditingObjectiveForm() {
+  if (editingObjectiveIndex === null || !document.getElementById("objectiveTitle")) return;
+  const objective = systemsData.objectives[editingObjectiveIndex];
+  if (!objective) return;
+  document.getElementById("objectiveTitle").value = objective.title || "";
+  document.getElementById("objectiveType").value = objective.type || "Task";
+  document.getElementById("objectivePriority").value = objective.priority || "Medium";
+  document.getElementById("objectiveDueDate").value = objective.dueDate || "";
+  document.getElementById("objectiveDueTime").value = objective.dueTime || "";
+  document.getElementById("objectiveCategory").value = objective.category || "";
+  document.getElementById("objectiveEstimatedMinutes").value = objective.estimatedMinutes || "";
+  document.getElementById("objectiveLinkedPlanner").value = objective.linkedPlannerBlockId || "";
+  document.getElementById("objectiveLinkedRoutine").value = objective.linkedRoutineId || "";
+  document.getElementById("objectiveLinkedHabit").value = objective.linkedHabitId || "";
+  document.getElementById("objectiveLinkedTracker").value = objective.linkedTrackerId || "";
+  document.getElementById("objectiveLinkedGoal").value = objective.linkedGoalId || "";
+  document.getElementById("objectiveTrackerLogAmount").value = objective.trackerLogAmount || "";
+  document.getElementById("objectiveAutoPlanner").checked = objective.autoCompleteFromPlanner !== false;
+  document.getElementById("objectiveAutoHabit").checked = objective.autoCompleteFromHabit !== false;
+  document.getElementById("objectiveNotes").value = objective.notes || "";
+}
+
+function editObjective(index) {
+  openSystemsForm("objective", index);
+}
+
+function deleteObjective(index) {
+  if (!confirm("Delete this objective?")) return;
+  systemsData.objectives.splice(index, 1);
+  saveSystemsData();
+  renderSystems();
+  renderHome();
+}
+
+function renderSystemsObjectives() {
+  const box = document.getElementById("systemsObjectives");
+  if (!box) return;
+  const list = [...systemsData.objectives].sort((a, b) => getObjectiveRank(a) - getObjectiveRank(b));
+  box.innerHTML = list.length
+    ? `<div class="systems-card-grid">${list.map(objective => {
+      const index = systemsData.objectives.findIndex(item => item.id === objective.id);
+      return `
+        <div class="system-item objective-system-card">
+          ${renderObjectiveCard(objective)}
+          ${renderConnectionBadges({
+            plannerBlockId: objective.linkedPlannerBlockId,
+            routineId: objective.linkedRoutineId,
+            habitId: objective.linkedHabitId,
+            trackerId: objective.linkedTrackerId,
+            goalId: objective.linkedGoalId
+          })}
+          <div class="button-row">
+            <button class="secondary-btn" onclick="editObjective(${index})">Edit Links</button>
+            <button class="danger-btn" onclick="deleteObjective(${index})">Delete</button>
+          </div>
+        </div>
+      `;
+    }).join("")}</div>`
+    : `<div class="empty-state"><p>No objectives yet.</p><button onclick="openSystemsForm('objective')">Add first objective</button></div>`;
 }
 
 function openSystemsForm(kind, index = null) {
@@ -4320,9 +4923,11 @@ function openSystemsForm(kind, index = null) {
   editingGoalIndex = kind === "goal" ? index : null;
   editingTrackerIndex = kind === "tracker" ? index : null;
   editingLogIndex = kind === "log" ? index : null;
+  editingObjectiveIndex = kind === "objective" ? index : null;
   manualLogTrackerId = kind === "trackerLog" ? index : null;
   if (kind === "habit") activeSystemsSection = "Habits";
   if (kind === "log" || kind === "tracker" || kind === "goal" || kind === "trackerLog") activeSystemsSection = "Trackers";
+  if (kind === "objective") activeSystemsSection = "Objectives";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
   fillDefaultLogDate();
@@ -4335,7 +4940,9 @@ function openSystemsFormForSection() {
   const map = {
     Overview: "habit",
     Habits: "habit",
-    Trackers: "tracker"
+    Trackers: "tracker",
+    Objectives: "objective",
+    Activity: "log"
   };
   openSystemsForm(map[activeSystemsSection] || "habit");
 }
@@ -4357,6 +4964,9 @@ function renderSystemsAddMenu() {
         </div>
         <button onclick="openSystemsForm('tracker')">Add Tracker</button>
         <button onclick="openSystemsForm('log')">Add Log</button>
+        <button onclick="openSystemsForm('goal')">Add Goal</button>
+        <button onclick="openSystemsForm('habit')">Add Habit</button>
+        <button onclick="openSystemsForm('objective')">Add Objective</button>
       </div>
     </div>
   `;
@@ -4378,6 +4988,7 @@ function closeSystemsForm() {
   editingHabitIndex = null;
   editingTrackerIndex = null;
   editingGoalIndex = null;
+  editingObjectiveIndex = null;
   editingMetricIndex = null;
   editingLogIndex = null;
   manualLogTrackerId = null;
@@ -4394,7 +5005,10 @@ function renderSystems() {
   fillEditingHabitForm();
   fillEditingTrackerForm();
   fillEditingGoalForm();
+  fillEditingObjectiveForm();
   renderSystemsDashboard();
+  renderSystemsObjectives();
+  renderActivityFeed();
   renderHabitsList();
   renderTrackersSummaryCards();
   renderTrackersUnifiedList();
@@ -4407,6 +5021,7 @@ function renderSystems() {
 function saveHabit() {
   const name = document.getElementById("habitName").value.trim();
   if (!name) return;
+  const unit = document.getElementById("habitUnit")?.value.trim() || "";
 
   const completionType = document.querySelector('input[name="habitCompletionType"]:checked')?.value || "checkbox";
   const linkedGoalId = document.getElementById("habitLinkedGoalIdNew")?.value || document.getElementById("habitLinkedGoalId")?.value || "";
@@ -4418,8 +5033,18 @@ function saveHabit() {
     frequency: document.getElementById("habitFrequency").value,
     targetFrequency: document.getElementById("habitTargetFrequency")?.value || document.getElementById("habitFrequency").value,
     target: document.getElementById("habitTarget").value.trim(),
+<<<<<<< HEAD
     unit: document.getElementById("habitUnit")?.value || "",
     linkedGoalId,
+=======
+    unit,
+    linkedGoalId: document.getElementById("habitLinkedGoalId")?.value || "",
+    linkedTrackerId: document.getElementById("habitLinkedTrackerId")?.value || "",
+    linkedRoutineId: document.getElementById("habitLinkedRoutineId")?.value || "",
+    linkedPlannerBlockId: document.getElementById("habitLinkedPlannerBlockId")?.value || "",
+    autoLogTrackerOnComplete: Boolean(document.getElementById("habitAutoLogTracker")?.checked),
+    trackerLogAmount: document.getElementById("habitTrackerLogAmount")?.value || "",
+>>>>>>> 406e2f6 (codex)
     notes: document.getElementById("habitNotes").value.trim(),
     completions: editingHabitIndex === null ? [] : systemsData.habits[editingHabitIndex].completions,
     skippedDates: editingHabitIndex === null ? [] : (systemsData.habits[editingHabitIndex].skippedDates || []),
@@ -4438,6 +5063,7 @@ function saveHabit() {
     systemsData.habits[editingHabitIndex] = habit;
   }
 
+  rememberTrackerUnit(unit);
   editingHabitIndex = null;
   activeSystemsForm = null;
   saveSystemsData();
@@ -4462,8 +5088,16 @@ function fillEditingHabitForm() {
   if (habitUnitEl) habitUnitEl.value = habit.unit || "";
   const habitGoalEl = document.getElementById("habitLinkedGoalId");
   if (habitGoalEl) habitGoalEl.value = habit.linkedGoalId || "";
+<<<<<<< HEAD
   const habitGoalElNew = document.getElementById("habitLinkedGoalIdNew");
   if (habitGoalElNew) habitGoalElNew.value = habit.linkedGoalId || "";
+=======
+  if (document.getElementById("habitLinkedTrackerId")) document.getElementById("habitLinkedTrackerId").value = habit.linkedTrackerId || "";
+  if (document.getElementById("habitLinkedRoutineId")) document.getElementById("habitLinkedRoutineId").value = habit.linkedRoutineId || "";
+  if (document.getElementById("habitLinkedPlannerBlockId")) document.getElementById("habitLinkedPlannerBlockId").value = habit.linkedPlannerBlockId || "";
+  if (document.getElementById("habitAutoLogTracker")) document.getElementById("habitAutoLogTracker").checked = Boolean(habit.autoLogTrackerOnComplete);
+  if (document.getElementById("habitTrackerLogAmount")) document.getElementById("habitTrackerLogAmount").value = habit.trackerLogAmount || "";
+>>>>>>> 406e2f6 (codex)
   document.getElementById("habitNotes").value = habit.notes;
   document.getElementById("habitSaveButton").textContent = "Update Habit";
   
@@ -4547,7 +5181,7 @@ function completeHabitToday(index) {
   }
 
   systemsData.trackers
-    .filter(t => t.linkedHabitId === habit.id)
+    .filter(t => t.linkedHabitId === habit.id || (habit.autoLogTrackerOnComplete && habit.linkedTrackerId === t.id))
     .forEach(tracker => {
       const dup = systemsData.logs.some(log =>
         log.linkedTrackerId === tracker.id && log.date === today && log.notes === "Habit auto"
@@ -4557,7 +5191,8 @@ function completeHabitToday(index) {
         id: createId("log"),
         title: tracker.name,
         type: tracker.category || "Custom",
-        value: "1",
+        valueType: tracker.category || "Custom",
+        value: habit.trackerLogAmount || tracker.autoLogAmount || "1",
         unit: tracker.unit || "count",
         date: today,
         notes: "Habit auto",
@@ -4567,6 +5202,8 @@ function completeHabitToday(index) {
         linkedTrackerId: tracker.id,
         linkedGoalId: "",
         linkedPlannerBlockId: "",
+        linkedRoutineId: habit.linkedRoutineId || "",
+        linkedObjectiveId: "",
         logSource: "habit",
         plannerAutoLogKey: "",
         inactive: false
@@ -4832,6 +5469,8 @@ function saveSystemLog() {
   const title = tracker?.name || document.getElementById("logTitle").value.trim();
   const unit = document.getElementById("logUnit").value.trim() || tracker?.unit || "";
   const date = document.getElementById("logDate").value || getTodayISO();
+  const linkedPlannerBlockId = document.getElementById("logLinkedPlannerBlockId")?.value || "";
+  const linkedBlock = linkedPlannerBlockId ? scheduleData.blocks.find(block => block.id === linkedPlannerBlockId) : null;
   if (!linkedItemId || !value) {
     alert("Choose a tracker and enter an amount.");
     return;
@@ -4850,8 +5489,10 @@ function saveSystemLog() {
     linkedHabitId: tracker?.linkedHabitId || "",
     linkedMetricId: "",
     linkedTrackerId: linkedItemId,
-    linkedGoalId: "",
-    linkedPlannerBlockId: document.getElementById("logLinkedPlannerBlockId")?.value || "",
+    linkedGoalId: tracker?.linkedGoalId || getPlannerBlockGoalId(linkedBlock) || "",
+    linkedPlannerBlockId,
+    linkedRoutineId: tracker?.linkedRoutineId || linkedBlock?.linkedRoutineId || linkedBlock?.routineId || "",
+    linkedObjectiveId: tracker?.linkedObjectiveId || getPlannerBlockObjectiveId(linkedBlock) || "",
     logSource: prev?.logSource ?? "manual",
     plannerAutoLogKey: prev?.plannerAutoLogKey ?? "",
     inactive: Boolean(prev?.inactive)
@@ -4869,6 +5510,7 @@ function saveSystemLog() {
 
   syncLinkedItemsFromLog(log);
   recalcAllTrackerCurrentsFromLogs();
+  rememberTrackerUnit(unit);
 
   editingLogIndex = null;
   activeSystemsForm = null;
@@ -4969,6 +5611,10 @@ function normalizeUnifiedTrackerRecord(tracker) {
     startDate: tracker.startDate || "",
     targetDate: tracker.targetDate || tracker.deadline || "",
     linkedHabitId: tracker.linkedHabitId || "",
+    linkedGoalId: tracker.linkedGoalId || "",
+    linkedRoutineId: tracker.linkedRoutineId || "",
+    linkedPlannerBlockId: tracker.linkedPlannerBlockId || "",
+    linkedObjectiveId: tracker.linkedObjectiveId || "",
     notes: tracker.notes || "",
     direction,
     logValueMode: tracker.logValueMode === "increment" || tracker.logValueMode === "absolute"
@@ -5375,6 +6021,7 @@ function renderSystemsDashboard() {
       <div><strong>${trackersThisWeek || logsThisWeek}</strong><span>This Week</span></div>
       <div><strong>${streakLinkedTrackers}</strong><span>Streak-linked</span></div>
     </div>
+    ${renderSystemEcosystemCards()}
     <div class="systems-highlight-grid">
       <div class="system-highlight">
         <span>Best habit</span>
@@ -5432,6 +6079,148 @@ function renderSystemsDashboard() {
       `).join("")}
     ` : ""}
   `;
+}
+
+function getSystemBuckets() {
+  const preferred = ["Fitness", "School", "Finance", "MMA", "Sleep", "Social", "Career"];
+  const found = new Set(preferred);
+  [...systemsData.habits, ...systemsData.trackers, ...systemsData.goals, ...systemsData.objectives, ...scheduleData.routines]
+    .forEach(item => {
+      const category = item.category || item.type;
+      if (category) found.add(category);
+    });
+  return [...found].filter(Boolean).slice(0, 12);
+}
+
+function getPlannerMinutesForSystem(systemName) {
+  const weekDates = new Set(getLastNDates(7));
+  return scheduleData.blocks
+    .filter(block => !block.isBuffer && weekDates.has(block.date))
+    .filter(block => {
+      const text = `${block.category || ""} ${block.title || ""}`.toLowerCase();
+      return text.includes(systemName.toLowerCase());
+    })
+    .reduce((sum, block) => sum + Math.max(timeToMinutes(block.end || "00:00") - timeToMinutes(block.start || "00:00"), 0), 0);
+}
+
+function renderSystemEcosystemCards() {
+  const today = getTodayISO();
+  return `
+    <div class="system-ecosystem-grid">
+      ${getSystemBuckets().map(systemName => {
+        const matches = item => `${item.category || ""} ${item.type || ""} ${item.name || ""} ${item.title || ""}`.toLowerCase().includes(systemName.toLowerCase());
+        const habits = systemsData.habits.filter(matches);
+        const trackers = systemsData.trackers.filter(matches);
+        const goals = systemsData.goals.filter(matches);
+        const routines = scheduleData.routines.filter(matches);
+        const overdue = systemsData.objectives.filter(objective => matches(objective) && !isObjectiveDone(objective) && objective.dueDate && objective.dueDate < today);
+        const bestStreak = habits.reduce((best, habit) => Math.max(best, getHabitStreak(habit)), 0);
+        return `
+          <div class="ecosystem-card">
+            <div class="ecosystem-card-head">
+              <strong>${escapeHTML(systemName)}</strong>
+              <span>${formatMinutes(getPlannerMinutesForSystem(systemName))}</span>
+            </div>
+            <div class="ecosystem-counts">
+              <span>${habits.length} habits</span>
+              <span>${trackers.length} trackers</span>
+              <span>${goals.length} goals</span>
+              <span>${routines.length} routines</span>
+            </div>
+            <p class="muted-text">${bestStreak} best streak • ${overdue.length} overdue objectives</p>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function getUnifiedActivityFeed(limit = 40) {
+  const habitEvents = systemsData.habits.flatMap(habit =>
+    (habit.completionHistory || []).map(entry => ({
+      date: entry.date || "",
+      time: entry.time || "",
+      type: "Habit",
+      title: habit.name,
+      detail: getHabitStreak(habit) ? `${getHabitStreak(habit)} day streak` : "Completed",
+      links: { habitId: habit.id, plannerBlockId: entry.plannerBlockId || "" }
+    }))
+  );
+  const blockEvents = scheduleData.blocks
+    .filter(block => block.completed && !block.isBuffer)
+    .map(block => ({
+      date: block.date || "",
+      time: block.end || block.start || "",
+      type: "Planner",
+      title: block.title || "Completed block",
+      detail: `${block.start || ""}-${block.end || ""}`,
+      links: {
+        routineId: block.linkedRoutineId || block.routineId,
+        habitId: getPlannerBlockHabitId(block),
+        trackerId: getPlannerBlockTrackerId(block),
+        goalId: getPlannerBlockGoalId(block),
+        objectiveId: getPlannerBlockObjectiveId(block)
+      }
+    }));
+  const logEvents = systemsData.logs
+    .filter(log => !log.inactive)
+    .map(log => ({
+      date: log.date || "",
+      time: "",
+      type: "Tracker",
+      title: log.title || log.type || "Log",
+      detail: `${log.value || ""} ${log.unit || ""}`.trim(),
+      links: {
+        habitId: log.linkedHabitId,
+        trackerId: getLogLinkedTrackerId(log),
+        goalId: log.linkedGoalId,
+        plannerBlockId: log.linkedPlannerBlockId,
+        routineId: log.linkedRoutineId,
+        objectiveId: log.linkedObjectiveId
+      }
+    }));
+  const objectiveEvents = systemsData.objectives
+    .filter(objective => objective.status === "Complete")
+    .map(objective => ({
+      date: objective.completedDate || objective.dueDate || "",
+      time: objective.completedAt || "",
+      type: "Objective",
+      title: objective.title,
+      detail: objective.priority || "Complete",
+      links: {
+        plannerBlockId: objective.linkedPlannerBlockId,
+        routineId: objective.linkedRoutineId,
+        habitId: objective.linkedHabitId,
+        trackerId: objective.linkedTrackerId,
+        goalId: objective.linkedGoalId,
+        objectiveId: objective.id
+      }
+    }));
+  return [...habitEvents, ...blockEvents, ...logEvents, ...objectiveEvents]
+    .filter(event => event.date)
+    .sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`))
+    .slice(0, limit);
+}
+
+function renderActivityFeed() {
+  const box = document.getElementById("activityFeed");
+  if (!box) return;
+  const events = getUnifiedActivityFeed();
+  box.innerHTML = events.length
+    ? `<div class="activity-feed-list">${events.map(event => `
+      <div class="activity-feed-item">
+        <span class="activity-dot"></span>
+        <div>
+          <div class="activity-feed-head">
+            <strong>${escapeHTML(event.title)}</strong>
+            <span>${escapeHTML(event.date)} ${escapeHTML(event.time || "")}</span>
+          </div>
+          <p>${escapeHTML(event.type)}${event.detail ? ` • ${escapeHTML(event.detail)}` : ""}</p>
+          ${renderConnectionBadges(event.links)}
+        </div>
+      </div>
+    `).join("")}</div>`
+    : `<div class="empty-state small"><p>No activity yet.</p><button onclick="openSystemsForm('log')">Add first log</button></div>`;
 }
 
 function getLastNDates(count) {
@@ -5613,6 +6402,7 @@ function renderHabitsList() {
             ${isAmountBased ? `<span class="metric-type-pill">Amount</span>` : ""}
             ${habit.paused ? `<span class="metric-type-pill metric-type-milestone">Paused</span>` : ""}
           </div>
+<<<<<<< HEAD
           ${isAmountBased && dailyTarget > 0 ? `
             <div class="habit-today-progress">
               <p>Today: <strong>${todayProgress} / ${dailyTarget} ${escapeHTML(habit.unit || "")}</strong></p>
@@ -5621,6 +6411,14 @@ function renderHabitsList() {
               </div>
             </div>
           ` : ""}
+=======
+          ${renderConnectionBadges({
+            plannerBlockId: habit.linkedPlannerBlockId,
+            routineId: habit.linkedRoutineId,
+            trackerId: habit.linkedTrackerId,
+            goalId: habit.linkedGoalId
+          })}
+>>>>>>> 406e2f6 (codex)
           <div class="habit-stat-row">
             <div><strong>${pct}%</strong><span>30-day completion</span></div>
             <div><strong>${weekly}%</strong><span>weekly consistency</span></div>
@@ -5843,9 +6641,11 @@ function saveGoal() {
     name, category, goalType, resetCycle, startValue, currentValue, targetValue,
     unit, startDate, deadline,
     linkedTrackerId, linkedHabitId, recurringTarget, milestones,
-    linkedPlannerBlockId: editingGoalIndex === null
+    linkedPlannerBlockId: document.getElementById("goalLinkedPlanner")?.value || (editingGoalIndex === null
       ? ""
-      : systemsData.goals[editingGoalIndex].linkedPlannerBlockId || "",
+      : systemsData.goals[editingGoalIndex].linkedPlannerBlockId || ""),
+    linkedRoutineId: document.getElementById("goalLinkedRoutine")?.value || "",
+    linkedObjectiveId: document.getElementById("goalLinkedObjective")?.value || "",
     notes
   };
 
@@ -5855,6 +6655,7 @@ function saveGoal() {
     systemsData.goals[editingGoalIndex] = goal;
   }
 
+  rememberTrackerUnit(unit);
   editingGoalIndex = null;
   activeSystemsForm = null;
   saveSystemsData();
@@ -5903,6 +6704,9 @@ function fillEditingGoalForm() {
   document.getElementById("goalDeadline").value = goal.deadline || "";
   document.getElementById("goalLinkedTracker").value = goal.linkedTrackerId || "";
   document.getElementById("goalLinkedHabit").value = goal.linkedHabitId || "";
+  if (document.getElementById("goalLinkedRoutine")) document.getElementById("goalLinkedRoutine").value = goal.linkedRoutineId || "";
+  if (document.getElementById("goalLinkedPlanner")) document.getElementById("goalLinkedPlanner").value = goal.linkedPlannerBlockId || "";
+  if (document.getElementById("goalLinkedObjective")) document.getElementById("goalLinkedObjective").value = goal.linkedObjectiveId || "";
   const milestonesEl = document.getElementById("goalMilestones");
   if (milestonesEl) milestonesEl.value = (goal.milestones || []).map(item => item.title || "").join("\n");
   document.getElementById("goalNotes").value = goal.notes || "";
@@ -6146,6 +6950,13 @@ function renderGoalsList(elementId = "goalsList") {
         ${goal.recurringTarget ? `<p class="muted-text">Recurring target: ${escapeHTML(goal.recurringTarget)}</p>` : ""}
         ${linkedTracker ? `<p class="muted-text">Linked tracker: ${escapeHTML(linkedTracker.name)}</p>` : ""}
         ${linkedHabit ? `<p class="muted-text">Linked habit: ${escapeHTML(linkedHabit.name)}</p>` : ""}
+        ${renderConnectionBadges({
+          plannerBlockId: goal.linkedPlannerBlockId,
+          routineId: goal.linkedRoutineId,
+          trackerId: goal.linkedTrackerId,
+          habitId: goal.linkedHabitId,
+          objectiveId: goal.linkedObjectiveId
+        })}
         ${goal.milestones?.length ? `
           <div class="milestone-list">
             ${goal.milestones.map((milestone, milestoneIndex) => `
@@ -6257,6 +7068,173 @@ function rememberTrackerUnit(unit) {
   }
 }
 
+function getCustomUnitValues() {
+  const seen = new Set();
+  return (systemsData.savedTrackerUnits || [])
+    .map(unit => String(unit || "").trim())
+    .filter(unit => {
+      if (!unit) return false;
+      const key = unit.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return !DEFAULT_TRACKER_UNITS.some(defaultUnit => defaultUnit.toLowerCase() === key);
+    });
+}
+
+function getAllUnitOptions() {
+  const custom = getCustomUnitValues();
+  const units = [...DEFAULT_TRACKER_UNITS, ...custom];
+  const seen = new Set();
+  const unique = units.filter(unit => {
+    const key = unit.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (systemsData.unitSortMode === "alpha") {
+    return unique.slice().sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  }
+  return unique;
+}
+
+function buildUnitDatalistInnerHtml() {
+  return getAllUnitOptions()
+    .map(unit => `<option value="${escapeHTML(unit)}"></option>`)
+    .join("");
+}
+
+function renderUnitComboInput(id, value = "", placeholder = "Unit", extraAttrs = "") {
+  return `
+    <input
+      id="${escapeHTML(id)}"
+      class="unit-combo"
+      list="sharedUnitOptions"
+      autocomplete="off"
+      placeholder="${escapeHTML(placeholder)}"
+      value="${escapeHTML(value || "")}"
+      onchange="rememberUnitFromInput('${escapeHTML(id)}')"
+      ${extraAttrs}
+    >
+  `;
+}
+
+function renderSharedUnitDatalist() {
+  return `<datalist id="sharedUnitOptions">${buildUnitDatalistInnerHtml()}</datalist>`;
+}
+
+function renderUnitsSettings() {
+  const customUnits = getCustomUnitValues();
+  const sortMode = systemsData.unitSortMode || "defaults";
+  return `
+    <div class="card units-settings-card">
+      <h3>Units</h3>
+      <p class="muted-text">Shared units for trackers, goals, logs, habits, planner auto-logging, and objective progress.</p>
+      <div class="unit-settings-row">
+        ${renderUnitComboInput("newCustomUnit", "", "Add custom unit")}
+        ${renderSharedUnitDatalist()}
+        <button onclick="addCustomUnitFromSettings()">Add Unit</button>
+      </div>
+      <div class="unit-sort-controls">
+        <label class="inline-check">
+          <input type="radio" name="unitSortMode" value="defaults" ${sortMode !== "alpha" ? "checked" : ""} onchange="setUnitSortMode('defaults')">
+          Keep defaults first
+        </label>
+        <label class="inline-check">
+          <input type="radio" name="unitSortMode" value="alpha" ${sortMode === "alpha" ? "checked" : ""} onchange="setUnitSortMode('alpha')">
+          Sort alphabetically
+        </label>
+      </div>
+      <div class="unit-chip-list">
+        ${customUnits.length ? customUnits.map(unit => `
+          <span class="unit-chip">
+            ${escapeHTML(unit)}
+            <button type="button" aria-label="Delete ${escapeHTML(unit)}" onclick="deleteCustomUnit('${encodeURIComponent(unit)}')">x</button>
+          </span>
+        `).join("") : `<p class="muted-text small">No custom units yet. Existing saved units are migrated here automatically.</p>`}
+      </div>
+      <button class="secondary-btn" onclick="restoreDefaultUnits()">Restore Default Units</button>
+    </div>
+  `;
+}
+
+function rememberUnitFromInput(id) {
+  const value = document.getElementById(id)?.value || "";
+  rememberTrackerUnit(value);
+}
+
+function refreshSettingsPage() {
+  if (typeof main !== "undefined" && main) {
+    main.innerHTML = getPageHTML("Settings");
+  }
+}
+
+function addCustomUnitFromSettings() {
+  const input = document.getElementById("newCustomUnit");
+  const value = input ? input.value.trim() : "";
+  if (!value) return;
+  const before = getAllUnitOptions().length;
+  rememberTrackerUnit(value);
+  if (getAllUnitOptions().length === before) {
+    showToast("That unit already exists.", "error");
+  } else {
+    showToast("Unit added.");
+  }
+  refreshSettingsPage();
+}
+
+function deleteCustomUnit(unit) {
+  const target = decodeURIComponent(String(unit || "")).toLowerCase();
+  systemsData.savedTrackerUnits = getCustomUnitValues()
+    .filter(item => item.toLowerCase() !== target);
+  saveSystemsData();
+  refreshSettingsPage();
+}
+
+function restoreDefaultUnits() {
+  if (!confirm("Restore default units and remove custom unit choices? Existing tracker and log data will keep its saved unit text.")) return;
+  systemsData.savedTrackerUnits = [];
+  saveSystemsData();
+  refreshSettingsPage();
+}
+
+function setUnitSortMode(mode) {
+  systemsData.unitSortMode = mode === "alpha" ? "alpha" : "defaults";
+  saveSystemsData();
+  refreshSettingsPage();
+}
+
+function rememberUnitsFromValues(values) {
+  let changed = false;
+  values.forEach(value => {
+    const before = (systemsData.savedTrackerUnits || []).length;
+    rememberTrackerUnit(value);
+    if ((systemsData.savedTrackerUnits || []).length !== before) changed = true;
+  });
+  return changed;
+}
+
+function collectExistingUnitsIntoSettings() {
+  const unitValues = [
+    ...systemsData.habits.map(item => item.unit),
+    ...systemsData.logs.map(item => item.unit),
+    ...systemsData.trackers.flatMap(item => [item.unit, item.autoLogUnit]),
+    ...systemsData.goals.map(item => item.unit),
+    ...systemsData.metrics.map(item => item.unit)
+  ];
+  const before = JSON.stringify(systemsData.savedTrackerUnits || []);
+  unitValues.forEach(unit => {
+    const u = String(unit || "").trim();
+    if (!u) return;
+    const key = u.toLowerCase();
+    if (DEFAULT_TRACKER_UNITS.some(defaultUnit => defaultUnit.toLowerCase() === key)) return;
+    if (!systemsData.savedTrackerUnits.some(existing => String(existing).toLowerCase() === key)) {
+      systemsData.savedTrackerUnits.push(u);
+    }
+  });
+  systemsData.savedTrackerUnits = getCustomUnitValues();
+  if (JSON.stringify(systemsData.savedTrackerUnits || []) !== before) saveSystemsData();
+}
+
 function buildTrackerCategoryDatalistInnerHtml() {
   const opts = [...TRACKER_CATEGORIES, ...(systemsData.savedTrackerCategories || [])];
   const seen = new Set();
@@ -6272,17 +7250,7 @@ function buildTrackerCategoryDatalistInnerHtml() {
 }
 
 function buildTrackerUnitDatalistInnerHtml() {
-  const opts = [...DEFAULT_TRACKER_UNITS, ...(systemsData.savedTrackerUnits || [])];
-  const seen = new Set();
-  return opts
-    .filter(u => {
-      const k = u.toLowerCase();
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    })
-    .map(u => `<option value="${escapeHTML(u)}"></option>`)
-    .join("");
+  return buildUnitDatalistInnerHtml();
 }
 
 function getTrackerFilterCategoryValues() {
@@ -6318,21 +7286,66 @@ function seedTrackerPresetsFromTrackers() {
         systemsData.savedTrackerCategories.push(t.category);
       }
     }
-    if (t.unit && !DEFAULT_TRACKER_UNITS.includes(t.unit)) {
-      if (!systemsData.savedTrackerUnits.some(u => u.toLowerCase() === t.unit.toLowerCase())) {
-        systemsData.savedTrackerUnits.push(t.unit);
+    [t.unit, t.autoLogUnit].forEach(unit => {
+      const u = String(unit || "").trim();
+      if (!u) return;
+      if (DEFAULT_TRACKER_UNITS.some(defaultUnit => defaultUnit.toLowerCase() === u.toLowerCase())) return;
+      if (!systemsData.savedTrackerUnits.some(saved => String(saved).toLowerCase() === u.toLowerCase())) {
+        systemsData.savedTrackerUnits.push(u);
       }
-    }
+    });
   });
 }
 
 function autoLogTrackersForPlannerBlock(block) {
-  if (!block || block.isBuffer || !block.systemHabitId || !block.completed) return;
+  if (!block || block.isBuffer || !block.completed) return;
   const date = block.date || getTodayISO();
   let changed = false;
+  const explicitTrackerId = getPlannerBlockTrackerId(block);
+  const explicitTracker = explicitTrackerId ? systemsData.trackers.find(t => t.id === explicitTrackerId) : null;
+  if (explicitTracker && block.trackerAutoLogMode && block.trackerAutoLogMode !== "none") {
+    const key = `${explicitTracker.id}::${block.id}::${date}`;
+    const dup = systemsData.logs.some(l =>
+      !l.inactive && (l.plannerAutoLogKey === key || (l.logSource === "planner" && getLogLinkedTrackerId(l) === explicitTracker.id && l.linkedPlannerBlockId === block.id && l.date === date))
+    );
+    if (!dup) {
+      const minutes = Math.max(timeToMinutes(block.end || block.start || "00:00") - timeToMinutes(block.start || "00:00"), 0);
+      const value = block.trackerAutoLogMode === "duration"
+        ? String(roundForDisplay(minutes / 60))
+        : (String(block.trackerLogAmount || explicitTracker.autoLogAmount || "1").trim() || "1");
+      systemsData.logs.push({
+        id: createId("log"),
+        title: explicitTracker.name,
+        type: explicitTracker.category || "Custom",
+        valueType: explicitTracker.category || "Custom",
+        value,
+        unit: block.trackerAutoLogMode === "duration" ? (explicitTracker.unit || "hours") : (explicitTracker.autoLogUnit || explicitTracker.unit || ""),
+        date,
+        notes: `Source: Planner completion — ${block.title || "Block"}`,
+        linkedHabitId: getPlannerBlockHabitId(block),
+        linkedItemType: "tracker",
+        linkedMetricId: "",
+        linkedTrackerId: explicitTracker.id,
+        linkedGoalId: getPlannerBlockGoalId(block),
+        linkedPlannerBlockId: block.id,
+        linkedRoutineId: block.linkedRoutineId || block.routineId || "",
+        linkedObjectiveId: getPlannerBlockObjectiveId(block),
+        logSource: "planner",
+        plannerAutoLogKey: key,
+        inactive: false
+      });
+      recalcTrackerCurrentFromLogs(explicitTracker);
+      changed = true;
+    }
+  }
+  const habitId = getPlannerBlockHabitId(block);
+  if (!habitId) {
+    if (changed) saveSystemsData();
+    return;
+  }
   systemsData.trackers.forEach(tracker => {
     if (!tracker.autoLogOnPlannerComplete) return;
-    if (tracker.linkedHabitId !== block.systemHabitId) return;
+    if (tracker.linkedHabitId !== habitId) return;
     const key = `${tracker.id}::${block.id}::${date}`;
     if (tracker.preventDuplicateAutoLogs !== false) {
       const dup = systemsData.logs.some(l =>
@@ -6351,12 +7364,14 @@ function autoLogTrackersForPlannerBlock(block) {
       unit,
       date,
       notes: `Source: Planner completion — ${block.title || "Block"}`,
-      linkedHabitId: block.systemHabitId,
+      linkedHabitId: habitId,
       linkedItemType: "tracker",
       linkedMetricId: "",
       linkedTrackerId: tracker.id,
-      linkedGoalId: "",
+      linkedGoalId: getPlannerBlockGoalId(block),
       linkedPlannerBlockId: block.id,
+      linkedRoutineId: block.linkedRoutineId || block.routineId || "",
+      linkedObjectiveId: getPlannerBlockObjectiveId(block),
       logSource: "planner",
       plannerAutoLogKey: key,
       inactive: false
@@ -6478,6 +7493,13 @@ function renderSingleTrackerCard(tracker) {
         </div>
         <div class="tracker-current-value">${currentLabel}</div>
       </div>
+      ${renderConnectionBadges({
+        habitId: tracker.linkedHabitId,
+        goalId: tracker.linkedGoalId,
+        plannerBlockId: tracker.linkedPlannerBlockId,
+        routineId: tracker.linkedRoutineId,
+        objectiveId: tracker.linkedObjectiveId
+      })}
       ${hasTarget ? `
         <div class="tracker-progress-bar">
           <div class="tracker-progress-fill" style="width:${pct}%"></div>
@@ -6540,6 +7562,7 @@ function saveUnifiedTrackerFromModal() {
   const prev = editingTrackerIndex !== null ? systemsData.trackers[editingTrackerIndex] : null;
   const category = document.getElementById("trackerCategory").value.trim();
   const unit = document.getElementById("trackerUnit").value.trim();
+  const autoLogUnit = document.getElementById("trackerAutoLogUnit")?.value.trim() ?? "";
   const trackerRaw = {
     id: editingTrackerIndex === null ? createId("tracker") : systemsData.trackers[editingTrackerIndex].id,
     name,
@@ -6555,11 +7578,15 @@ function saveUnifiedTrackerFromModal() {
     startDate: document.getElementById("trackerStartDate").value || "",
     targetDate: document.getElementById("trackerTargetDate").value || "",
     linkedHabitId: document.getElementById("trackerLinkedHabit").value || "",
+    linkedGoalId: document.getElementById("trackerLinkedGoal")?.value || "",
+    linkedRoutineId: document.getElementById("trackerLinkedRoutine")?.value || "",
+    linkedPlannerBlockId: document.getElementById("trackerLinkedPlanner")?.value || "",
+    linkedObjectiveId: document.getElementById("trackerLinkedObjective")?.value || "",
     notes: document.getElementById("trackerNotes").value.trim(),
     legacyMetricType: prev?.legacyMetricType || "",
     autoLogOnPlannerComplete: Boolean(document.getElementById("trackerAutoLogPlanner")?.checked),
     autoLogAmount: document.getElementById("trackerAutoLogAmount")?.value ?? "1",
-    autoLogUnit: document.getElementById("trackerAutoLogUnit")?.value.trim() ?? "",
+    autoLogUnit,
     preventDuplicateAutoLogs: document.getElementById("trackerPreventDupAuto")?.checked !== false,
     milestones: (document.getElementById("trackerMilestones")?.value || "")
       .split("\n")
@@ -6574,6 +7601,7 @@ function saveUnifiedTrackerFromModal() {
   const tracker = normalizeUnifiedTrackerRecord(trackerRaw);
   rememberTrackerCategory(tracker.category);
   rememberTrackerUnit(tracker.unit);
+  rememberTrackerUnit(autoLogUnit);
   if (editingTrackerIndex === null) systemsData.trackers.push(tracker);
   else systemsData.trackers[editingTrackerIndex] = tracker;
   recalcAllTrackerCurrentsFromLogs();
@@ -6601,8 +7629,6 @@ function fillEditingTrackerForm() {
   const unitIn = el("trackerUnit");
   if (unitIn) {
     unitIn.value = t.unit || "";
-    const unitList = document.getElementById("trackerUnitList");
-    if (unitList) unitList.innerHTML = buildTrackerUnitDatalistInnerHtml();
   }
   el("trackerStartValue").value = t.startValue ?? "";
   el("trackerCurrentValue").value = t.currentValue ?? "";
@@ -6614,6 +7640,10 @@ function fillEditingTrackerForm() {
   el("trackerStartDate").value = t.startDate || "";
   el("trackerTargetDate").value = t.targetDate || "";
   el("trackerLinkedHabit").value = t.linkedHabitId || "";
+  if (el("trackerLinkedGoal")) el("trackerLinkedGoal").value = t.linkedGoalId || "";
+  if (el("trackerLinkedRoutine")) el("trackerLinkedRoutine").value = t.linkedRoutineId || "";
+  if (el("trackerLinkedPlanner")) el("trackerLinkedPlanner").value = t.linkedPlannerBlockId || "";
+  if (el("trackerLinkedObjective")) el("trackerLinkedObjective").value = t.linkedObjectiveId || "";
   if (el("trackerAutoLogPlanner")) el("trackerAutoLogPlanner").checked = Boolean(t.autoLogOnPlannerComplete);
   if (el("trackerAutoLogAmount")) el("trackerAutoLogAmount").value = t.autoLogAmount ?? "1";
   if (el("trackerAutoLogUnit")) el("trackerAutoLogUnit").value = t.autoLogUnit || "";
@@ -6630,11 +7660,13 @@ function fillEditingManualLogForm() {
   if (!dateEl) return;
   dateEl.value = getTodayISO();
   refreshManualLogPlannerBlockOptions();
+  const tracker = systemsData.trackers.find(tr => tr.id === manualLogTrackerId);
   const valEl = document.getElementById("manualLogValue");
   if (valEl) valEl.value = "";
+  const unitEl = document.getElementById("manualLogUnit");
+  if (unitEl && tracker) unitEl.value = tracker.unit || "";
   const notesEl = document.getElementById("manualLogNotes");
   if (notesEl) notesEl.value = "";
-  const tracker = systemsData.trackers.find(tr => tr.id === manualLogTrackerId);
   const habitEl = document.getElementById("manualLogLinkedHabit");
   if (habitEl && tracker) habitEl.value = tracker.linkedHabitId || "";
   const blockEl = document.getElementById("manualLogPlannerBlock");
@@ -8264,6 +9296,7 @@ function importAllData() {
     scheduleData = backup.scheduleData;
     systemsData = backup.systemsData;
     socialData = backup.socialData;
+    collectExistingUnitsIntoSettings();
     saveScheduleData();
     saveSystemsData();
     saveSocialData();
@@ -8367,6 +9400,7 @@ function normalizeSystemsBackupData(data) {
   return {
     savedTrackerCategories: Array.isArray(raw.savedTrackerCategories) ? raw.savedTrackerCategories : [],
     savedTrackerUnits: Array.isArray(raw.savedTrackerUnits) ? raw.savedTrackerUnits : [],
+    unitSortMode: raw.unitSortMode === "alpha" ? "alpha" : "defaults",
     _trackersUnifiedV1: raw._trackersUnifiedV1 !== undefined ? Boolean(raw._trackersUnifiedV1) : true,
     habits: Array.isArray(raw.habits) ? raw.habits.map(habit => ({
       ...habit,
@@ -8378,6 +9412,11 @@ function normalizeSystemsBackupData(data) {
       target: habit.target || "",
       unit: habit.unit || "",
       linkedGoalId: habit.linkedGoalId || "",
+      linkedTrackerId: habit.linkedTrackerId || "",
+      linkedRoutineId: habit.linkedRoutineId || "",
+      linkedPlannerBlockId: habit.linkedPlannerBlockId || "",
+      autoLogTrackerOnComplete: Boolean(habit.autoLogTrackerOnComplete),
+      trackerLogAmount: habit.trackerLogAmount !== undefined && habit.trackerLogAmount !== null ? String(habit.trackerLogAmount) : "",
       paused: Boolean(habit.paused),
       skippedDates: Array.isArray(habit.skippedDates) ? habit.skippedDates : [],
       completionHistory: Array.isArray(habit.completionHistory) ? habit.completionHistory : [],
@@ -8402,6 +9441,8 @@ function normalizeSystemsBackupData(data) {
         linkedTrackerId,
         linkedGoalId: log.linkedGoalId || "",
         linkedPlannerBlockId: log.linkedPlannerBlockId || "",
+        linkedRoutineId: log.linkedRoutineId || "",
+        linkedObjectiveId: log.linkedObjectiveId || "",
         linkedItemType
       };
       return {
@@ -8428,6 +9469,8 @@ function normalizeSystemsBackupData(data) {
       category: goal.category || "Custom",
       unit: goal.unit || "",
       linkedPlannerBlockId: goal.linkedPlannerBlockId || "",
+      linkedRoutineId: goal.linkedRoutineId || "",
+      linkedObjectiveId: goal.linkedObjectiveId || "",
       milestones: Array.isArray(goal.milestones) ? goal.milestones : [],
       recurringTarget: goal.recurringTarget || "",
       notes: goal.notes || ""
@@ -8441,6 +9484,33 @@ function normalizeSystemsBackupData(data) {
       recurringTarget: metric.recurringTarget || "",
       notes: metric.notes || "",
       entries: Array.isArray(metric.entries) ? metric.entries : []
+    })) : [],
+    objectives: Array.isArray(raw.objectives) ? raw.objectives.map(objective => ({
+      ...objective,
+      id: objective.id || createId("objective"),
+      title: objective.title || "",
+      type: objective.type || "Task",
+      status: objective.status || "Not started",
+      priority: objective.priority || "Medium",
+      dueDate: objective.dueDate || "",
+      dueTime: objective.dueTime || "",
+      estimatedMinutes: objective.estimatedMinutes || "",
+      category: objective.category || "",
+      tags: objective.tags || "",
+      notes: objective.notes || "",
+      linkedPlannerBlockId: objective.linkedPlannerBlockId || "",
+      linkedRoutineId: objective.linkedRoutineId || "",
+      linkedHabitId: objective.linkedHabitId || "",
+      linkedTrackerId: objective.linkedTrackerId || "",
+      linkedGoalId: objective.linkedGoalId || "",
+      trackerLogAmount: objective.trackerLogAmount || "",
+      completedDate: objective.completedDate || "",
+      completedAt: objective.completedAt || "",
+      autoCompleteFromPlanner: objective.autoCompleteFromPlanner !== false,
+      autoCompleteFromHabit: objective.autoCompleteFromHabit !== false,
+      focus: Boolean(objective.focus),
+      recurring: objective.recurring || "",
+      subtasks: Array.isArray(objective.subtasks) ? objective.subtasks : []
     })) : []
   };
 }
@@ -8499,6 +9569,7 @@ function clearSystems() {
     metrics: [],
     savedTrackerCategories: [],
     savedTrackerUnits: [],
+    unitSortMode: "defaults",
     _trackersUnifiedV1: true
   };
   saveSystemsData();

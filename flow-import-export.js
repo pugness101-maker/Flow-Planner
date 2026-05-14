@@ -26,6 +26,7 @@ const _originalSettings = pages.Settings;
 pages.Settings = () => `
   ${renderExportCard()}
   ${renderImportCard()}
+  ${renderUnitsSettings()}
   ${renderClearDataCard()}
   ${renderSocialImportCard()}
 `;
@@ -413,6 +414,7 @@ function _doReplace(incoming) {
   }
   if (incoming.systemsData) {
     systemsData = normalizeSystemsBackupData(incoming.systemsData);
+    if (typeof collectExistingUnitsIntoSettings === "function") collectExistingUnitsIntoSettings();
     saveSystemsData();
   }
   if (incoming.socialData) {
@@ -477,6 +479,13 @@ function _doMerge(incoming) {
     mergeById(systemsData.trackers, norm.trackers);
     mergeById(systemsData.goals,    norm.goals);
     mergeById(systemsData.metrics,  norm.metrics);
+    if (!Array.isArray(systemsData.objectives)) systemsData.objectives = [];
+    mergeById(systemsData.objectives, norm.objectives || []);
+    (norm.savedTrackerUnits || []).forEach(unit => {
+      if (typeof rememberTrackerUnit === "function") rememberTrackerUnit(unit);
+    });
+    if (norm.unitSortMode) systemsData.unitSortMode = norm.unitSortMode;
+    if (typeof collectExistingUnitsIntoSettings === "function") collectExistingUnitsIntoSettings();
     saveSystemsData();
     if (typeof migrateSystemsToUnifiedTrackers === "function") migrateSystemsToUnifiedTrackers();
   }
