@@ -1,0 +1,3 @@
+window.FLOW_SUPABASE_CONFIG = {
+  url: "https://vryerurkxahqotzjidyc.supabase.co", anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZyeWVydXJreGFocW90emppZHljIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MDkxNTQsImV4cCI6MjA5NDA4NTE1NH0.jNNOCQ0YkWFKKvj6s7uyXalI2ATMOMSnSAStHQFm944"
+};
