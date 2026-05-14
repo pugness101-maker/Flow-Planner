@@ -2363,3 +2363,46 @@ button:disabled {
   outline: 2px solid var(--danger);
   outline-offset: 2px;
 }
+
+.trackers-dash.systems-summary-grid {
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+}
+
+.tracker-subhead {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tracker-log-history {
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+  padding-top: 4px;
+}
+
+.tracker-log-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.tracker-log-row:last-child {
+  border-bottom: none;
+}
+
+.log-source-pill {
+  display: inline-block;
+  margin: 0 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: middle;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}

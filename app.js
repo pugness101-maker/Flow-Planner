@@ -67,7 +67,9 @@ let systemsData = JSON.parse(localStorage.getItem("flowSystemsData")) || {
   logs: [],
   trackers: [],
   goals: [],
-  metrics: []
+  metrics: [],
+  savedTrackerCategories: [],
+  savedTrackerUnits: []
 };
 
 if (!Array.isArray(systemsData.habits)) systemsData.habits = [];
@@ -75,6 +77,12 @@ if (!Array.isArray(systemsData.logs)) systemsData.logs = [];
 if (!Array.isArray(systemsData.trackers)) systemsData.trackers = [];
 if (!Array.isArray(systemsData.goals)) systemsData.goals = [];
 if (!Array.isArray(systemsData.metrics)) systemsData.metrics = [];
+if (!Array.isArray(systemsData.savedTrackerCategories)) systemsData.savedTrackerCategories = [];
+if (!Array.isArray(systemsData.savedTrackerUnits)) systemsData.savedTrackerUnits = [];
+
+const TRACKER_CATEGORIES = ["Goal", "Counter", "Taper", "Habit-linked", "Milestone", "Body Metric", "Finance", "Custom"];
+const DEFAULT_TRACKER_UNITS = ["classes", "hours", "dollars", "lbs", "oz", "grams", "days", "sessions", "%"];
+const TRACKER_RESET_TYPES = ["No reset", "Daily", "Weekly", "Monthly", "Custom recurring", "Milestone-based"];
 
 systemsData.goals = systemsData.goals.map(goal => ({
   id: goal.id || createId("goal"),
@@ -94,19 +102,6 @@ systemsData.goals = systemsData.goals.map(goal => ({
   milestones: Array.isArray(goal.milestones) ? goal.milestones : [],
   recurringTarget: goal.recurringTarget || "",
   notes: goal.notes || ""
-}));
-
-systemsData.trackers = systemsData.trackers.map(tracker => ({
-  id: tracker.id || createId("tracker"),
-  name: tracker.name || "",
-  type: tracker.type || "Custom",
-  startValue: tracker.startValue ?? "",
-  currentValue: tracker.currentValue ?? "",
-  targetValue: tracker.targetValue ?? "",
-  unit: tracker.unit || "",
-  startDate: tracker.startDate || "",
-  targetDate: tracker.targetDate || "",
-  notes: tracker.notes || ""
 }));
 
 systemsData.metrics = systemsData.metrics.map(metric => ({
@@ -141,6 +136,17 @@ systemsData.habits = systemsData.habits.map(habit => ({
   completions: Array.isArray(habit.completions) ? habit.completions : []
 }));
 
+function inferLegacyLogSource(log) {
+  const tid = log.linkedTrackerId || log.trackerId || log.linkedMetricId;
+  if (log.logSource === "manual" || log.logSource === "habit" || log.logSource === "planner") return log.logSource;
+  if (log.linkedPlannerBlockId && tid) return "planner";
+  if (log.notes && /Planner completion/i.test(log.notes) && tid) return "planner";
+  if (log.notes === "Habit auto" || (log.notes && /habit completion/i.test(log.notes))) return "habit";
+  if (log.type === "Habit" && log.linkedPlannerBlockId) return "habit";
+  if (tid) return "manual";
+  return "manual";
+}
+
 systemsData.logs = systemsData.logs.map(log => ({
   id: log.id || createId("log"),
   title: log.title || "",
@@ -153,9 +159,17 @@ systemsData.logs = systemsData.logs.map(log => ({
   linkedHabitId: log.linkedHabitId || "",
   linkedItemType: log.linkedItemType || (log.linkedMetricId ? "metric" : log.linkedGoalId ? "goal" : log.linkedHabitId ? "habit" : ""),
   linkedMetricId: log.linkedMetricId || "",
+  linkedTrackerId: log.linkedTrackerId || log.trackerId || "",
   linkedGoalId: log.linkedGoalId || "",
-  linkedPlannerBlockId: log.linkedPlannerBlockId || ""
+  linkedPlannerBlockId: log.linkedPlannerBlockId || "",
+  logSource: log.logSource || inferLegacyLogSource(log),
+  plannerAutoLogKey: log.plannerAutoLogKey || "",
+  inactive: Boolean(log.inactive)
 }));
+
+migrateSystemsToUnifiedTrackers();
+
+systemsData.trackers = systemsData.trackers.map(normalizeUnifiedTrackerRecord);
 
 let scheduleData = JSON.parse(localStorage.getItem("flowScheduleData")) || {
   blocks: []
@@ -212,6 +226,9 @@ let editingGoalIndex = null;
 let openBlockActionMenuIndex = null;
 let routineCopySourceDay = null;
 let editingMetricIndex = null;
+let editingLogIndex = null;
+let manualLogTrackerId = null;
+let trackerCategoryFilter = "All";
 let activePlannerSection = "Day";
 let activeSystemsSection = "Overview";
 let activeSocialSection = "Friends";
@@ -278,7 +295,7 @@ const pages = {
         <div class="quick-add-grid">
           <button onclick="openPlannerSection('Day')">Time Block</button>
           <button onclick="openSystemsSection('Habits')">Habit</button>
-          <button onclick="openSystemsSection('Logs')">Log</button>
+          <button onclick="openSystemsSection('Trackers')">Tracker</button>
           <button onclick="openSocialSection('Hangouts')">Hangout</button>
         </div>
       </div>
@@ -422,14 +439,14 @@ const pages = {
   `,
 
   Systems: () => `
-    ${renderSubTabs("Systems", ["Overview", "Habits", "Metrics", "Logs"], activeSystemsSection)}
+    ${renderSubTabs("Systems", ["Overview", "Habits", "Trackers"], activeSystemsSection)}
     ${renderSystemsSheet()}
     ${systemsAddMenuOpen ? renderSystemsAddMenu() : ""}
     <div class="systems-hero card">
       <div>
         <p class="eyebrow">Systems</p>
         <h2>Life Analytics</h2>
-        <p class="muted-text">Habits, logs, metrics, goals, and planner blocks now work together.</p>
+        <p class="muted-text">Habits, trackers (metrics and logs), goals, and planner blocks work together.</p>
       </div>
       <button onclick="openSystemsAddMenu()">+ Add</button>
     </div>
@@ -459,29 +476,25 @@ const pages = {
       </div>
       <div id="habitsList"></div>
     ` : ""}
-    ${activeSystemsSection === "Metrics" ? `
+    ${activeSystemsSection === "Trackers" ? `
       <div class="section-toolbar card">
         <div>
-          <h3>Metrics</h3>
-          <p class="muted-text">Metrics, goals, and trackers live together here for progress tracking.</p>
+          <h3>Trackers</h3>
+          <p class="muted-text">Metrics and logs in one place: goals, counters, taper, habits, and custom progress.</p>
         </div>
         <div class="button-row">
-          <button onclick="openSystemsForm('metric')">Add Metric</button>
+          <button onclick="openSystemsForm('tracker')">Add Tracker</button>
+          <button class="secondary-btn" onclick="openSystemsForm('log')">Add Log</button>
           <button class="secondary-btn" onclick="openSystemsForm('goal')">Add Goal</button>
         </div>
       </div>
-      <div id="metricsList"></div>
-    ` : ""}
-    ${activeSystemsSection === "Logs" ? `
-      <div class="section-toolbar card">
-        <div>
-          <h3>Logs</h3>
-          <p class="muted-text">Daily sleep, gym, spending, health, study, and custom history.</p>
-        </div>
-        <button onclick="openSystemsForm('log')">Add Log</button>
-      </div>
-      <div class="card">
-        <div id="systemsLogsList"></div>
+      <div id="trackersSummaryCards" class="card trackers-summary-cards"></div>
+      <div class="card list-controls" id="trackerCategoryFilterMount"></div>
+      <div id="trackersUnifiedList"></div>
+      <div class="card" style="margin-top:14px">
+        <h3>Goals</h3>
+        <p class="muted-text">Structured goals with reset cycles and milestones.</p>
+        <div id="trackersGoalsSection"></div>
       </div>
     ` : ""}
     <button class="floating-add-btn systems-fab" onclick="openSystemsAddMenu()">+</button>
@@ -1179,24 +1192,36 @@ function addTaskToBlock(index) {
 }
 
 function toggleTaskComplete(blockIndex, taskIndex) {
-  const task = scheduleData.blocks[blockIndex].tasks[taskIndex];
+  const blk = scheduleData.blocks[blockIndex];
+  const wasComplete = blk.completed;
+  const task = blk.tasks[taskIndex];
   task.completed = !task.completed;
-  scheduleData.blocks[blockIndex].completed = scheduleData.blocks[blockIndex].tasks.length
-    ? scheduleData.blocks[blockIndex].tasks.every(item => item.completed)
-    : scheduleData.blocks[blockIndex].completed;
+  blk.completed = blk.tasks.length
+    ? blk.tasks.every(item => item.completed)
+    : blk.completed;
+  if (blk.completed && !wasComplete && blk.systemHabitId) {
+    completeHabitFromPlannerBlock(blk);
+    autoLogTrackersForPlannerBlock(blk);
+  } else if (!blk.completed && wasComplete) {
+    removePlannerAutoLogsForBlock(blk);
+  }
   saveScheduleData();
   renderPlanner();
 }
 
 function toggleBlockComplete(index) {
   const block = scheduleData.blocks[index];
+  const wasComplete = block.completed;
   block.completed = !block.completed;
   block.tasks = block.tasks.map(task => ({
     ...task,
     completed: block.completed ? true : task.completed
   }));
-  if (block.completed && block.systemHabitId) {
+  if (block.completed && !wasComplete && block.systemHabitId) {
     completeHabitFromPlannerBlock(block);
+    autoLogTrackersForPlannerBlock(block);
+  } else if (!block.completed && wasComplete) {
+    removePlannerAutoLogsForBlock(block);
   }
   saveScheduleData();
   renderPlanner();
@@ -1231,7 +1256,14 @@ function completeHabitFromPlannerBlock(block) {
       date,
       notes: `Completed from Planner block: ${block.title}`,
       linkedHabitId: habit.id,
-      linkedPlannerBlockId: block.id
+      linkedItemType: "habit",
+      linkedMetricId: "",
+      linkedTrackerId: "",
+      linkedGoalId: "",
+      linkedPlannerBlockId: block.id,
+      logSource: "habit",
+      plannerAutoLogKey: "",
+      inactive: false
     });
   }
   saveSystemsData();
@@ -1251,6 +1283,7 @@ function deleteTimeBlock(index) {
   const block = scheduleData.blocks[index];
   if (!block) return;
   if (!confirm("Delete this time block?")) return;
+  removePlannerAutoLogsForBlock(block);
   const date = block.date;
   scheduleData.blocks.splice(index, 1);
   if (editingBlockIndex === index) editingBlockIndex = null;
@@ -2608,7 +2641,7 @@ function renderTodayFocus() {
       <button onclick="${focus.nextBlockAction}"><span>Current/next block</span><strong>${escapeHTML(focus.nextBlock)}</strong></button>
       <button onclick="openPlannerSection('Day')"><span>Top unfinished task</span><strong>${escapeHTML(focus.topTask)}</strong></button>
       <button onclick="openSystemsSection('Habits')"><span>Habit left</span><strong>${escapeHTML(focus.habitLeft)}</strong></button>
-      <button onclick="openSystemsSection('Metrics')"><span>Goal preview</span><strong>${escapeHTML(focus.goalPreview)}</strong></button>
+      <button onclick="openSystemsSection('Trackers')"><span>Goal preview</span><strong>${escapeHTML(focus.goalPreview)}</strong></button>
       <button onclick="openSocialSection('Friends')"><span>Social reminder</span><strong>${escapeHTML(focus.socialSuggestion)}</strong></button>
     </div>
   `;
@@ -2709,7 +2742,7 @@ function getHomeNextAction(context) {
       title: context.goal.name,
       detail: `${context.goal.progress}% complete${context.goal.status ? ` • ${context.goal.status}` : ""}`,
       actionLabel: "Open metrics",
-      action: "openSystemsSection('Metrics')"
+      action: "openSystemsSection('Trackers')"
     };
   }
 
@@ -2814,10 +2847,10 @@ function renderHomeGoalProgress() {
         </div>
         <p class="tracker-pct">${escapeHTML(String(goal.current))}/${escapeHTML(String(goal.target))} ${escapeHTML(goal.unit)}</p>
         ${goal.deadline ? `<p>Deadline: ${escapeHTML(goal.deadline)}</p>` : ""}
-        <button class="secondary-btn" onclick="openSystemsSection('Metrics')">Open goals</button>
+        <button class="secondary-btn" onclick="openSystemsSection('Trackers')">Open goals</button>
       </div>
     `
-    : `<div class="empty-state small"><p>No goals yet.</p><button onclick="openSystemsSection('Metrics')">Add first goal</button></div>`;
+    : `<div class="empty-state small"><p>No goals yet.</p><button onclick="openSystemsSection('Trackers')">Add first goal</button></div>`;
 }
 
 function renderHomeSocialReminder() {
@@ -2927,8 +2960,9 @@ function renderSystemsSheet() {
   if (!activeSystemsForm) return "";
   const titles = {
     habit: editingHabitIndex === null ? "Add Habit" : "Edit Habit",
-    log: "Add Log",
-    metric: editingMetricIndex === null && editingTrackerIndex === null ? "Add Metric" : "Edit Metric",
+    log: editingLogIndex === null ? "Add Log" : "Edit Log",
+    tracker: editingTrackerIndex === null ? "Add Tracker" : "Edit Tracker",
+    trackerLog: "Manual tracker log",
     goal: editingGoalIndex === null ? "Add Goal" : "Edit Goal"
   };
 
@@ -2942,7 +2976,8 @@ function renderSystemsSheet() {
         </div>
         ${activeSystemsForm === "habit" ? renderHabitFormFields() : ""}
         ${activeSystemsForm === "log" ? renderLogFormFields() : ""}
-        ${activeSystemsForm === "metric" ? renderMetricFormFields() : ""}
+        ${activeSystemsForm === "tracker" ? renderTrackerFormFields() : ""}
+        ${activeSystemsForm === "trackerLog" ? renderTrackerManualLogFormFields() : ""}
         ${activeSystemsForm === "goal" ? renderGoalFormFields() : ""}
       </div>
     </div>
@@ -3007,6 +3042,13 @@ function renderHabitFormFields() {
   `;
 }
 
+function getRecentPlannerBlocksForLogSelect(limit = 100) {
+  return [...scheduleData.blocks]
+    .filter(b => !b.isBuffer && b.id)
+    .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.start || "").localeCompare(a.start || ""))
+    .slice(0, limit);
+}
+
 function renderLogFormFields() {
   return `
     <input id="logTitle" placeholder="Log title">
@@ -3028,42 +3070,147 @@ function renderLogFormFields() {
     <select id="logLinkedItemType" onchange="updateLogLinkedItemOptions()">
       <option value="">No linked item</option>
       <option value="habit">Linked Habit</option>
-      <option value="metric">Linked Metric</option>
+      <option value="tracker">Linked Tracker</option>
       <option value="goal">Linked Goal</option>
     </select>
     <div id="logLinkedItemSelectWrap"></div>
+    <label class="muted-text small" style="display:block;margin-top:8px">Optional planner block</label>
+    <select id="logLinkedPlannerBlockId">
+      <option value="">None</option>
+      ${getRecentPlannerBlocksForLogSelect().map(b => `
+        <option value="${escapeHTML(b.id)}">${escapeHTML(b.date || "")} ${escapeHTML(b.start || "")} — ${escapeHTML(b.title || "")}</option>
+      `).join("")}
+    </select>
     <textarea id="logNotes" placeholder="Notes"></textarea>
-    <button onclick="saveSystemLog()">Save Log</button>
+    <button onclick="saveSystemLog()">${editingLogIndex === null ? "Save Log" : "Update Log"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
   `;
 }
 
-function renderMetricFormFields() {
+function renderTrackerFormFields() {
   return `
-    <input id="metricName" placeholder="Name">
-    <select id="metricType">
-      <option value="Numeric">Numeric Tracker</option>
-      <option value="Progress">Progress Goal</option>
-      <option value="Counter">Counter</option>
-      <option value="Boolean">Daily Check-in</option>
-      <option value="Time">Time Tracker</option>
-      <option value="Milestone">Milestone Goal</option>
+    <input id="trackerName" placeholder="Name">
+    <label class="muted-text small">Category / type (pick or type your own)</label>
+    <input id="trackerCategory" list="trackerCategoryList" autocomplete="off" placeholder="e.g. Counter, MMA…">
+    <datalist id="trackerCategoryList">${buildTrackerCategoryDatalistInnerHtml()}</datalist>
+    <label class="muted-text small">Unit</label>
+    <input id="trackerUnit" list="trackerUnitList" autocomplete="off" placeholder="e.g. classes, hours…">
+    <datalist id="trackerUnitList">${buildTrackerUnitDatalistInnerHtml()}</datalist>
+    <div class="habit-meta-row">
+      <input id="trackerStartValue" type="number" step="any" placeholder="Start value">
+      <input id="trackerCurrentValue" type="number" step="any" placeholder="Current value">
+    </div>
+    <input id="trackerTargetValue" type="number" step="any" placeholder="Target value">
+    <select id="trackerDirection">
+      <option value="increase">Progress: increase toward target</option>
+      <option value="decrease">Progress: decrease / taper toward target</option>
     </select>
-    <input id="metricUnit" placeholder="Unit (lb, hrs, $, reps...)">
-    <input id="metricStartValue" type="number" placeholder="Start value">
-    <input id="metricCurrentValue" type="number" placeholder="Current value">
-    <input id="metricTargetValue" type="number" placeholder="Target value">
-    <input id="metricRecurringTarget" placeholder="Recurring target (weekly, monthly, custom)">
-    <input id="metricStartDate" type="date">
-    <input id="metricDeadline" type="date">
-    <select id="metricLinkedHabit">
+    <select id="trackerLogValueMode">
+      <option value="increment">Log values add up (sessions, counts per period)</option>
+      <option value="absolute">Log values are measurements (weight, grams left, etc.)</option>
+    </select>
+    <select id="trackerResetType">
+      ${TRACKER_RESET_TYPES.map(r => `<option value="${escapeHTML(r)}">${escapeHTML(r)}</option>`).join("")}
+    </select>
+    <input id="trackerResetCustomNote" placeholder="Custom recurring detail (optional)">
+    <div class="habit-meta-row">
+      <input id="trackerStartDate" type="date" placeholder="Start date">
+      <input id="trackerTargetDate" type="date" placeholder="Target / end date">
+    </div>
+    <select id="trackerLinkedHabit">
       <option value="">No linked habit</option>
       ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
     </select>
-    <textarea id="metricNotes" placeholder="Notes"></textarea>
-    <button id="metricSaveButton" onclick="saveMetric()">${editingMetricIndex === null && editingTrackerIndex === null ? "Save Metric" : "Update Metric"}</button>
+    <label class="inline-check"><input type="checkbox" id="trackerAutoLogPlanner"> Auto-log when linked habit’s planner block is completed</label>
+    <div class="habit-meta-row">
+      <input id="trackerAutoLogAmount" type="number" step="any" placeholder="Auto-log amount (default 1)" value="1">
+      <input id="trackerAutoLogUnit" placeholder="Auto-log unit (blank = tracker unit)">
+    </div>
+    <label class="inline-check"><input type="checkbox" id="trackerPreventDupAuto" checked> Prevent duplicate auto-logs (same block & day)</label>
+    <textarea id="trackerNotes" placeholder="Notes"></textarea>
+    <button id="trackerSaveButton" onclick="saveUnifiedTrackerFromModal()">${editingTrackerIndex === null ? "Save Tracker" : "Update Tracker"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
   `;
+}
+
+function renderTrackerManualLogFormFields() {
+  const tracker = systemsData.trackers.find(t => t.id === manualLogTrackerId);
+  if (!tracker) return "<p>Tracker not found.</p>";
+  const blocks = scheduleData.blocks.filter(b => !b.isBuffer && b.id && b.date === getTodayISO());
+  return `
+    <p class="muted-text">Manual entry for <strong>${escapeHTML(tracker.name)}</strong></p>
+    <input id="manualLogDate" type="date" onchange="refreshManualLogPlannerBlockOptions()">
+    <input id="manualLogValue" type="number" step="any" placeholder="Value / amount" required>
+    <textarea id="manualLogNotes" placeholder="Notes"></textarea>
+    <label class="muted-text small">Optional linked habit</label>
+    <select id="manualLogLinkedHabit">
+      <option value="">None</option>
+      ${systemsData.habits.map(h => `<option value="${h.id}" ${h.id === tracker.linkedHabitId ? "selected" : ""}>${escapeHTML(h.name)}</option>`).join("")}
+    </select>
+    <label class="muted-text small">Optional planner block</label>
+    <select id="manualLogPlannerBlock">
+      <option value="">None</option>
+      ${blocks.map(b => `<option value="${escapeHTML(b.id)}">${escapeHTML(b.start || "")}–${escapeHTML(b.end || "")} ${escapeHTML(b.title || "")}</option>`).join("")}
+    </select>
+    <button onclick="saveTrackerManualLog()">Save log</button>
+    <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
+  `;
+}
+
+function refreshManualLogPlannerBlockOptions() {
+  const sel = document.getElementById("manualLogPlannerBlock");
+  const dateInput = document.getElementById("manualLogDate");
+  if (!sel || !dateInput) return;
+  const d = dateInput.value || getTodayISO();
+  const blocks = scheduleData.blocks.filter(b => !b.isBuffer && b.id && b.date === d);
+  sel.innerHTML = `<option value="">None</option>${blocks.map(b =>
+    `<option value="${escapeHTML(b.id)}">${escapeHTML(b.start || "")}–${escapeHTML(b.end || "")} ${escapeHTML(b.title || "")}</option>`
+  ).join("")}`;
+}
+
+function saveTrackerManualLog() {
+  const tracker = systemsData.trackers.find(t => t.id === manualLogTrackerId);
+  if (!tracker) return;
+  const value = document.getElementById("manualLogValue")?.value.trim();
+  if (value === "" || isNaN(Number(value))) {
+    alert("Enter a numeric value.");
+    return;
+  }
+  const date = document.getElementById("manualLogDate")?.value || getTodayISO();
+  const notes = document.getElementById("manualLogNotes")?.value.trim() || "";
+  const habitId = document.getElementById("manualLogLinkedHabit")?.value || "";
+  const blockId = document.getElementById("manualLogPlannerBlock")?.value || "";
+  const block = blockId ? scheduleData.blocks.find(b => b.id === blockId) : null;
+  systemsData.logs.push({
+    id: createId("log"),
+    title: tracker.name,
+    type: tracker.category || "Custom",
+    valueType: tracker.category || "Custom",
+    value,
+    unit: tracker.unit || "",
+    date,
+    notes: notes || "Manual tracker log",
+    linkedHabitId: habitId,
+    linkedItemType: "tracker",
+    linkedMetricId: "",
+    linkedTrackerId: tracker.id,
+    linkedGoalId: "",
+    linkedPlannerBlockId: blockId,
+    logSource: "manual",
+    plannerAutoLogKey: "",
+    inactive: false
+  });
+  recalcTrackerCurrentFromLogs(tracker);
+  manualLogTrackerId = null;
+  activeSystemsForm = null;
+  saveSystemsData();
+  activeSystemsSection = "Trackers";
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function openTrackerManualLog(trackerId) {
+  openSystemsForm("trackerLog", trackerId);
 }
 
 function renderGoalFormFields() {
@@ -3126,16 +3273,17 @@ function openSystemsForm(kind, index = null) {
   systemsAddMenuOpen = false;
   activeSystemsForm = kind;
   editingHabitIndex = kind === "habit" ? index : null;
-  editingMetricIndex = kind === "metric" ? index : null;
+  editingMetricIndex = null;
   editingGoalIndex = kind === "goal" ? index : null;
-  editingTrackerIndex = null;
+  editingTrackerIndex = kind === "tracker" ? index : null;
+  editingLogIndex = kind === "log" ? index : null;
+  manualLogTrackerId = kind === "trackerLog" ? index : null;
   if (kind === "habit") activeSystemsSection = "Habits";
-  if (kind === "log") activeSystemsSection = "Logs";
-  if (kind === "metric") activeSystemsSection = "Metrics";
-  if (kind === "goal") activeSystemsSection = "Metrics";
+  if (kind === "log" || kind === "tracker" || kind === "goal" || kind === "trackerLog") activeSystemsSection = "Trackers";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
   fillDefaultLogDate();
+  fillEditingManualLogForm();
   const firstInput = document.querySelector("#systemsModal input, #systemsModal select, #systemsModal textarea");
   firstInput?.focus();
 }
@@ -3144,8 +3292,7 @@ function openSystemsFormForSection() {
   const map = {
     Overview: "habit",
     Habits: "habit",
-    Metrics: "metric",
-    Logs: "log"
+    Trackers: "tracker"
   };
   openSystemsForm(map[activeSystemsSection] || "habit");
 }
@@ -3166,7 +3313,7 @@ function renderSystemsAddMenu() {
           <button class="icon-btn" onclick="closeSystemsAddMenu()">x</button>
         </div>
         <button onclick="openSystemsForm('habit')">Add Habit</button>
-        <button onclick="openSystemsForm('metric')">Add Metric</button>
+        <button onclick="openSystemsForm('tracker')">Add Tracker</button>
         <button onclick="openSystemsForm('goal')">Add Goal</button>
         <button onclick="openSystemsForm('log')">Add Log</button>
       </div>
@@ -3191,6 +3338,8 @@ function closeSystemsForm() {
   editingTrackerIndex = null;
   editingGoalIndex = null;
   editingMetricIndex = null;
+  editingLogIndex = null;
+  manualLogTrackerId = null;
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
 }
@@ -3200,17 +3349,20 @@ function closeSystemsFormFromBackdrop(event) {
 }
 
 function renderSystems() {
+  seedTrackerPresetsFromTrackers();
   fillEditingHabitForm();
   fillEditingTrackerForm();
   fillEditingGoalForm();
-  fillEditingMetricForm();
   renderSystemsDashboard();
   renderHabitsList();
-  renderSystemsLogsList();
-  renderMetricsList();
+  renderTrackersSummaryCards();
+  renderTrackersUnifiedList();
   renderGoalsList();
+  renderGoalsList("trackersGoalsSection");
   fillDefaultLogDate();
   updateLogLinkedItemOptions();
+  fillEditingLogForm();
+  fillEditingManualLogForm();
 }
 
 function saveHabit() {
@@ -3311,14 +3463,50 @@ function completeHabitToday(index) {
       id: createId("log"),
       title: habit.name,
       type: "Habit",
+      valueType: "Boolean",
       value: "1",
       unit: "completion",
       date: today,
       notes: "Completed habit",
       linkedHabitId: habit.id,
-      linkedPlannerBlockId: ""
+      linkedItemType: "habit",
+      linkedMetricId: "",
+      linkedTrackerId: "",
+      linkedGoalId: "",
+      linkedPlannerBlockId: "",
+      logSource: "habit",
+      plannerAutoLogKey: "",
+      inactive: false
     });
   }
+
+  systemsData.trackers
+    .filter(t => t.linkedHabitId === habit.id)
+    .forEach(tracker => {
+      const dup = systemsData.logs.some(log =>
+        log.linkedTrackerId === tracker.id && log.date === today && log.notes === "Habit auto"
+      );
+      if (dup) return;
+      systemsData.logs.push({
+        id: createId("log"),
+        title: tracker.name,
+        type: tracker.category || "Custom",
+        value: "1",
+        unit: tracker.unit || "count",
+        date: today,
+        notes: "Habit auto",
+        linkedHabitId: habit.id,
+        linkedItemType: "tracker",
+        linkedMetricId: "",
+        linkedTrackerId: tracker.id,
+        linkedGoalId: "",
+        linkedPlannerBlockId: "",
+        logSource: "habit",
+        plannerAutoLogKey: "",
+        inactive: false
+      });
+      recalcTrackerCurrentFromLogs(tracker);
+    });
 
   saveSystemsData();
   renderSystems();
@@ -3384,9 +3572,9 @@ function saveSystemLog() {
   if (!title && !value) return;
   const linkedItemType = document.getElementById("logLinkedItemType")?.value || "";
   const linkedItemId = document.getElementById("logLinkedItemId")?.value || "";
+  const prev = editingLogIndex !== null ? systemsData.logs[editingLogIndex] : null;
 
-  const log = {
-    id: createId("log"),
+  const payload = {
     title,
     type: document.getElementById("logType").value,
     valueType: document.getElementById("logType").value,
@@ -3396,16 +3584,32 @@ function saveSystemLog() {
     notes: document.getElementById("logNotes").value.trim(),
     linkedItemType,
     linkedHabitId: linkedItemType === "habit" ? linkedItemId : "",
-    linkedMetricId: linkedItemType === "metric" ? linkedItemId : "",
+    linkedMetricId: "",
+    linkedTrackerId: linkedItemType === "tracker" ? linkedItemId : "",
     linkedGoalId: linkedItemType === "goal" ? linkedItemId : "",
-    linkedPlannerBlockId: ""
+    linkedPlannerBlockId: document.getElementById("logLinkedPlannerBlockId")?.value || "",
+    logSource: prev?.logSource ?? "manual",
+    plannerAutoLogKey: prev?.plannerAutoLogKey ?? "",
+    inactive: Boolean(prev?.inactive)
   };
-  systemsData.logs.push(log);
-  syncLinkedItemsFromLog(log);
 
-  saveSystemsData();
+  let log;
+  if (editingLogIndex !== null) {
+    const id = systemsData.logs[editingLogIndex].id;
+    systemsData.logs[editingLogIndex] = { ...systemsData.logs[editingLogIndex], ...payload, id };
+    log = systemsData.logs[editingLogIndex];
+  } else {
+    log = { id: createId("log"), ...payload };
+    systemsData.logs.push(log);
+  }
+
+  syncLinkedItemsFromLog(log);
+  recalcAllTrackerCurrentsFromLogs();
+
+  editingLogIndex = null;
   activeSystemsForm = null;
-  activeSystemsSection = "Logs";
+  saveSystemsData();
+  activeSystemsSection = "Trackers";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
 }
@@ -3423,8 +3627,8 @@ function updateLogLinkedItemOptions() {
 
   const source = type === "habit"
     ? systemsData.habits
-    : type === "metric"
-      ? systemsData.metrics
+    : type === "tracker"
+      ? systemsData.trackers
       : systemsData.goals;
   const suggestionMatcher = logType === "Weight"
     ? isWeightRelated
@@ -3451,20 +3655,299 @@ function isTaperRelated(item) {
   return /taper|reduce|reduction|decrease|cut/i.test(`${item.name || ""} ${item.category || ""} ${item.goalType || ""} ${item.unit || ""} ${item.notes || ""}`);
 }
 
-function syncLinkedItemsFromLog(log) {
-  const numericValue = getLogNumber(log);
-  if (isNaN(numericValue)) return;
+function getLogLinkedTrackerId(log) {
+  return log.linkedTrackerId || log.trackerId || log.linkedMetricId || "";
+}
 
-  if (log.linkedMetricId) {
-    const metric = systemsData.metrics.find(item => item.id === log.linkedMetricId);
-    if (metric) {
-      metric.currentValue = String(numericValue);
-      if (!Array.isArray(metric.entries)) metric.entries = [];
-      metric.entries.push({ date: log.date || getTodayISO(), value: String(numericValue), logId: log.id });
-    }
+function inferResetTypeFromRecurringText(text) {
+  const t = String(text || "").toLowerCase();
+  if (!t.trim()) return "No reset";
+  if (/\bdaily\b|each day|every day/.test(t)) return "Daily";
+  if (/\bweekly\b|each week|every week|per week|\/week/.test(t)) return "Weekly";
+  if (/\bmonthly\b|each month|every month|per month|\/month/.test(t)) return "Monthly";
+  if (/\bmilestone\b/.test(t)) return "Milestone-based";
+  if (t.trim().length) return "Custom recurring";
+  return "No reset";
+}
+
+function mapLegacyMetricTypeToCategory(metricType) {
+  const t = metricType || "Counter";
+  if (t === "Counter") return "Counter";
+  if (t === "Boolean") return "Habit-linked";
+  if (t === "Time") return "Goal";
+  if (t === "Milestone") return "Milestone";
+  if (/taper/i.test(t)) return "Taper";
+  if (/weight|body/i.test(t)) return "Body Metric";
+  return "Custom";
+}
+
+function inferTrackerDirection(category, startVal, targetVal) {
+  const s = Number(startVal);
+  const e = Number(targetVal);
+  if (!isNaN(s) && !isNaN(e) && e < s) return "decrease";
+  if (category === "Taper") return "decrease";
+  return "increase";
+}
+
+function inferLogValueMode(category, legacyMetricType) {
+  if (legacyMetricType === "Counter" || legacyMetricType === "Time") return "increment";
+  if (category === "Counter" || category === "Goal") return "increment";
+  return "absolute";
+}
+
+function legacyTrackerTypeToCategory(oldType) {
+  const t = oldType || "Custom";
+  if (t === "Weight") return "Body Metric";
+  if (t === "Taper") return "Taper";
+  if (t === "Spending" || t === "Finance") return "Finance";
+  return "Custom";
+}
+
+function normalizeUnifiedTrackerRecord(tracker) {
+  const rawCat = String(tracker.category || legacyTrackerTypeToCategory(tracker.type) || "").trim() || "Custom";
+  const category = rawCat;
+  const startValue = tracker.startValue ?? "";
+  const targetValue = tracker.targetValue ?? "";
+  const direction = tracker.direction || inferTrackerDirection(category, startValue, targetValue);
+  return {
+    id: tracker.id || createId("tracker"),
+    name: tracker.name || "",
+    category,
+    unit: tracker.unit || "",
+    startValue,
+    currentValue: tracker.currentValue ?? "0",
+    targetValue,
+    resetType: TRACKER_RESET_TYPES.includes(tracker.resetType) ? tracker.resetType : inferResetTypeFromRecurringText(tracker.resetCustomNote || tracker.recurringTarget),
+    resetCustomNote: tracker.resetCustomNote || tracker.recurringTarget || "",
+    startDate: tracker.startDate || "",
+    targetDate: tracker.targetDate || tracker.deadline || "",
+    linkedHabitId: tracker.linkedHabitId || "",
+    notes: tracker.notes || "",
+    direction,
+    logValueMode: tracker.logValueMode === "increment" || tracker.logValueMode === "absolute"
+      ? tracker.logValueMode
+      : inferLogValueMode(category, tracker.legacyMetricType || ""),
+    legacyMetricType: tracker.legacyMetricType || "",
+    autoLogOnPlannerComplete: Boolean(tracker.autoLogOnPlannerComplete),
+    autoLogAmount: tracker.autoLogAmount !== undefined && tracker.autoLogAmount !== null ? String(tracker.autoLogAmount) : "1",
+    autoLogUnit: tracker.autoLogUnit !== undefined && tracker.autoLogUnit !== null ? String(tracker.autoLogUnit) : "",
+    preventDuplicateAutoLogs: tracker.preventDuplicateAutoLogs !== false
+  };
+}
+
+function migrateSystemsToUnifiedTrackers() {
+  const hadUnifiedFlag = Boolean(systemsData._trackersUnifiedV1);
+  const metrics = systemsData.metrics || [];
+  const oldTrackers = systemsData.trackers || [];
+  const trackerIds = new Set();
+
+  if (hadUnifiedFlag && !metrics.length) {
+    recalcAllTrackerCurrentsFromLogs();
+    return;
   }
 
-  if (log.linkedGoalId) {
+  function pushTracker(t) {
+    if (!t.id) t.id = createId("tracker");
+    if (trackerIds.has(t.id)) return;
+    trackerIds.add(t.id);
+    systemsData.trackers.push(normalizeUnifiedTrackerRecord(t));
+  }
+
+  if (!hadUnifiedFlag) {
+    systemsData.trackers = [];
+    metrics.forEach(metric => {
+      const category = mapLegacyMetricTypeToCategory(metric.type);
+      const direction = inferTrackerDirection(category, metric.startValue, metric.targetValue);
+      const logValueMode = inferLogValueMode(category, metric.type);
+      const resetType = inferResetTypeFromRecurringText(metric.recurringTarget);
+      pushTracker({
+        id: metric.id,
+        name: metric.name,
+        category,
+        unit: metric.unit,
+        startValue: metric.startValue ?? "",
+        currentValue: metric.currentValue ?? "0",
+        targetValue: metric.targetValue ?? "",
+        resetType,
+        resetCustomNote: metric.recurringTarget || "",
+        startDate: metric.startDate || "",
+        targetDate: metric.deadline || "",
+        linkedHabitId: metric.linkedHabitId || "",
+        notes: metric.notes || "",
+        direction,
+        logValueMode,
+        legacyMetricType: metric.type || ""
+      });
+      (metric.entries || []).forEach(entry => {
+        if (entry.logId) {
+          const log = systemsData.logs.find(l => l.id === entry.logId);
+          if (log) {
+            log.linkedTrackerId = metric.id;
+            if (!log.linkedItemType) log.linkedItemType = "tracker";
+          }
+          return;
+        }
+        if (entry.value === undefined || entry.value === "") return;
+        systemsData.logs.push({
+          id: createId("log"),
+          title: metric.name,
+          type: metric.type || "Custom",
+          valueType: metric.type || "Custom",
+          value: String(entry.value),
+          unit: metric.unit || "",
+          date: entry.date || getTodayISO(),
+          notes: "Imported from metric history",
+          linkedHabitId: "",
+          linkedItemType: "tracker",
+          linkedMetricId: "",
+          linkedTrackerId: metric.id,
+          linkedGoalId: "",
+          linkedPlannerBlockId: "",
+          logSource: "manual",
+          plannerAutoLogKey: "",
+          inactive: false
+        });
+      });
+    });
+
+    oldTrackers.forEach(tracker => {
+      if (trackerIds.has(tracker.id)) return;
+      const category = legacyTrackerTypeToCategory(tracker.type);
+      pushTracker({
+        id: tracker.id,
+        name: tracker.name,
+        category,
+        unit: tracker.unit || "",
+        startValue: tracker.startValue ?? "",
+        currentValue: tracker.currentValue ?? "",
+        targetValue: tracker.targetValue ?? "",
+        resetType: inferResetTypeFromRecurringText(tracker.recurringTarget),
+        resetCustomNote: tracker.recurringTarget || "",
+        startDate: tracker.startDate || "",
+        targetDate: tracker.targetDate || "",
+        linkedHabitId: "",
+        notes: tracker.notes || "",
+        direction: inferTrackerDirection(category, tracker.startValue, tracker.targetValue),
+        logValueMode: inferLogValueMode(category, "")
+      });
+    });
+  } else if (metrics.length) {
+    systemsData.trackers.forEach(t => trackerIds.add(t.id));
+    metrics.forEach(metric => {
+      if (systemsData.trackers.some(t => t.id === metric.id)) return;
+      const category = mapLegacyMetricTypeToCategory(metric.type);
+      pushTracker({
+        id: metric.id,
+        name: metric.name,
+        category,
+        unit: metric.unit,
+        startValue: metric.startValue ?? "",
+        currentValue: metric.currentValue ?? "0",
+        targetValue: metric.targetValue ?? "",
+        resetType: inferResetTypeFromRecurringText(metric.recurringTarget),
+        resetCustomNote: metric.recurringTarget || "",
+        startDate: metric.startDate || "",
+        targetDate: metric.deadline || "",
+        linkedHabitId: metric.linkedHabitId || "",
+        notes: metric.notes || "",
+        direction: inferTrackerDirection(category, metric.startValue, metric.targetValue),
+        logValueMode: inferLogValueMode(category, metric.type),
+        legacyMetricType: metric.type || ""
+      });
+      (metric.entries || []).forEach(entry => {
+        if (entry.logId) {
+          const log = systemsData.logs.find(l => l.id === entry.logId);
+          if (log) log.linkedTrackerId = metric.id;
+          return;
+        }
+        if (entry.value === undefined || entry.value === "") return;
+        systemsData.logs.push({
+          id: createId("log"),
+          title: metric.name,
+          type: metric.type || "Custom",
+          valueType: metric.type || "Custom",
+          value: String(entry.value),
+          unit: metric.unit || "",
+          date: entry.date || getTodayISO(),
+          notes: "Imported from metric history",
+          linkedHabitId: "",
+          linkedItemType: "tracker",
+          linkedMetricId: "",
+          linkedTrackerId: metric.id,
+          linkedGoalId: "",
+          linkedPlannerBlockId: "",
+          logSource: "manual",
+          plannerAutoLogKey: "",
+          inactive: false
+        });
+      });
+    });
+  }
+
+  systemsData.metrics = [];
+  systemsData.logs.forEach(log => {
+    const tid = log.linkedMetricId || log.trackerId;
+    if (tid && !log.linkedTrackerId) log.linkedTrackerId = tid;
+    if (log.linkedTrackerId && (!log.linkedItemType || log.linkedItemType === "metric")) {
+      log.linkedItemType = "tracker";
+    }
+  });
+  systemsData._trackersUnifiedV1 = true;
+  recalcAllTrackerCurrentsFromLogs();
+  saveSystemsData();
+}
+
+function logDateInTrackerWindow(tracker, logDate, anchorDate) {
+  if (!logDate) return false;
+  if (tracker.resetType === "No reset" || tracker.resetType === "Milestone-based" || tracker.resetType === "Custom recurring") {
+    return true;
+  }
+  if (tracker.resetType === "Daily") return logDate === anchorDate;
+  if (tracker.resetType === "Weekly") return getWeekKey(logDate) === getWeekKey(anchorDate);
+  if (tracker.resetType === "Monthly") return logDate.slice(0, 7) === anchorDate.slice(0, 7);
+  return true;
+}
+
+function getSortedLogsForTracker(trackerId) {
+  return systemsData.logs
+    .filter(log => !log.inactive && getLogLinkedTrackerId(log) === trackerId)
+    .sort((a, b) => {
+      const da = a.date || "";
+      const db = b.date || "";
+      if (da !== db) return da.localeCompare(db);
+      return String(a.id || "").localeCompare(String(b.id || ""));
+    });
+}
+
+function recalcTrackerCurrentFromLogs(tracker, anchorDate = getTodayISO()) {
+  const logs = getSortedLogsForTracker(tracker.id).filter(log =>
+    !isNaN(getLogNumber(log)) && logDateInTrackerWindow(tracker, log.date || "", anchorDate)
+  );
+  const start = Number(tracker.startValue) || 0;
+  if (tracker.logValueMode === "increment") {
+    if (logs.length) {
+      const sum = logs.reduce((acc, log) => acc + getLogNumber(log), 0);
+      tracker.currentValue = String(start + sum);
+    }
+  } else if (logs.length) {
+    tracker.currentValue = String(getLogNumber(logs[logs.length - 1]));
+  }
+}
+
+function recalcAllTrackerCurrentsFromLogs() {
+  const anchor = getTodayISO();
+  systemsData.trackers.forEach(tracker => recalcTrackerCurrentFromLogs(tracker, anchor));
+}
+
+function syncLinkedItemsFromLog(log) {
+  const numericValue = getLogNumber(log);
+  const trackerId = getLogLinkedTrackerId(log);
+  if (trackerId) {
+    const tracker = systemsData.trackers.find(item => item.id === trackerId);
+    if (tracker) recalcTrackerCurrentFromLogs(tracker);
+  }
+
+  if (!isNaN(numericValue) && log.linkedGoalId) {
     const goal = systemsData.goals.find(item => item.id === log.linkedGoalId);
     if (goal) {
       if (goal.goalType === "Do not exceed limit") {
@@ -3479,21 +3962,22 @@ function syncLinkedItemsFromLog(log) {
     }
   }
 
-  if (!log.linkedMetricId && !log.linkedGoalId) {
+  if (!trackerId && !log.linkedGoalId && !isNaN(numericValue)) {
     const normalizedTitle = (log.title || "").trim().toLowerCase();
-    const metric = systemsData.metrics.find(item =>
+    const tracker = systemsData.trackers.find(item =>
       item.name.trim().toLowerCase() === normalizedTitle ||
       (log.linkedHabitId && item.linkedHabitId === log.linkedHabitId)
     );
-    if (!metric) return;
-    metric.currentValue = String(numericValue);
-    if (!Array.isArray(metric.entries)) metric.entries = [];
-    metric.entries.push({ date: log.date || getTodayISO(), value: String(numericValue), logId: log.id });
+    if (!tracker) return;
+    log.linkedTrackerId = tracker.id;
+    log.linkedItemType = "tracker";
+    recalcTrackerCurrentFromLogs(tracker);
   }
 }
 
 function deleteSystemLog(index) {
   systemsData.logs.splice(index, 1);
+  recalcAllTrackerCurrentsFromLogs();
   saveSystemsData();
   renderSystems();
 }
@@ -3501,6 +3985,7 @@ function deleteSystemLog(index) {
 function getLogsForGoalResetCycle(goal, referenceLog) {
   const referenceDate = referenceLog.date || getTodayISO();
   return systemsData.logs.filter(log => {
+    if (log.inactive) return false;
     if (log.linkedGoalId !== goal.id) return false;
     const logDate = log.date || "";
     if (!logDate) return false;
@@ -3544,8 +4029,7 @@ function renderSystemsDashboard() {
   const mostSkipped = getMostSkippedHabit();
 
   const trackerProgresses = systemsData.trackers.map(t => getTrackerProgress(t));
-  const metricProgresses = systemsData.metrics.map(m => getMetricProgress(m));
-  const allProgresses = [...trackerProgresses, ...metricProgresses];
+  const allProgresses = trackerProgresses;
   const avgProgress = trackerProgresses.length
     ? Math.round(trackerProgresses.reduce((s, p) => s + p, 0) / trackerProgresses.length)
     : 0;
@@ -3574,7 +4058,7 @@ function renderSystemsDashboard() {
       <div><strong>${logsThisWeek}</strong><span>Logs this week</span></div>
       <div><strong>${systemsData.trackers.length}</strong><span>Trackers</span></div>
       <div><strong>${onTrack}/${systemsData.trackers.length}</strong><span>On track</span></div>
-      <div><strong>${allProgresses.length ? Math.round(allProgresses.reduce((s, p) => s + p, 0) / allProgresses.length) : avgProgress}%</strong><span>Metric progress</span></div>
+      <div><strong>${allProgresses.length ? Math.round(allProgresses.reduce((s, p) => s + p, 0) / allProgresses.length) : avgProgress}%</strong><span>Tracker progress</span></div>
     </div>
     <div class="systems-highlight-grid">
       <div class="system-highlight">
@@ -3614,12 +4098,12 @@ function renderSystemsDashboard() {
         </div>
       `).join("")}
     ` : `<p class="empty-state small">All habits are complete today.</p>`}
-    ${systemsData.metrics.length ? `
-      <p style="margin-top:12px;font-weight:600;font-size:14px;">Metric Progress</p>
-      ${systemsData.metrics.slice(0, 4).map(metric => `
+    ${systemsData.trackers.length ? `
+      <p style="margin-top:12px;font-weight:600;font-size:14px;">Tracker progress</p>
+      ${systemsData.trackers.slice(0, 4).map(tracker => `
         <div class="home-list-item">
-          <strong>${escapeHTML(metric.name)}</strong>
-          <p>${getMetricProgress(metric)}% • ${escapeHTML(String(metric.currentValue || 0))}/${escapeHTML(String(metric.targetValue || ""))} ${escapeHTML(metric.unit || "")}</p>
+          <strong>${escapeHTML(tracker.name)}</strong>
+          <p>${getTrackerProgress(tracker)}% • ${escapeHTML(String(tracker.currentValue || 0))}/${escapeHTML(String(tracker.targetValue || ""))} ${escapeHTML(tracker.unit || "")}</p>
         </div>
       `).join("")}
     ` : ""}
@@ -3778,14 +4262,6 @@ function average(values) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
 
-function getMetricProgress(metric) {
-  const current = Number(metric.currentValue);
-  const target = Number(metric.targetValue);
-  const start = Number(metric.startValue || 0);
-  if (isNaN(current) || isNaN(target) || target === start) return 0;
-  return Math.min(100, Math.max(0, Math.round(((current - start) / (target - start)) * 100)));
-}
-
 function renderHabitsList() {
   const box = document.getElementById("habitsList");
   if (!box) return;
@@ -3834,55 +4310,6 @@ function renderHabitsList() {
 function renderSystemsLogsList() {
   const box = document.getElementById("systemsLogsList");
   if (!box) return;
-
-  const logs = [...systemsData.logs].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-
-  const numericLogs = logs.filter(log => !isNaN(getLogNumber(log))).slice().reverse();
-  const recentValues = numericLogs.slice(-14).map(getLogNumber);
-  const sevenDayAvg = average(numericLogs.slice(-7).map(getLogNumber));
-  const previousAvg = average(numericLogs.slice(-14, -7).map(getLogNumber));
-  const trend = previousAvg
-    ? Math.round(((sevenDayAvg - previousAvg) / Math.abs(previousAvg)) * 100)
-    : 0;
-
-  box.innerHTML = logs.length
-    ? `
-      <div class="log-analytics-panel">
-        <div class="summary-grid">
-          <div><strong>${logs.length}</strong><span>Total logs</span></div>
-          <div><strong>${numericLogs.length ? roundForDisplay(average(numericLogs.map(getLogNumber))) : "-"}</strong><span>Average</span></div>
-          <div><strong>${numericLogs.length ? roundForDisplay(sevenDayAvg) : "-"}</strong><span>Rolling 7-day avg</span></div>
-          <div><strong>${trend > 0 ? "↑" : trend < 0 ? "↓" : "→"} ${Math.abs(trend)}%</strong><span>Compare periods</span></div>
-        </div>
-        ${recentValues.length ? renderMiniBars(recentValues) : `<p class="muted-text">Add numeric values to unlock charts and trend lines.</p>`}
-      </div>
-      ${logs.map(log => {
-      const index = systemsData.logs.findIndex(item => item.id === log.id);
-      const linkedHabit = log.linkedHabitId
-        ? systemsData.habits.find(habit => habit.id === log.linkedHabitId)
-        : null;
-      const linkedMetric = log.linkedMetricId
-        ? systemsData.metrics.find(metric => metric.id === log.linkedMetricId)
-        : null;
-      const linkedGoal = log.linkedGoalId
-        ? systemsData.goals.find(goal => goal.id === log.linkedGoalId)
-        : null;
-      return `
-        <div class="system-item">
-          <div class="item-title">
-            <strong>${escapeHTML(log.title || log.type)}</strong>
-            <span>${escapeHTML(log.type)}</span>
-          </div>
-          <p>${escapeHTML(log.date || "No date")} • ${escapeHTML(log.value || "")} ${escapeHTML(log.unit || "")}</p>
-          ${linkedHabit ? `<p class="muted-text">Linked habit: ${escapeHTML(linkedHabit.name)}</p>` : ""}
-          ${linkedMetric ? `<p class="muted-text">Linked metric: ${escapeHTML(linkedMetric.name)}</p>` : ""}
-          ${linkedGoal ? `<p class="muted-text">Linked goal: ${escapeHTML(linkedGoal.name)}</p>` : ""}
-          <p>${escapeHTML(log.notes || "")}</p>
-          <button class="danger-btn" onclick="deleteSystemLog(${index})">Delete Log</button>
-        </div>
-      `;
-    }).join("")}`
-    : `<div class="empty-state"><p>No logs saved yet.</p><button onclick="openSystemsForm('log')">Add first log</button></div>`;
 }
 
 function getLogNumber(log) {
@@ -3906,141 +4333,107 @@ function renderMiniBars(values) {
 }
 
 function getTrackerProgress(tracker) {
-  const start = Number(tracker.startValue);
   const current = Number(tracker.currentValue);
   const target = Number(tracker.targetValue);
-  if (isNaN(start) || isNaN(current) || isNaN(target)) return 0;
-  if (start === target) return current >= target ? 100 : 0;
-  let pct;
-  if (tracker.type === "Weight" || tracker.type === "Taper") {
-    pct = ((start - current) / (start - target)) * 100;
-  } else {
-    pct = (current / target) * 100;
+  const start = Number(tracker.startValue);
+  if (isNaN(current) || isNaN(target)) return 0;
+  const decrease = tracker.direction === "decrease";
+  if (decrease) {
+    const s = isNaN(start) ? current : start;
+    const denom = s - target;
+    if (denom === 0) return current <= target ? 100 : 0;
+    return Math.min(100, Math.max(0, Math.round(((s - current) / denom) * 100)));
   }
-  return Math.min(100, Math.max(0, Math.round(pct)));
+  if (!isNaN(start) && !isNaN(target) && target !== start) {
+    return Math.min(100, Math.max(0, Math.round(((current - start) / (target - start)) * 100)));
+  }
+  if (!target) return 0;
+  return Math.min(100, Math.max(0, Math.round((current / target) * 100)));
 }
 
-function saveTracker() {
-  const name = document.getElementById("trackerName").value.trim();
-  const type = document.getElementById("trackerType").value;
-  const unit = document.getElementById("trackerUnit").value.trim();
-  const startValue = document.getElementById("trackerStartValue").value;
-  const currentValue = document.getElementById("trackerCurrentValue").value;
-  const targetValue = document.getElementById("trackerTargetValue").value;
-  const startDate = document.getElementById("trackerStartDate").value;
-  const targetDate = document.getElementById("trackerTargetDate").value;
-  const notes = document.getElementById("trackerNotes").value.trim();
-
-  if (!name || startValue === "" || targetValue === "") {
-    alert("Add a tracker name, start value, and target value.");
-    return;
-  }
-
-  const tracker = {
-    id: editingTrackerIndex === null
-      ? createId("tracker")
-      : systemsData.trackers[editingTrackerIndex].id,
-    name, type, unit, startValue, currentValue, targetValue,
-    startDate, targetDate, notes
-  };
-
-  if (editingTrackerIndex === null) {
-    systemsData.trackers.push(tracker);
-  } else {
-    systemsData.trackers[editingTrackerIndex] = tracker;
-  }
-
-  editingTrackerIndex = null;
-  saveSystemsData();
-  activeSystemsSection = "Metrics";
-  main.innerHTML = getPageHTML("Systems");
-  renderSystems();
-}
-
-function renderTrackersList() {
-  const box = document.getElementById("trackersList");
-  if (!box) return;
-
-  box.innerHTML = systemsData.trackers.length
-    ? systemsData.trackers.map((tracker, index) => {
-        const pct = getTrackerProgress(tracker);
-        const remaining = (Number(tracker.targetValue) - Number(tracker.currentValue)).toFixed(2);
-        const unit = escapeHTML(tracker.unit || "");
-        return `
-          <div class="system-item">
-            <div class="item-title">
-              <strong>${escapeHTML(tracker.name)}</strong>
-              <span>${escapeHTML(tracker.type)}</span>
-            </div>
-            <p>${escapeHTML(String(tracker.currentValue))} ${unit} → ${escapeHTML(String(tracker.targetValue))} ${unit}</p>
-            <div class="tracker-progress-bar">
-              <div class="tracker-progress-fill" style="width:${pct}%"></div>
-            </div>
-            <p class="tracker-pct">${pct}% complete • ${Math.abs(Number(remaining))} ${unit} remaining</p>
-            ${tracker.targetDate ? `<p>Target: ${escapeHTML(tracker.targetDate)}</p>` : ""}
-            ${tracker.notes ? `<p>${escapeHTML(tracker.notes)}</p>` : ""}
-            <div class="button-row">
-              <button onclick="logTrackerValue(${index})">Log Value</button>
-              <button onclick="editTracker(${index})">Edit</button>
-              <button class="danger-btn" onclick="deleteTracker(${index})">Delete</button>
-            </div>
-          </div>
-        `;
-      }).join("")
-    : "<p>No trackers saved yet.</p>";
-}
-
-function logTrackerValue(index) {
-  const tracker = systemsData.trackers[index];
+function logTrackerById(id) {
+  const tracker = systemsData.trackers.find(t => t.id === id);
   if (!tracker) return;
-  const raw = prompt(`Log new value for "${tracker.name}" (${tracker.unit || "unit"}):`);
+  const raw = prompt(`Log value for "${tracker.name}" (${tracker.unit || "unit"}):`);
   if (raw === null || raw.trim() === "") return;
-  const value = raw.trim();
-  tracker.currentValue = value;
   systemsData.logs.push({
     id: createId("log"),
     title: tracker.name,
-    type: tracker.type,
-    value,
-    unit: tracker.unit,
+    type: tracker.category || "Custom",
+    valueType: tracker.category || "Custom",
+    value: raw.trim(),
+    unit: tracker.unit || "",
     date: getTodayISO(),
     notes: "",
     linkedHabitId: "",
+    linkedItemType: "tracker",
+    linkedMetricId: "",
+    linkedTrackerId: tracker.id,
+    linkedGoalId: "",
     linkedPlannerBlockId: "",
-    trackerId: tracker.id
+    logSource: "manual",
+    plannerAutoLogKey: "",
+    inactive: false
+  });
+  recalcTrackerCurrentFromLogs(tracker);
+  saveSystemsData();
+  renderSystems();
+}
+
+function quickIncrementTracker(id) {
+  const tracker = systemsData.trackers.find(t => t.id === id);
+  if (!tracker) return;
+  systemsData.logs.push({
+    id: createId("log"),
+    title: tracker.name,
+    type: tracker.category || "Custom",
+    valueType: tracker.category || "Custom",
+    value: "1",
+    unit: tracker.unit || "count",
+    date: getTodayISO(),
+    notes: "",
+    linkedHabitId: "",
+    linkedItemType: "tracker",
+    linkedMetricId: "",
+    linkedTrackerId: tracker.id,
+    linkedGoalId: "",
+    linkedPlannerBlockId: "",
+    logSource: "manual",
+    plannerAutoLogKey: "",
+    inactive: false
+  });
+  recalcTrackerCurrentFromLogs(tracker);
+  saveSystemsData();
+  renderSystems();
+}
+
+function deleteTrackerById(id) {
+  if (!confirm("Delete this tracker? Logs stay in your history but are unlinked.")) return;
+  const idx = systemsData.trackers.findIndex(t => t.id === id);
+  if (idx === -1) return;
+  if (editingTrackerIndex === idx) editingTrackerIndex = null;
+  systemsData.trackers.splice(idx, 1);
+  systemsData.logs.forEach(log => {
+    if (getLogLinkedTrackerId(log) === id) {
+      log.linkedTrackerId = "";
+      log.linkedMetricId = "";
+      log.trackerId = "";
+      if (log.linkedItemType === "tracker") log.linkedItemType = "";
+    }
   });
   saveSystemsData();
   renderSystems();
 }
 
-function editTracker(index) {
-  activeSystemsForm = "metric";
-  editingTrackerIndex = index;
-  editingGoalIndex = null;
-  editingMetricIndex = null;
-  activeSystemsSection = "Metrics";
-  main.innerHTML = getPageHTML("Systems");
-  renderSystems();
-}
-
-function fillEditingTrackerForm() {
-  // Handled by fillEditingMetricForm — tracker form elements no longer in DOM
+function editTrackerLog(index) {
+  openSystemsForm("log", index);
 }
 
 function resetTrackerForm() {
   editingTrackerIndex = null;
   editingGoalIndex = null;
-  editingMetricIndex = null;
-  activeSystemsSection = "Metrics";
+  activeSystemsSection = "Trackers";
   main.innerHTML = getPageHTML("Systems");
-  renderSystems();
-}
-
-function deleteTracker(index) {
-  if (!confirm("Delete this tracker?")) return;
-  if (editingTrackerIndex === index) editingTrackerIndex = null;
-  systemsData.trackers.splice(index, 1);
-  saveSystemsData();
   renderSystems();
 }
 
@@ -4102,7 +4495,7 @@ function saveGoal() {
   editingGoalIndex = null;
   activeSystemsForm = null;
   saveSystemsData();
-  activeSystemsSection = "Metrics";
+  activeSystemsSection = "Trackers";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
 }
@@ -4111,7 +4504,7 @@ function resetGoalForm() {
   editingGoalIndex = null;
   editingTrackerIndex = null;
   editingMetricIndex = null;
-  activeSystemsSection = "Metrics";
+  activeSystemsSection = "Trackers";
   main.innerHTML = getPageHTML("Systems");
   renderSystems();
 }
@@ -4320,27 +4713,34 @@ function logGoalProgress(index) {
   if (goal.linkedTrackerId) {
     const tracker = systemsData.trackers.find(t => t.id === goal.linkedTrackerId);
     if (tracker) {
-      tracker.currentValue = value;
       systemsData.logs.push({
         id: createId("log"),
         title: goal.name,
         type: goal.category,
+        valueType: goal.category || "Custom",
         value,
         unit: goal.unit,
         date: getTodayISO(),
         notes: `Goal: ${goal.name}`,
         linkedHabitId: goal.linkedHabitId || "",
+        linkedItemType: "tracker",
+        linkedMetricId: "",
+        linkedTrackerId: goal.linkedTrackerId,
+        linkedGoalId: goal.id,
         linkedPlannerBlockId: "",
-        trackerId: goal.linkedTrackerId
+        logSource: "manual",
+        plannerAutoLogKey: "",
+        inactive: false
       });
+      recalcTrackerCurrentFromLogs(tracker);
     }
   }
   saveSystemsData();
   renderSystems();
 }
 
-function renderGoalsList() {
-  const box = document.getElementById("goalsList");
+function renderGoalsList(elementId = "goalsList") {
+  const box = document.getElementById(elementId);
   if (!box) return;
 
   if (!systemsData.goals.length) {
@@ -4462,416 +4862,412 @@ function scheduleGoalPlannerBlock(index) {
   renderPlanner();
 }
 
-// ---------------- METRICS ----------------
+// ---------------- TRACKERS (unified metrics + logs) ----------------
 
-function saveMetric() {
-  const name = document.getElementById("metricName")?.value.trim();
-  const type = document.getElementById("metricType")?.value;
-  if (!name) { alert("Add a metric name."); return; }
-  const unit = document.getElementById("metricUnit")?.value.trim() || "";
-  const startValue = document.getElementById("metricStartValue")?.value || "";
-  const currentValue = document.getElementById("metricCurrentValue")?.value || "0";
-  const targetValue = document.getElementById("metricTargetValue")?.value || "";
-  const recurringTarget = document.getElementById("metricRecurringTarget")?.value.trim() || "";
-  const startDate = document.getElementById("metricStartDate")?.value || "";
-  const deadline = document.getElementById("metricDeadline")?.value || "";
-  const linkedHabitId = document.getElementById("metricLinkedHabit")?.value || "";
-  const notes = document.getElementById("metricNotes")?.value.trim() || "";
-
-  if (editingTrackerIndex !== null) {
-    const orig = systemsData.trackers[editingTrackerIndex];
-    systemsData.trackers[editingTrackerIndex] = {
-      id: orig.id, name, type: orig.type, unit, startValue, currentValue,
-      targetValue, startDate, targetDate: deadline, recurringTarget, notes
-    };
-    editingTrackerIndex = null;
-  } else if (editingGoalIndex !== null) {
-    const orig = systemsData.goals[editingGoalIndex];
-    systemsData.goals[editingGoalIndex] = {
-      id: orig.id, name, category: orig.category, startValue, currentValue,
-      targetValue, unit, startDate, deadline, recurringTarget,
-      linkedTrackerId: orig.linkedTrackerId || "", linkedHabitId,
-      linkedPlannerBlockId: orig.linkedPlannerBlockId || "",
-      milestones: orig.milestones || [],
-      notes
-    };
-    editingGoalIndex = null;
-  } else if (editingMetricIndex !== null) {
-    const orig = systemsData.metrics[editingMetricIndex];
-    systemsData.metrics[editingMetricIndex] = {
-      ...orig, name, type, unit, startValue, currentValue,
-      targetValue, startDate, deadline, linkedHabitId, recurringTarget, notes
-    };
-    editingMetricIndex = null;
-  } else if (type === "Numeric") {
-    systemsData.trackers.push({
-      id: createId("tracker"), name, type: "Custom", unit,
-      startValue, currentValue, targetValue, startDate, targetDate: deadline, recurringTarget, notes
-    });
-  } else if (type === "Progress") {
-    systemsData.goals.push({
-      id: createId("goal"), name, category: "Custom", startValue, currentValue,
-      targetValue, unit, startDate, deadline, recurringTarget,
-      linkedTrackerId: "", linkedHabitId, linkedPlannerBlockId: "", milestones: [], notes
-    });
-  } else {
-    systemsData.metrics.push({
-      id: createId("metric"), name, type, unit,
-      startValue, currentValue: type === "Counter" ? "0" : currentValue,
-      targetValue, startDate, deadline, linkedHabitId, recurringTarget, notes, entries: []
-    });
-  }
-
-  activeSystemsForm = null;
-  saveSystemsData();
-  activeSystemsSection = "Metrics";
-  main.innerHTML = getPageHTML("Systems");
-  renderSystems();
+function getLogSourceDisplay(src) {
+  if (src === "habit") return "Habit completion";
+  if (src === "planner") return "Planner block completion";
+  return "Manual";
 }
 
-function resetMetricForm() {
-  editingMetricIndex = null;
-  editingTrackerIndex = null;
-  editingGoalIndex = null;
-  activeSystemsSection = "Metrics";
-  main.innerHTML = getPageHTML("Systems");
-  renderSystems();
-}
-
-function editMetric(index) {
-  openSystemsForm("metric", index);
-}
-
-function deleteMetric(index) {
-  if (!confirm("Delete this metric?")) return;
-  systemsData.metrics.splice(index, 1);
-  saveSystemsData();
-  renderSystems();
-}
-
-function fillEditingMetricForm() {
-  const el = id => document.getElementById(id);
-  if (!el("metricName")) return;
-  if (editingTrackerIndex !== null) {
-    const t = systemsData.trackers[editingTrackerIndex];
-    if (!t) return;
-    el("metricName").value = t.name;
-    el("metricType").value = "Numeric";
-    el("metricUnit").value = t.unit;
-    el("metricStartValue").value = t.startValue;
-    el("metricCurrentValue").value = t.currentValue;
-    el("metricTargetValue").value = t.targetValue;
-    if (el("metricRecurringTarget")) el("metricRecurringTarget").value = t.recurringTarget || "";
-    el("metricStartDate").value = t.startDate;
-    el("metricDeadline").value = t.targetDate;
-    if (el("metricLinkedHabit")) el("metricLinkedHabit").value = "";
-    el("metricNotes").value = t.notes;
-    el("metricSaveButton").textContent = "Update Tracker";
-  } else if (editingGoalIndex !== null) {
-    const g = systemsData.goals[editingGoalIndex];
-    if (!g) return;
-    el("metricName").value = g.name;
-    el("metricType").value = "Progress";
-    el("metricUnit").value = g.unit;
-    el("metricStartValue").value = g.startValue || "";
-    el("metricCurrentValue").value = g.currentValue;
-    el("metricTargetValue").value = g.targetValue;
-    if (el("metricRecurringTarget")) el("metricRecurringTarget").value = g.recurringTarget || "";
-    el("metricStartDate").value = g.startDate;
-    el("metricDeadline").value = g.deadline;
-    if (el("metricLinkedHabit")) el("metricLinkedHabit").value = g.linkedHabitId;
-    el("metricNotes").value = g.notes;
-    el("metricSaveButton").textContent = "Update Goal";
-  } else if (editingMetricIndex !== null) {
-    const m = systemsData.metrics[editingMetricIndex];
-    if (!m) return;
-    el("metricName").value = m.name;
-    el("metricType").value = m.type;
-    el("metricUnit").value = m.unit;
-    el("metricStartValue").value = m.startValue;
-    el("metricCurrentValue").value = m.currentValue;
-    el("metricTargetValue").value = m.targetValue;
-    if (el("metricRecurringTarget")) el("metricRecurringTarget").value = m.recurringTarget || "";
-    el("metricStartDate").value = m.startDate;
-    el("metricDeadline").value = m.deadline;
-    if (el("metricLinkedHabit")) el("metricLinkedHabit").value = m.linkedHabitId;
-    el("metricNotes").value = m.notes;
-    el("metricSaveButton").textContent = "Update Metric";
+function rememberTrackerCategory(name) {
+  const n = String(name || "").trim();
+  if (!n) return;
+  const lower = n.toLowerCase();
+  if (TRACKER_CATEGORIES.some(c => c.toLowerCase() === lower)) return;
+  if (!systemsData.savedTrackerCategories) systemsData.savedTrackerCategories = [];
+  if (!systemsData.savedTrackerCategories.some(c => c.toLowerCase() === lower)) {
+    systemsData.savedTrackerCategories.push(n);
+    saveSystemsData();
   }
 }
 
-function incrementCounter(index) {
-  const metric = systemsData.metrics[index];
-  if (!metric) return;
-  metric.currentValue = String((Number(metric.currentValue) || 0) + 1);
-  if (!Array.isArray(metric.entries)) metric.entries = [];
-  const today = getTodayISO();
-  const todayEntry = metric.entries.find(e => e.date === today);
-  if (todayEntry) {
-    todayEntry.value = String(Number(todayEntry.value || 0) + 1);
-  } else {
-    metric.entries.push({ date: today, value: "1" });
+function rememberTrackerUnit(unit) {
+  const u = String(unit || "").trim();
+  if (!u) return;
+  const lower = u.toLowerCase();
+  if (DEFAULT_TRACKER_UNITS.some(x => x.toLowerCase() === lower)) return;
+  if (!systemsData.savedTrackerUnits) systemsData.savedTrackerUnits = [];
+  if (!systemsData.savedTrackerUnits.some(x => x.toLowerCase() === lower)) {
+    systemsData.savedTrackerUnits.push(u);
+    saveSystemsData();
   }
-  saveSystemsData();
-  renderSystems();
 }
 
-function resetCounter(index) {
-  const metric = systemsData.metrics[index];
-  if (!metric) return;
-  if (!confirm("Reset counter to 0?")) return;
-  metric.currentValue = "0";
-  saveSystemsData();
-  renderSystems();
+function buildTrackerCategoryDatalistInnerHtml() {
+  const opts = [...TRACKER_CATEGORIES, ...(systemsData.savedTrackerCategories || [])];
+  const seen = new Set();
+  return opts
+    .filter(c => {
+      const k = c.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    })
+    .map(c => `<option value="${escapeHTML(c)}"></option>`)
+    .join("");
 }
 
-function toggleBoolean(index) {
-  const metric = systemsData.metrics[index];
-  if (!metric) return;
-  const today = getTodayISO();
-  if (!Array.isArray(metric.entries)) metric.entries = [];
-  const existing = metric.entries.find(e => e.date === today);
-  if (existing) {
-    existing.value = existing.value === "1" ? "0" : "1";
-  } else {
-    metric.entries.push({ date: today, value: "1" });
-  }
-  saveSystemsData();
-  renderSystems();
+function buildTrackerUnitDatalistInnerHtml() {
+  const opts = [...DEFAULT_TRACKER_UNITS, ...(systemsData.savedTrackerUnits || [])];
+  const seen = new Set();
+  return opts
+    .filter(u => {
+      const k = u.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    })
+    .map(u => `<option value="${escapeHTML(u)}"></option>`)
+    .join("");
 }
 
-function logMetricTime(index) {
-  const metric = systemsData.metrics[index];
-  if (!metric) return;
-  const raw = prompt(`Log minutes for "${metric.name}":`);
-  if (raw === null || raw.trim() === "") return;
-  const minutes = Number(raw.trim());
-  if (isNaN(minutes) || minutes <= 0) return;
-  if (!Array.isArray(metric.entries)) metric.entries = [];
-  metric.entries.push({ date: getTodayISO(), value: String(minutes) });
-  saveSystemsData();
-  renderSystems();
+function getTrackerFilterCategoryValues() {
+  const set = new Set(["All", ...TRACKER_CATEGORIES]);
+  (systemsData.savedTrackerCategories || []).forEach(c => { if (c) set.add(c); });
+  systemsData.trackers.forEach(t => { if (t.category) set.add(t.category); });
+  const rest = [...set].filter(c => c !== "All").sort((a, b) => a.localeCompare(b));
+  return ["All", ...rest];
 }
 
-function logNewMetricValue(index) {
-  const metric = systemsData.metrics[index];
-  if (!metric) return;
-  const raw = prompt(`New value for "${metric.name}" (${metric.unit || "unit"}):`);
-  if (raw === null || raw.trim() === "") return;
-  metric.currentValue = raw.trim();
-  if (!Array.isArray(metric.entries)) metric.entries = [];
-  metric.entries.push({ date: getTodayISO(), value: raw.trim() });
-  saveSystemsData();
-  renderSystems();
-}
-
-function renderMetricsList() {
-  const box = document.getElementById("metricsList");
+function populateTrackerCategoryFilterMount() {
+  const box = document.getElementById("trackerCategoryFilterMount");
   if (!box) return;
-  const trackerItems = systemsData.trackers.map((t, i) => renderMetricTrackerRow(t, i));
-  const goalItems = systemsData.goals.map((g, i) => renderMetricGoalRow(g, i));
-  const metricItems = systemsData.metrics.map((m, i) => renderMetricRow(m, i));
-  const all = [...trackerItems, ...goalItems, ...metricItems];
-  box.innerHTML = all.length
-    ? all.join("")
-    : `<div class="empty-state"><p>No metrics yet.</p><button onclick="openSystemsForm('metric')">Add first metric</button></div>`;
+  const cats = getTrackerFilterCategoryValues();
+  box.innerHTML = `
+    <label class="inline-check" style="margin:0">
+      <span style="margin-right:8px;font-weight:600">Type</span>
+      <select id="trackerCategoryFilter" onchange="setTrackerCategoryFilter(this.value)">
+        ${cats.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join("")}
+      </select>
+    </label>
+  `;
+  const sel = document.getElementById("trackerCategoryFilter");
+  if (sel) sel.value = trackerCategoryFilter;
 }
 
-function renderMetricTrackerRow(tracker, index) {
+function seedTrackerPresetsFromTrackers() {
+  if (!systemsData.savedTrackerCategories) systemsData.savedTrackerCategories = [];
+  if (!systemsData.savedTrackerUnits) systemsData.savedTrackerUnits = [];
+  systemsData.trackers.forEach(t => {
+    if (t.category && !TRACKER_CATEGORIES.includes(t.category)) {
+      if (!systemsData.savedTrackerCategories.some(c => c.toLowerCase() === t.category.toLowerCase())) {
+        systemsData.savedTrackerCategories.push(t.category);
+      }
+    }
+    if (t.unit && !DEFAULT_TRACKER_UNITS.includes(t.unit)) {
+      if (!systemsData.savedTrackerUnits.some(u => u.toLowerCase() === t.unit.toLowerCase())) {
+        systemsData.savedTrackerUnits.push(t.unit);
+      }
+    }
+  });
+}
+
+function autoLogTrackersForPlannerBlock(block) {
+  if (!block || block.isBuffer || !block.systemHabitId || !block.completed) return;
+  const date = block.date || getTodayISO();
+  let changed = false;
+  systemsData.trackers.forEach(tracker => {
+    if (!tracker.autoLogOnPlannerComplete) return;
+    if (tracker.linkedHabitId !== block.systemHabitId) return;
+    const key = `${tracker.id}::${block.id}::${date}`;
+    if (tracker.preventDuplicateAutoLogs !== false) {
+      const dup = systemsData.logs.some(l =>
+        !l.inactive && (l.plannerAutoLogKey === key || (l.logSource === "planner" && getLogLinkedTrackerId(l) === tracker.id && l.linkedPlannerBlockId === block.id && l.date === date))
+      );
+      if (dup) return;
+    }
+    const amt = String(tracker.autoLogAmount ?? "1").trim() || "1";
+    const unit = (tracker.autoLogUnit || "").trim() || tracker.unit || "";
+    systemsData.logs.push({
+      id: createId("log"),
+      title: tracker.name,
+      type: tracker.category || "Custom",
+      valueType: tracker.category || "Custom",
+      value: amt,
+      unit,
+      date,
+      notes: `Source: Planner completion — ${block.title || "Block"}`,
+      linkedHabitId: block.systemHabitId,
+      linkedItemType: "tracker",
+      linkedMetricId: "",
+      linkedTrackerId: tracker.id,
+      linkedGoalId: "",
+      linkedPlannerBlockId: block.id,
+      logSource: "planner",
+      plannerAutoLogKey: key,
+      inactive: false
+    });
+    recalcTrackerCurrentFromLogs(tracker);
+    changed = true;
+  });
+  if (changed) saveSystemsData();
+}
+
+function removePlannerAutoLogsForBlock(block) {
+  if (!block || !block.id) return;
+  let removed = false;
+  for (let i = systemsData.logs.length - 1; i >= 0; i--) {
+    const log = systemsData.logs[i];
+    if (log.inactive) continue;
+    if (log.logSource !== "planner") continue;
+    if (!getLogLinkedTrackerId(log)) continue;
+    if (log.linkedPlannerBlockId !== block.id) continue;
+    systemsData.logs.splice(i, 1);
+    removed = true;
+  }
+  if (removed) {
+    recalcAllTrackerCurrentsFromLogs();
+    saveSystemsData();
+  }
+}
+
+function setTrackerCategoryFilter(value) {
+  trackerCategoryFilter = value || "All";
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
+}
+
+function isTrackerComplete(tracker) {
+  return getTrackerProgress(tracker) >= 100;
+}
+
+function isTrackerBehind(tracker) {
+  if (!tracker.targetDate || isTrackerComplete(tracker)) return false;
+  return tracker.targetDate < getTodayISO() && getTrackerProgress(tracker) < 100;
+}
+
+function renderTrackersSummaryCards() {
+  const box = document.getElementById("trackersSummaryCards");
+  if (!box) return;
+  const weekDates = getLastNDates(7);
+  const trackers = systemsData.trackers;
+  const active = trackers.filter(t => !isTrackerComplete(t)).length;
+  const completedGoals = trackers.filter(t => t.category === "Goal" && isTrackerComplete(t)).length;
+  const thisWeek = trackers.filter(t =>
+    getSortedLogsForTracker(t.id).some(log => weekDates.includes(log.date))
+  ).length;
+  const overdue = trackers.filter(t => isTrackerBehind(t)).length;
+  const streakLinked = trackers.filter(t => {
+    if (!t.linkedHabitId) return false;
+    const habit = systemsData.habits.find(h => h.id === t.linkedHabitId);
+    if (!habit) return false;
+    return getHabitStreak(habit) > 0 && getSortedLogsForTracker(t.id).some(log => weekDates.includes(log.date));
+  }).length;
+
+  box.innerHTML = `
+    <div class="systems-summary-grid trackers-dash">
+      <div><strong>${active}</strong><span>Active trackers</span></div>
+      <div><strong>${completedGoals}</strong><span>Completed goals</span></div>
+      <div><strong>${thisWeek}</strong><span>This week progress</span></div>
+      <div><strong>${overdue}</strong><span>Overdue / behind</span></div>
+      <div><strong>${streakLinked}</strong><span>Streak-linked progress</span></div>
+    </div>
+  `;
+  populateTrackerCategoryFilterMount();
+}
+
+function renderTrackerLogEntryRow(tracker, log) {
+  const masterIndex = systemsData.logs.findIndex(l => l.id === log.id);
+  const src = getLogSourceDisplay(log.logSource || inferLegacyLogSource(log));
+  return `
+    <div class="tracker-log-row">
+      <div>
+        <strong>${escapeHTML(log.date || "")}</strong>
+        <span class="log-source-pill">${escapeHTML(src)}</span>
+        <span>${escapeHTML(log.value || "")} ${escapeHTML(log.unit || tracker.unit || "")}</span>
+        ${log.notes ? `<p class="muted-text">${escapeHTML(log.notes)}</p>` : ""}
+      </div>
+      <div class="button-row">
+        <button class="secondary-btn" onclick="editTrackerLog(${masterIndex})">Edit</button>
+        <button class="danger-btn" onclick="deleteSystemLog(${masterIndex})">Delete</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderSingleTrackerCard(tracker) {
   const pct = getTrackerProgress(tracker);
   const unit = escapeHTML(tracker.unit || "");
-  const linkedLogs = systemsData.logs
-    .filter(log => log.trackerId === tracker.id || log.title === tracker.name)
-    .map(getLogNumber)
-    .filter(value => !isNaN(value))
-    .slice(-10);
+  const tLogs = getSortedLogsForTracker(tracker.id);
+  const mini = tLogs.map(getLogNumber).filter(v => !isNaN(v)).slice(-10);
+  const idx = systemsData.trackers.findIndex(t => t.id === tracker.id);
+  const dirLabel = tracker.direction === "decrease" ? "Taper / decrease" : "Increase";
+  const logsHtml = tLogs.length
+    ? `<div class="tracker-log-history">${tLogs.slice().reverse().map(log => renderTrackerLogEntryRow(tracker, log)).join("")}</div>`
+    : `<p class="muted-text small">No log entries yet.</p>`;
+
   return `
-    <div class="system-item">
+    <div class="system-item tracker-card">
       <div class="item-title">
         <strong>${escapeHTML(tracker.name)}</strong>
-        <span class="metric-type-pill metric-type-numeric">Numeric</span>
+        <span class="metric-type-pill">${escapeHTML(tracker.category || "Custom")}</span>
       </div>
-      <p>${escapeHTML(String(tracker.currentValue))} ${unit} → ${escapeHTML(String(tracker.targetValue))} ${unit}</p>
+      <p class="muted-text small">${dirLabel} • ${escapeHTML(tracker.resetType || "No reset")} • Logs: <strong>${escapeHTML(tracker.logValueMode)}</strong></p>
+      <p>${escapeHTML(String(tracker.currentValue || 0))} ${unit} → ${escapeHTML(String(tracker.targetValue || ""))} ${unit}</p>
       <div class="tracker-progress-bar">
         <div class="tracker-progress-fill" style="width:${pct}%"></div>
       </div>
-      <p class="tracker-pct">${pct}% complete</p>
-      ${linkedLogs.length ? renderMiniBars(linkedLogs) : ""}
-      ${tracker.targetDate ? `<p>Target: ${escapeHTML(tracker.targetDate)}</p>` : ""}
-      ${tracker.recurringTarget ? `<p class="muted-text">Recurring target: ${escapeHTML(tracker.recurringTarget)}</p>` : ""}
+      <p class="tracker-pct">${pct}% toward target</p>
+      ${mini.length ? renderMiniBars(mini) : ""}
+      ${tracker.startDate || tracker.targetDate ? `<p class="muted-text">${escapeHTML(tracker.startDate || "—")} → ${escapeHTML(tracker.targetDate || "—")}</p>` : ""}
+      ${tracker.linkedHabitId ? `<p class="muted-text">Linked habit: ${escapeHTML((systemsData.habits.find(h => h.id === tracker.linkedHabitId) || {}).name || "")}</p>` : ""}
+      ${tracker.resetCustomNote ? `<p class="muted-text">${escapeHTML(tracker.resetCustomNote)}</p>` : ""}
       ${tracker.notes ? `<p>${escapeHTML(tracker.notes)}</p>` : ""}
       <div class="button-row three-actions">
-        <button onclick="logTrackerValue(${index})">Log</button>
-        <button onclick="editTracker(${index})">Edit</button>
-        <button class="danger-btn" onclick="deleteTracker(${index})">Delete</button>
+        <button onclick="openSystemsForm('trackerLog', '${tracker.id}')">Manual log</button>
+        <button onclick="logTrackerById('${tracker.id}')">Quick log</button>
+        <button onclick="quickIncrementTracker('${tracker.id}')">+1</button>
       </div>
+      <div class="button-row">
+        <button onclick="openSystemsForm('tracker', ${idx})">Edit tracker</button>
+        <button class="danger-btn" onclick="deleteTrackerById('${tracker.id}')">Delete</button>
+      </div>
+      <h4 class="tracker-subhead">Log history</h4>
+      ${logsHtml}
     </div>
   `;
 }
 
-function renderMetricGoalRow(goal, index) {
-  const pct = getGoalProgress(goal);
-  const status = getGoalStatus(goal);
-  const current = getGoalCurrentValue(goal);
-  const target = getGoalTargetValue(goal);
-  const unit = escapeHTML(goal.unit || "");
-  const weightStats = getWeightGoalStats(goal);
-  const limitStats = getDoNotExceedStats(goal);
-  const rangeStats = getRangeGoalStats(goal);
-  const taperStats = getTaperGoalStats(goal);
-  return `
-    <div class="system-item goal-item">
-      <div class="item-title">
-        <strong>${escapeHTML(goal.name)}</strong>
-        <span class="metric-type-pill metric-type-progress">Goal</span>
-      </div>
-      <p>${current} ${unit} → ${target} ${unit}</p>
-      ${weightStats ? `
-        <div class="habit-stat-row">
-          <div><strong>${roundForDisplay(weightStats.current)} ${unit}</strong><span>current weight</span></div>
-          <div><strong>${roundForDisplay(weightStats.lost)} ${unit}</strong><span>lost so far</span></div>
-          <div><strong>${roundForDisplay(weightStats.remaining)} ${unit}</strong><span>remaining</span></div>
-        </div>
-      ` : ""}
-      ${limitStats ? `
-        <div class="habit-stat-row">
-          <div><strong>${roundForDisplay(limitStats.used)} ${unit}</strong><span>used</span></div>
-          <div><strong>${roundForDisplay(limitStats.limit)} ${unit}</strong><span>limit</span></div>
-          <div><strong>${roundForDisplay(limitStats.remaining)} ${unit}</strong><span>remaining allowance</span></div>
-        </div>
-        ${limitStats.overBy ? `<p class="muted-text">Over by ${roundForDisplay(limitStats.overBy)} ${unit}</p>` : ""}
-        <p class="muted-text">Reset: ${escapeHTML(goal.resetCycle || "weekly")} • Status: ${escapeHTML(limitStats.status)}</p>
-      ` : ""}
-      ${rangeStats ? `
-        <div class="habit-stat-row">
-          <div><strong>${roundForDisplay(rangeStats.min)} ${unit}</strong><span>minimum</span></div>
-          <div><strong>${roundForDisplay(rangeStats.current)} ${unit}</strong><span>current</span></div>
-          <div><strong>${roundForDisplay(rangeStats.max)} ${unit}</strong><span>maximum</span></div>
-        </div>
-        <p class="muted-text">Status: ${escapeHTML(rangeStats.status)}</p>
-      ` : ""}
-      ${taperStats ? `
-        <div class="habit-stat-row">
-          <div><strong>${roundForDisplay(taperStats.start)} ${unit}</strong><span>start amount</span></div>
-          <div><strong>${roundForDisplay(taperStats.current)} ${unit}</strong><span>current amount</span></div>
-          <div><strong>${roundForDisplay(taperStats.target)} ${unit}</strong><span>target amount</span></div>
-        </div>
-        <div class="habit-stat-row">
-          <div><strong>${roundForDisplay(taperStats.reduced)} ${unit}</strong><span>reduced so far</span></div>
-          <div><strong>${roundForDisplay(taperStats.remaining)} ${unit}</strong><span>remaining</span></div>
-          <div><strong>${taperStats.pacePerWeek === null ? "-" : `${roundForDisplay(taperStats.pacePerWeek)} ${unit}`}</strong><span>pace/week</span></div>
-        </div>
-        ${taperStats.latestDate ? `<p class="muted-text">Latest logged: ${escapeHTML(taperStats.latestDate)}</p>` : ""}
-        ${renderTaperTrendHistory(taperStats.logs, unit)}
-      ` : ""}
-      <div class="tracker-progress-bar">
-        <div class="tracker-progress-fill goal-progress-fill-${status}" style="width:${pct}%"></div>
-      </div>
-      <p class="tracker-pct">${pct}% • <span class="goal-status-badge goal-status-${status}">${status}</span></p>
-      ${goal.deadline ? `<p>Deadline: ${escapeHTML(goal.deadline)}</p>` : ""}
-      ${goal.recurringTarget ? `<p class="muted-text">Recurring target: ${escapeHTML(goal.recurringTarget)}</p>` : ""}
-      ${goal.notes ? `<p>${escapeHTML(goal.notes)}</p>` : ""}
-      <div class="button-row three-actions">
-        <button onclick="logGoalProgress(${index})">Log</button>
-        <button onclick="editGoal(${index})">Edit</button>
-        <button class="danger-btn" onclick="deleteGoal(${index})">Delete</button>
-      </div>
-    </div>
-  `;
+function renderTrackersUnifiedList() {
+  const box = document.getElementById("trackersUnifiedList");
+  if (!box) return;
+  const list = getTrackersFilteredForList();
+  const all = systemsData.trackers;
+  box.innerHTML = list.length
+    ? `<div class="systems-card-grid">${list.map(renderSingleTrackerCard).join("")}</div>`
+    : !all.length
+      ? `<div class="empty-state"><p>No trackers yet.</p><button onclick="openSystemsForm('tracker')">Add first tracker</button></div>`
+      : `<div class="empty-state"><p>No trackers match this filter.</p><button onclick="setTrackerCategoryFilter('All')">Show all</button></div>`;
 }
 
-function renderMetricRow(metric, index) {
-  const type = metric.type;
-  const unit = escapeHTML(metric.unit || "");
-  const typeLabels = { Counter: "Counter", Boolean: "Daily", Time: "Time", Milestone: "Milestone" };
-  const typeLabel = typeLabels[type] || type;
-  const typeCls = (type || "").toLowerCase();
-  const values = (metric.entries || []).map(entry => Number(entry.value)).filter(value => !isNaN(value)).slice(-14);
-  const trend = getValuesTrend(values);
-  let body = "";
-  let actions = "";
+function getTrackersFilteredForList() {
+  return systemsData.trackers.filter(t =>
+    trackerCategoryFilter === "All" || t.category === trackerCategoryFilter
+  );
+}
 
-  if (type === "Counter") {
-    const count = Number(metric.currentValue) || 0;
-    body = `<p class="metric-counter-value">${count}${unit ? " " + unit : ""}</p>`;
-    actions = `
-      <div class="button-row">
-        <button onclick="incrementCounter(${index})">+1</button>
-        <button class="secondary-btn" onclick="resetCounter(${index})">Reset</button>
-      </div>
-      <div class="button-row">
-        <button onclick="editMetric(${index})">Edit</button>
-        <button class="danger-btn" onclick="deleteMetric(${index})">Delete</button>
-      </div>`;
-  } else if (type === "Boolean") {
-    const today = getTodayISO();
-    const entry = (metric.entries || []).find(e => e.date === today);
-    const done = entry && entry.value === "1";
-    body = `<p>${done ? "Done today" : "Not done yet"}</p>`;
-    actions = `
-      <div class="button-row three-actions">
-        <button onclick="toggleBoolean(${index})">${done ? "Undo" : "Mark Done"}</button>
-        <button onclick="editMetric(${index})">Edit</button>
-        <button class="danger-btn" onclick="deleteMetric(${index})">Delete</button>
-      </div>`;
-  } else if (type === "Time") {
-    const totalMin = (metric.entries || []).reduce((s, e) => s + Number(e.value || 0), 0);
-    const target = Number(metric.targetValue) || 0;
-    const pct = target > 0 ? Math.min(100, Math.round((totalMin / target) * 100)) : 0;
-    body = `
-      <p>${totalMin} / ${target || "?"} ${unit || "min"}</p>
-      ${target > 0 ? `<div class="tracker-progress-bar"><div class="tracker-progress-fill" style="width:${pct}%"></div></div><p class="tracker-pct">${pct}%</p>` : ""}`;
-    actions = `
-      <div class="button-row three-actions">
-        <button onclick="logMetricTime(${index})">Log Time</button>
-        <button onclick="editMetric(${index})">Edit</button>
-        <button class="danger-btn" onclick="deleteMetric(${index})">Delete</button>
-      </div>`;
-  } else if (type === "Milestone") {
-    body = metric.notes ? `<p>${escapeHTML(metric.notes)}</p>` : "";
-    actions = `
-      <div class="button-row">
-        <button onclick="editMetric(${index})">Edit</button>
-        <button class="danger-btn" onclick="deleteMetric(${index})">Delete</button>
-      </div>`;
-  } else {
-    const pct = metric.targetValue
-      ? Math.min(100, Math.max(0, Math.round((Number(metric.currentValue) / Number(metric.targetValue)) * 100)))
-      : 0;
-    body = `
-      <p>${escapeHTML(String(metric.currentValue || 0))} ${unit}</p>
-      ${metric.targetValue ? `<div class="tracker-progress-bar"><div class="tracker-progress-fill" style="width:${pct}%"></div></div><p class="tracker-pct">${pct}%</p>` : ""}`;
-    actions = `
-      <div class="button-row three-actions">
-        <button onclick="logNewMetricValue(${index})">Log</button>
-        <button onclick="editMetric(${index})">Edit</button>
-        <button class="danger-btn" onclick="deleteMetric(${index})">Delete</button>
-      </div>`;
+function saveUnifiedTrackerFromModal() {
+  const name = document.getElementById("trackerName").value.trim();
+  if (!name) {
+    alert("Add a name.");
+    return;
   }
-
-  return `
-    <div class="system-item">
-      <div class="item-title">
-        <strong>${escapeHTML(metric.name)}</strong>
-        <span class="metric-type-pill metric-type-${typeCls}">${typeLabel} ${trend}</span>
-      </div>
-      ${body}
-      ${values.length ? renderMiniBars(values) : ""}
-      ${metric.recurringTarget ? `<p class="muted-text">Recurring target: ${escapeHTML(metric.recurringTarget)}</p>` : ""}
-      ${metric.deadline ? `<p>Deadline: ${escapeHTML(metric.deadline)}</p>` : ""}
-      ${actions}
-    </div>
-  `;
+  const prev = editingTrackerIndex !== null ? systemsData.trackers[editingTrackerIndex] : null;
+  const category = document.getElementById("trackerCategory").value.trim();
+  const unit = document.getElementById("trackerUnit").value.trim();
+  const trackerRaw = {
+    id: editingTrackerIndex === null ? createId("tracker") : systemsData.trackers[editingTrackerIndex].id,
+    name,
+    category,
+    unit,
+    startValue: document.getElementById("trackerStartValue").value,
+    currentValue: document.getElementById("trackerCurrentValue").value,
+    targetValue: document.getElementById("trackerTargetValue").value,
+    direction: document.getElementById("trackerDirection").value,
+    logValueMode: document.getElementById("trackerLogValueMode").value,
+    resetType: document.getElementById("trackerResetType").value,
+    resetCustomNote: document.getElementById("trackerResetCustomNote")?.value.trim() || "",
+    startDate: document.getElementById("trackerStartDate").value || "",
+    targetDate: document.getElementById("trackerTargetDate").value || "",
+    linkedHabitId: document.getElementById("trackerLinkedHabit").value || "",
+    notes: document.getElementById("trackerNotes").value.trim(),
+    legacyMetricType: prev?.legacyMetricType || "",
+    autoLogOnPlannerComplete: Boolean(document.getElementById("trackerAutoLogPlanner")?.checked),
+    autoLogAmount: document.getElementById("trackerAutoLogAmount")?.value ?? "1",
+    autoLogUnit: document.getElementById("trackerAutoLogUnit")?.value.trim() ?? "",
+    preventDuplicateAutoLogs: document.getElementById("trackerPreventDupAuto")?.checked !== false
+  };
+  const tracker = normalizeUnifiedTrackerRecord(trackerRaw);
+  rememberTrackerCategory(tracker.category);
+  rememberTrackerUnit(tracker.unit);
+  if (editingTrackerIndex === null) systemsData.trackers.push(tracker);
+  else systemsData.trackers[editingTrackerIndex] = tracker;
+  recalcAllTrackerCurrentsFromLogs();
+  editingTrackerIndex = null;
+  activeSystemsForm = null;
+  saveSystemsData();
+  activeSystemsSection = "Trackers";
+  main.innerHTML = getPageHTML("Systems");
+  renderSystems();
 }
 
-function getValuesTrend(values) {
-  if (values.length < 4) return "→";
-  const midpoint = Math.floor(values.length / 2);
-  const first = average(values.slice(0, midpoint));
-  const second = average(values.slice(midpoint));
-  if (second > first) return "↑";
-  if (second < first) return "↓";
-  return "→";
+function fillEditingTrackerForm() {
+  if (editingTrackerIndex === null) return;
+  const el = id => document.getElementById(id);
+  if (!el("trackerName")) return;
+  const t = systemsData.trackers[editingTrackerIndex];
+  if (!t) return;
+  el("trackerName").value = t.name || "";
+  const catIn = el("trackerCategory");
+  if (catIn) {
+    catIn.value = t.category || "";
+    const catList = document.getElementById("trackerCategoryList");
+    if (catList) catList.innerHTML = buildTrackerCategoryDatalistInnerHtml();
+  }
+  const unitIn = el("trackerUnit");
+  if (unitIn) {
+    unitIn.value = t.unit || "";
+    const unitList = document.getElementById("trackerUnitList");
+    if (unitList) unitList.innerHTML = buildTrackerUnitDatalistInnerHtml();
+  }
+  el("trackerStartValue").value = t.startValue ?? "";
+  el("trackerCurrentValue").value = t.currentValue ?? "";
+  el("trackerTargetValue").value = t.targetValue ?? "";
+  el("trackerDirection").value = t.direction === "decrease" ? "decrease" : "increase";
+  el("trackerLogValueMode").value = t.logValueMode === "absolute" ? "absolute" : "increment";
+  el("trackerResetType").value = TRACKER_RESET_TYPES.includes(t.resetType) ? t.resetType : "No reset";
+  if (el("trackerResetCustomNote")) el("trackerResetCustomNote").value = t.resetCustomNote || "";
+  el("trackerStartDate").value = t.startDate || "";
+  el("trackerTargetDate").value = t.targetDate || "";
+  el("trackerLinkedHabit").value = t.linkedHabitId || "";
+  if (el("trackerAutoLogPlanner")) el("trackerAutoLogPlanner").checked = Boolean(t.autoLogOnPlannerComplete);
+  if (el("trackerAutoLogAmount")) el("trackerAutoLogAmount").value = t.autoLogAmount ?? "1";
+  if (el("trackerAutoLogUnit")) el("trackerAutoLogUnit").value = t.autoLogUnit || "";
+  if (el("trackerPreventDupAuto")) el("trackerPreventDupAuto").checked = t.preventDuplicateAutoLogs !== false;
+  el("trackerNotes").value = t.notes || "";
+  const btn = el("trackerSaveButton");
+  if (btn) btn.textContent = "Update Tracker";
+}
+
+function fillEditingManualLogForm() {
+  if (activeSystemsForm !== "trackerLog" || !manualLogTrackerId) return;
+  const dateEl = document.getElementById("manualLogDate");
+  if (!dateEl) return;
+  dateEl.value = getTodayISO();
+  refreshManualLogPlannerBlockOptions();
+  const valEl = document.getElementById("manualLogValue");
+  if (valEl) valEl.value = "";
+  const notesEl = document.getElementById("manualLogNotes");
+  if (notesEl) notesEl.value = "";
+  const tracker = systemsData.trackers.find(tr => tr.id === manualLogTrackerId);
+  const habitEl = document.getElementById("manualLogLinkedHabit");
+  if (habitEl && tracker) habitEl.value = tracker.linkedHabitId || "";
+  const blockEl = document.getElementById("manualLogPlannerBlock");
+  if (blockEl) blockEl.value = "";
+  valEl?.focus();
+}
+
+function fillEditingLogForm() {
+  if (editingLogIndex === null) return;
+  if (!document.getElementById("logTitle")) return;
+  const log = systemsData.logs[editingLogIndex];
+  if (!log) return;
+  document.getElementById("logTitle").value = log.title || "";
+  document.getElementById("logType").value = log.type || "Custom";
+  document.getElementById("logValue").value = log.value || "";
+  document.getElementById("logUnit").value = log.unit || "";
+  document.getElementById("logDate").value = log.date || getTodayISO();
+  document.getElementById("logNotes").value = log.notes || "";
+  const lt = log.linkedGoalId ? "goal" : log.linkedHabitId ? "habit" : getLogLinkedTrackerId(log) ? "tracker" : "";
+  const li = document.getElementById("logLinkedItemType");
+  if (li) li.value = lt;
+  updateLogLinkedItemOptions();
+  const wrap = document.getElementById("logLinkedItemId");
+  const idVal = log.linkedGoalId || log.linkedHabitId || getLogLinkedTrackerId(log) || "";
+  if (wrap) wrap.value = idVal;
+  const plannerSel = document.getElementById("logLinkedPlannerBlockId");
+  if (plannerSel) plannerSel.value = log.linkedPlannerBlockId || "";
 }
 
 function getHabitStreak(habit) {
@@ -6572,8 +6968,12 @@ function normalizeScheduleBackupData(data) {
 }
 
 function normalizeSystemsBackupData(data) {
+  const raw = data && typeof data === "object" ? data : {};
   return {
-    habits: Array.isArray(data.habits) ? data.habits.map(habit => ({
+    savedTrackerCategories: Array.isArray(raw.savedTrackerCategories) ? raw.savedTrackerCategories : [],
+    savedTrackerUnits: Array.isArray(raw.savedTrackerUnits) ? raw.savedTrackerUnits : [],
+    _trackersUnifiedV1: raw._trackersUnifiedV1 !== undefined ? Boolean(raw._trackersUnifiedV1) : true,
+    habits: Array.isArray(raw.habits) ? raw.habits.map(habit => ({
       ...habit,
       id: habit.id || createId("habit"),
       name: habit.name || "",
@@ -6589,28 +6989,44 @@ function normalizeSystemsBackupData(data) {
       notes: habit.notes || "",
       completions: Array.isArray(habit.completions) ? habit.completions : []
     })) : [],
-    logs: Array.isArray(data.logs) ? data.logs.map(log => ({
-      ...log,
-      id: log.id || createId("log"),
-      title: log.title || "",
-      type: log.type || "Custom",
-      valueType: log.valueType || log.type || "Custom",
-      value: log.value || "",
-      unit: log.unit || "",
-      date: log.date || "",
-      notes: log.notes || "",
-      linkedHabitId: log.linkedHabitId || "",
-      linkedPlannerBlockId: log.linkedPlannerBlockId || ""
-    })) : [],
-    trackers: Array.isArray(data.trackers) ? data.trackers.map(tracker => ({
-      ...tracker,
-      id: tracker.id || createId("tracker"),
-      name: tracker.name || "",
-      type: tracker.type || "Custom",
-      unit: tracker.unit || "",
-      notes: tracker.notes || ""
-    })) : [],
-    goals: Array.isArray(data.goals) ? data.goals.map(goal => ({
+    logs: Array.isArray(raw.logs) ? raw.logs.map(log => {
+      const linkedTrackerId = log.linkedTrackerId || log.trackerId || "";
+      const linkedItemType = log.linkedItemType || (log.linkedMetricId ? "metric" : log.linkedGoalId ? "goal" : linkedTrackerId ? "tracker" : log.linkedHabitId ? "habit" : "");
+      const merged = {
+        ...log,
+        id: log.id || createId("log"),
+        title: log.title || "",
+        type: log.type || "Custom",
+        valueType: log.valueType || log.type || "Custom",
+        value: log.value || "",
+        unit: log.unit || "",
+        date: log.date || "",
+        notes: log.notes || "",
+        linkedHabitId: log.linkedHabitId || "",
+        linkedMetricId: log.linkedMetricId || "",
+        linkedTrackerId,
+        linkedGoalId: log.linkedGoalId || "",
+        linkedPlannerBlockId: log.linkedPlannerBlockId || "",
+        linkedItemType
+      };
+      return {
+        ...merged,
+        logSource: merged.logSource || inferLegacyLogSource(merged),
+        plannerAutoLogKey: merged.plannerAutoLogKey || "",
+        inactive: Boolean(merged.inactive)
+      };
+    }) : [],
+    trackers: Array.isArray(raw.trackers) ? raw.trackers.map(tracker =>
+      normalizeUnifiedTrackerRecord({
+        ...tracker,
+        id: tracker.id || createId("tracker"),
+        name: tracker.name || "",
+        category: tracker.category || tracker.type || "Custom",
+        unit: tracker.unit || "",
+        notes: tracker.notes || ""
+      })
+    ) : [],
+    goals: Array.isArray(raw.goals) ? raw.goals.map(goal => ({
       ...goal,
       id: goal.id || createId("goal"),
       name: goal.name || "",
@@ -6621,7 +7037,7 @@ function normalizeSystemsBackupData(data) {
       recurringTarget: goal.recurringTarget || "",
       notes: goal.notes || ""
     })) : [],
-    metrics: Array.isArray(data.metrics) ? data.metrics.map(metric => ({
+    metrics: Array.isArray(raw.metrics) ? raw.metrics.map(metric => ({
       ...metric,
       id: metric.id || createId("metric"),
       name: metric.name || "",
@@ -6680,7 +7096,16 @@ function clearSocial() {
 }
 
 function clearSystems() {
-  systemsData = { habits: [], logs: [], trackers: [], goals: [], metrics: [] };
+  systemsData = {
+    habits: [],
+    logs: [],
+    trackers: [],
+    goals: [],
+    metrics: [],
+    savedTrackerCategories: [],
+    savedTrackerUnits: [],
+    _trackersUnifiedV1: true
+  };
   saveSystemsData();
   alert("Systems cleared");
 }

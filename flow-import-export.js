@@ -478,6 +478,7 @@ function _doMerge(incoming) {
     mergeById(systemsData.goals,    norm.goals);
     mergeById(systemsData.metrics,  norm.metrics);
     saveSystemsData();
+    if (typeof migrateSystemsToUnifiedTrackers === "function") migrateSystemsToUnifiedTrackers();
   }
 
   // ── Social ──
