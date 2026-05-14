@@ -135,7 +135,12 @@ systemsData.habits = systemsData.habits.map(habit => ({
   skippedDates: Array.isArray(habit.skippedDates) ? habit.skippedDates : [],
   completionHistory: Array.isArray(habit.completionHistory) ? habit.completionHistory : [],
   notes: habit.notes || "",
-  completions: Array.isArray(habit.completions) ? habit.completions : []
+  completions: Array.isArray(habit.completions) ? habit.completions : [],
+  // Amount-based completion fields
+  completionType: habit.completionType || "checkbox", // "checkbox" or "amount"
+  dailyTargetAmount: habit.dailyTargetAmount || "",
+  weeklyTargetAmount: habit.weeklyTargetAmount || "",
+  autoLogToTracker: habit.autoLogToTracker !== false // default true
 }));
 
 systemsData.objectives = systemsData.objectives.map(objective => ({
@@ -164,7 +169,11 @@ systemsData.objectives = systemsData.objectives.map(objective => ({
     id: item.id || createId("subtask"),
     title: item.title || "",
     completed: Boolean(item.completed)
-  })) : []
+  })) : [],
+  // Timestamps and tracking
+  createdAt: objective.createdAt || "",
+  updatedAt: objective.updatedAt || "",
+  deferredCount: objective.deferredCount || 0
 }));
 
 function inferLegacyLogSource(log) {
@@ -255,7 +264,13 @@ let editingIdeaIndex = null;
 let editingHabitIndex = null;
 let editingTrackerIndex = null;
 let editingGoalIndex = null;
+let editingObjectiveIndex = null;
 let openBlockActionMenuIndex = null;
+
+// History section state
+let historyFilter = "All";
+let historySort = "dueDate";
+let historySearch = "";
 let routineCopySourceDay = null;
 let editingMetricIndex = null;
 let editingLogIndex = null;
@@ -276,6 +291,7 @@ let visiblePlannerMonth = getTodayISO().slice(0, 7);
 let plannerWeekStart = getStartOfWeekISO(getTodayISO());
 let plannerWeekEnd = getDateOffset(plannerWeekStart, 6);
 let pendingSocialImport = null;
+let habitCompleteModalIndex = null;
 
 // SAVE
 function savePlannerData() {
@@ -341,6 +357,9 @@ const pages = {
       </div>
       <div class="card dashboard-card wide-card">
         <div id="homeCompletedToday"></div>
+      </div>
+      <div class="card dashboard-card wide-card">
+        <div id="homeHistory"></div>
       </div>
       <div class="card dashboard-card">
         <h3>Goal Progress</h3>
@@ -2781,6 +2800,7 @@ function renderHome() {
   renderHomeNextAction();
   renderHomeObjectives();
   renderHomeCompletedToday();
+  renderHomeHistory();
   renderHomeSnapshot();
   renderProductivitySummary("homeProductivitySummary");
   renderHomeTimeline();
@@ -2789,7 +2809,7 @@ function renderHome() {
   renderHomeSocialReminder();
   renderHomeSuggestions();
   renderHomeStats();
-}
+  }
 
 function isObjectiveDone(objective) {
   return objective.status === "Complete" || objective.status === "Skipped" || objective.status === "Deferred";
@@ -2844,33 +2864,94 @@ function renderObjectiveCard(objective, isFocus = false) {
   const block = objective.linkedPlannerBlockId ? scheduleData.blocks.find(item => item.id === objective.linkedPlannerBlockId) : null;
   const habit = objective.linkedHabitId ? systemsData.habits.find(item => item.id === objective.linkedHabitId) : null;
   const tracker = objective.linkedTrackerId ? systemsData.trackers.find(item => item.id === objective.linkedTrackerId) : null;
+  const dueStatus = getObjectiveDueStatus(objective);
+  const dueBadge = formatDueDateDisplay(objective.dueDate, objective.dueTime);
   const meta = [
     objective.priority,
     objective.type,
-    objective.dueDate ? `${objective.dueDate}${objective.dueTime ? ` ${objective.dueTime}` : ""}` : "",
     objective.estimatedMinutes ? `${objective.estimatedMinutes}m` : ""
   ].filter(Boolean);
   return `
-    <div class="objective-card ${isFocus ? "focus" : ""}">
-      <div class="objective-main">
-        <div>
-          <strong>${escapeHTML(objective.title)}</strong>
-          <p>${meta.map(escapeHTML).join(" • ")}</p>
-          ${block ? `<p>Planner: ${escapeHTML(block.title || "Block")} ${escapeHTML(block.start || "")}</p>` : ""}
-          ${habit ? `<p>Habit: ${escapeHTML(habit.name)}</p>` : ""}
-          ${tracker ? `<p>Tracker: ${escapeHTML(tracker.name)}</p>` : ""}
-          ${objective.notes ? `<p>${escapeHTML(objective.notes)}</p>` : ""}
-        </div>
-        <span class="objective-status">${escapeHTML(objective.status)}</span>
-      </div>
-      <div class="objective-actions">
-        <button onclick="setObjectiveStatus(${index}, 'Complete')">Done</button>
-        <button class="secondary-btn" onclick="setObjectiveStatus(${index}, 'In progress')">Start</button>
-        <button class="secondary-btn" onclick="deferObjective(${index})">Defer</button>
-        <button class="secondary-btn" onclick="toggleFocusObjective(${index})">${objective.focus ? "Unfocus" : "Focus"}</button>
-      </div>
-    </div>
+  <div class="objective-card ${isFocus ? "focus" : ""}">
+  <div class="objective-main">
+  <div>
+  <strong>${escapeHTML(objective.title)}</strong>
+  ${dueBadge ? `<span class="objective-due-badge objective-due-${dueStatus}">${escapeHTML(dueBadge)}</span>` : ""}
+  <p>${meta.map(escapeHTML).join(" • ")}</p>
+  ${block ? `<p>Planner: ${escapeHTML(block.title || "Block")} ${escapeHTML(block.start || "")}</p>` : ""}
+  ${habit ? `<p>Habit: ${escapeHTML(habit.name)}</p>` : ""}
+  ${tracker ? `<p>Tracker: ${escapeHTML(tracker.name)}</p>` : ""}
+  ${objective.notes ? `<p>${escapeHTML(objective.notes)}</p>` : ""}
+  </div>
+  <span class="objective-status">${escapeHTML(objective.status)}</span>
+  </div>
+  <div class="objective-actions">
+  <button onclick="setObjectiveStatus(${index}, 'Complete')">Done</button>
+  <button class="secondary-btn" onclick="setObjectiveStatus(${index}, 'In progress')">Start</button>
+  <button class="secondary-btn" onclick="deferObjective(${index})">Defer</button>
+  <button class="secondary-btn" onclick="openObjectiveModal(${index})">Edit</button>
+  <button class="secondary-btn" onclick="toggleFocusObjective(${index})">${objective.focus ? "Unfocus" : "Focus"}</button>
+  </div>
+  </div>
   `;
+  }
+
+function getObjectiveDueStatus(objective) {
+  if (!objective.dueDate) return "none";
+  const today = getTodayISO();
+  if (objective.dueDate < today) return "overdue";
+  if (objective.dueDate === today) return "today";
+  return "upcoming";
+}
+
+function formatDueDateDisplay(dueDate, dueTime) {
+  if (!dueDate) return "";
+  const today = getTodayISO();
+  const tomorrow = getDateOffset(today, 1);
+  const timeStr = dueTime ? ` at ${dueTime}` : "";
+  
+  if (dueDate < today) {
+    const daysAgo = Math.floor((new Date(today) - new Date(dueDate)) / (1000 * 60 * 60 * 24));
+    return `${daysAgo}d overdue`;
+  }
+  if (dueDate === today) return `Today${timeStr}`;
+  if (dueDate === tomorrow) return `Tomorrow${timeStr}`;
+  
+  const date = new Date(dueDate + "T00:00:00");
+  const options = { month: "short", day: "numeric" };
+  return date.toLocaleDateString("en-US", options) + timeStr;
+}
+
+function getSmartIndicators(objective) {
+  const indicators = [];
+  
+  // Check if completed late
+  if (objective.status === "Complete" && objective.completedDate && objective.dueDate) {
+    const dueDate = new Date(objective.dueDate + "T00:00:00");
+    const completedDate = new Date(objective.completedDate + "T00:00:00");
+    const diffDays = Math.floor((completedDate - dueDate) / (1000 * 60 * 60 * 24));
+    
+    if (diffDays > 0) {
+      indicators.push({ type: "late", label: `Completed ${diffDays}d late` });
+    } else if (diffDays < 0) {
+      indicators.push({ type: "early", label: `Completed ${Math.abs(diffDays)}d early` });
+    }
+  }
+  
+  // Check if repeatedly deferred
+  if (objective.deferredCount && objective.deferredCount >= 2) {
+    indicators.push({ type: "deferred", label: `Deferred ${objective.deferredCount}x` });
+  }
+  
+  // Check if overdue and still active
+  if (!isObjectiveDone(objective) && objective.dueDate && objective.dueDate < getTodayISO()) {
+    const daysOverdue = Math.floor((new Date(getTodayISO()) - new Date(objective.dueDate + "T00:00:00")) / (1000 * 60 * 60 * 24));
+    if (daysOverdue >= 7) {
+      indicators.push({ type: "late", label: `${daysOverdue}d overdue` });
+    }
+  }
+  
+  return indicators;
 }
 
 function getCompletedObjectiveType(objective) {
@@ -2937,45 +3018,510 @@ function renderCompletedObjectiveCard(objective) {
   const index = systemsData.objectives.findIndex(item => item.id === objective.id);
   const type = getCompletedObjectiveType(objective);
   const linkedLabel = getObjectiveLinkedLabel(objective);
+  const smartIndicators = getSmartIndicators(objective);
+  
   return `
-    <div class="completed-objective-card">
+    <div class="completed-objective-card" onclick="openObjectiveDetailModal(${index})">
       <div>
         <strong>${escapeHTML(objective.title)}</strong>
-        <p><span class="objective-type-badge">${escapeHTML(type)}</span> Completed ${escapeHTML(objective.completedAt || "today")}</p>
-        ${linkedLabel ? `<p>${escapeHTML(linkedLabel)}</p>` : ""}
+        <p>
+          <span class="objective-type-badge">${escapeHTML(type)}</span>
+          <span class="completed-card-timestamp">Completed at ${escapeHTML(objective.completedAt || "today")}</span>
+        </p>
+        ${smartIndicators.length ? `<div style="margin-top:4px">${smartIndicators.map(indicator => 
+          `<span class="smart-indicator smart-indicator-${indicator.type}">${escapeHTML(indicator.label)}</span>`
+        ).join("")}</div>` : ""}
+        ${linkedLabel ? `<p class="completed-card-links">${escapeHTML(linkedLabel)}</p>` : ""}
       </div>
-      <button class="secondary-btn" onclick="reopenObjective(${index})">Reopen</button>
+      <div style="display:flex;gap:6px" onclick="event.stopPropagation()">
+        <button class="secondary-btn" onclick="openObjectiveModal(${index})">Edit</button>
+        <button class="secondary-btn" onclick="reopenObjective(${index})">Reopen</button>
+      </div>
     </div>
   `;
 }
 
+function openObjectiveDetailModal(index) {
+  const objective = systemsData.objectives[index];
+  if (!objective) return;
+  
+  const linkedLabel = getObjectiveLinkedLabel(objective);
+  const smartIndicators = getSmartIndicators(objective);
+  const dueStatus = getObjectiveDueStatus(objective);
+  const dueBadge = formatDueDateDisplay(objective.dueDate, objective.dueTime);
+  
+  const modalHTML = `
+    <div id="objectiveDetailModal" class="modal-backdrop" onclick="closeObjectiveDetailModalFromBackdrop(event)">
+      <div class="planner-sheet objective-modal" role="dialog" aria-modal="true">
+        <div class="sheet-handle"></div>
+        <div class="objective-modal-header">
+          <h3>Task Details</h3>
+          <button class="icon-btn" onclick="closeObjectiveDetailModal()">x</button>
+        </div>
+        
+        <div class="objective-modal-form">
+          <div>
+            <strong style="font-size:16px">${escapeHTML(objective.title)}</strong>
+            ${dueBadge ? `<span class="objective-due-badge objective-due-${dueStatus}">${escapeHTML(dueBadge)}</span>` : ""}
+          </div>
+          
+          <div class="history-card-meta">
+            <span class="objective-type-badge">${escapeHTML(objective.type)}</span>
+            <span>${escapeHTML(objective.priority)}</span>
+            <span class="objective-status">${escapeHTML(objective.status)}</span>
+            ${objective.category ? `<span>${escapeHTML(objective.category)}</span>` : ""}
+            ${objective.estimatedMinutes ? `<span>${objective.estimatedMinutes}m estimated</span>` : ""}
+          </div>
+          
+          ${smartIndicators.length ? `<div>${smartIndicators.map(indicator => 
+            `<span class="smart-indicator smart-indicator-${indicator.type}">${escapeHTML(indicator.label)}</span>`
+          ).join("")}</div>` : ""}
+          
+          ${linkedLabel ? `<p style="font-size:13px;color:var(--text-muted)">${escapeHTML(linkedLabel)}</p>` : ""}
+          ${objective.tags ? `<p style="font-size:13px;color:var(--text-muted)">Tags: ${escapeHTML(objective.tags)}</p>` : ""}
+          ${objective.notes ? `<div style="padding:10px;background:var(--surface-2);border-radius:8px;font-size:13px;white-space:pre-wrap">${escapeHTML(objective.notes)}</div>` : ""}
+          
+          <div class="history-card-dates">
+            ${objective.createdAt ? `<div><span>Created</span><strong>${new Date(objective.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</strong></div>` : ""}
+            ${objective.dueDate ? `<div><span>Due</span><strong>${new Date(objective.dueDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}${objective.dueTime ? ` at ${objective.dueTime}` : ""}</strong></div>` : ""}
+            ${objective.completedDate ? `<div><span>Completed</span><strong>${new Date(objective.completedDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}${objective.completedAt ? ` at ${objective.completedAt}` : ""}</strong></div>` : ""}
+            ${objective.deferredCount ? `<div><span>Deferred</span><strong>${objective.deferredCount} time${objective.deferredCount === 1 ? "" : "s"}</strong></div>` : ""}
+          </div>
+          
+          <div class="objective-modal-actions">
+            ${objective.status === "Complete" ? `
+              <button class="secondary-btn" onclick="reopenObjective(${index}); closeObjectiveDetailModal()">Reopen</button>
+            ` : `
+              <button onclick="setObjectiveStatus(${index}, 'Complete'); closeObjectiveDetailModal()">Mark Complete</button>
+            `}
+            <button class="secondary-btn" onclick="closeObjectiveDetailModal(); openObjectiveModal(${index})">Edit</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  const modalContainer = document.createElement("div");
+  modalContainer.id = "objectiveDetailModalContainer";
+  modalContainer.innerHTML = modalHTML;
+  document.body.appendChild(modalContainer);
+}
+
+function closeObjectiveDetailModal() {
+  const container = document.getElementById("objectiveDetailModalContainer");
+  if (container) container.remove();
+}
+
+function closeObjectiveDetailModalFromBackdrop(event) {
+  if (event.target && event.target.id === "objectiveDetailModal") {
+    closeObjectiveDetailModal();
+  }
+}
+
+// History Section Functions
+function setHistoryFilter(filter) {
+  historyFilter = filter;
+  renderHomeHistory();
+}
+
+function setHistorySort(sort) {
+  historySort = sort;
+  renderHomeHistory();
+}
+
+function setHistorySearch(query) {
+  historySearch = query;
+  renderHomeHistory();
+}
+
+function getFilteredHistoryObjectives() {
+  const today = getTodayISO();
+  const weekStart = getDateOffset(today, -new Date(today).getDay());
+  const monthStart = today.slice(0, 8) + "01";
+  
+  let objectives = [...systemsData.objectives];
+  
+  // Apply filter
+  switch (historyFilter) {
+    case "Active":
+      objectives = objectives.filter(o => !isObjectiveDone(o));
+      break;
+    case "Completed":
+      objectives = objectives.filter(o => o.status === "Complete");
+      break;
+    case "Overdue":
+      objectives = objectives.filter(o => !isObjectiveDone(o) && o.dueDate && o.dueDate < today);
+      break;
+    case "Tasks":
+      objectives = objectives.filter(o => o.type === "Task");
+      break;
+    case "Objectives":
+      objectives = objectives.filter(o => o.type === "Objective");
+      break;
+    case "This week":
+      objectives = objectives.filter(o => 
+        (o.createdAt && o.createdAt.slice(0, 10) >= weekStart) ||
+        (o.completedDate && o.completedDate >= weekStart)
+      );
+      break;
+    case "This month":
+      objectives = objectives.filter(o => 
+        (o.createdAt && o.createdAt.slice(0, 10) >= monthStart) ||
+        (o.completedDate && o.completedDate >= monthStart)
+      );
+      break;
+  }
+  
+  // Apply search
+  if (historySearch.trim()) {
+    const query = historySearch.toLowerCase();
+    objectives = objectives.filter(o => 
+      o.title.toLowerCase().includes(query) ||
+      (o.tags && o.tags.toLowerCase().includes(query)) ||
+      (o.notes && o.notes.toLowerCase().includes(query)) ||
+      (o.category && o.category.toLowerCase().includes(query))
+    );
+  }
+  
+  // Apply sort
+  switch (historySort) {
+    case "dueDate":
+      objectives.sort((a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999"));
+      break;
+    case "createdAt":
+      objectives.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+      break;
+    case "completedDate":
+      objectives.sort((a, b) => (b.completedDate || "").localeCompare(a.completedDate || ""));
+      break;
+    case "priority":
+      const priorityOrder = { High: 0, Medium: 1, Low: 2 };
+      objectives.sort((a, b) => (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2));
+      break;
+    case "updatedAt":
+      objectives.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+      break;
+  }
+  
+  return objectives;
+}
+
+function renderHomeHistory() {
+  const box = document.getElementById("homeHistory");
+  if (!box) return;
+  
+  const objectives = getFilteredHistoryObjectives();
+  const filters = ["All", "Active", "Completed", "Overdue", "Tasks", "Objectives", "This week", "This month"];
+  const totalCount = systemsData.objectives.length;
+  
+  box.innerHTML = `
+    <details class="history-section">
+      <summary>
+        <span>Task & Objective History <strong class="count-badge">${totalCount}</strong></span>
+      </summary>
+      
+      <div class="history-filters">
+        ${filters.map(filter => `
+          <button class="history-filter-btn ${historyFilter === filter ? "active" : ""}" onclick="setHistoryFilter('${filter}')">${filter}</button>
+        `).join("")}
+      </div>
+      
+      <div class="history-search-row">
+        <input type="text" placeholder="Search tasks & objectives..." value="${escapeHTML(historySearch)}" oninput="setHistorySearch(this.value)">
+        <select onchange="setHistorySort(this.value)">
+          <option value="dueDate" ${historySort === "dueDate" ? "selected" : ""}>Sort by Due Date</option>
+          <option value="createdAt" ${historySort === "createdAt" ? "selected" : ""}>Sort by Created</option>
+          <option value="completedDate" ${historySort === "completedDate" ? "selected" : ""}>Sort by Completed</option>
+          <option value="priority" ${historySort === "priority" ? "selected" : ""}>Sort by Priority</option>
+          <option value="updatedAt" ${historySort === "updatedAt" ? "selected" : ""}>Sort by Updated</option>
+        </select>
+      </div>
+      
+      <div class="history-list">
+        ${objectives.length ? objectives.slice(0, 20).map(renderHistoryCard).join("") : `<p class="muted-text">No items match your filters.</p>`}
+        ${objectives.length > 20 ? `<p class="muted-text" style="text-align:center">Showing 20 of ${objectives.length} items</p>` : ""}
+      </div>
+    </details>
+  `;
+}
+
+function renderHistoryCard(objective) {
+  const index = systemsData.objectives.findIndex(item => item.id === objective.id);
+  const dueStatus = getObjectiveDueStatus(objective);
+  const dueBadge = formatDueDateDisplay(objective.dueDate, objective.dueTime);
+  const smartIndicators = getSmartIndicators(objective);
+  const linkedLabel = getObjectiveLinkedLabel(objective);
+  
+  const createdDate = objective.createdAt ? new Date(objective.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+  const completedDate = objective.completedDate ? new Date(objective.completedDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+  
+  return `
+    <div class="history-card">
+      <div class="history-card-header">
+        <div>
+          <span class="history-card-title">${escapeHTML(objective.title)}</span>
+          ${dueBadge ? `<span class="objective-due-badge objective-due-${dueStatus}">${escapeHTML(dueBadge)}</span>` : ""}
+        </div>
+        <span class="objective-status">${escapeHTML(objective.status)}</span>
+      </div>
+      
+      <div class="history-card-meta">
+        <span class="objective-type-badge">${escapeHTML(objective.type)}</span>
+        <span>${escapeHTML(objective.priority)}</span>
+        ${objective.category ? `<span>${escapeHTML(objective.category)}</span>` : ""}
+        ${objective.estimatedMinutes ? `<span>${objective.estimatedMinutes}m</span>` : ""}
+      </div>
+      
+      ${smartIndicators.length ? `<div style="margin-top:6px">${smartIndicators.map(indicator => 
+        `<span class="smart-indicator smart-indicator-${indicator.type}">${escapeHTML(indicator.label)}</span>`
+      ).join("")}</div>` : ""}
+      
+      ${linkedLabel ? `<p style="font-size:12px;color:var(--text-muted);margin-top:6px">${escapeHTML(linkedLabel)}</p>` : ""}
+      ${objective.notes ? `<p style="font-size:12px;color:var(--text-muted);margin-top:4px">${escapeHTML(objective.notes.slice(0, 100))}${objective.notes.length > 100 ? "..." : ""}</p>` : ""}
+      
+      <div class="history-card-dates">
+        ${createdDate ? `<div><span>Created</span><strong>${createdDate}</strong></div>` : ""}
+        ${objective.dueDate ? `<div><span>Due</span><strong>${new Date(objective.dueDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}</strong></div>` : ""}
+        ${completedDate ? `<div><span>Completed</span><strong>${completedDate}${objective.completedAt ? ` at ${objective.completedAt}` : ""}</strong></div>` : ""}
+      </div>
+      
+      <div class="history-card-actions">
+        ${objective.status !== "Complete" ? `
+          <button onclick="setObjectiveStatus(${index}, 'Complete')">Done</button>
+          <button class="secondary-btn" onclick="deferObjective(${index})">Defer</button>
+        ` : `
+          <button class="secondary-btn" onclick="reopenObjective(${index})">Reopen</button>
+        `}
+        <button class="secondary-btn" onclick="openObjectiveModal(${index})">Edit</button>
+        <button class="danger-btn" onclick="deleteObjective(${index})">Delete</button>
+      </div>
+    </div>
+  `;
+}
+
+function deleteObjective(index) {
+  if (!confirm("Delete this item? This cannot be undone.")) return;
+  systemsData.objectives.splice(index, 1);
+  saveSystemsData();
+  renderHome();
+}
+
 function quickAddObjective(type = "Task") {
-  const title = prompt(`${type} title:`);
-  if (!title || !title.trim()) return;
-  systemsData.objectives.push({
-    id: createId("objective"),
-    title: title.trim(),
-    type,
-    status: "Not started",
-    priority: type === "Objective" ? "High" : "Medium",
-    dueDate: getTodayISO(),
-    dueTime: "",
-    estimatedMinutes: "",
-    category: "",
-    tags: "",
-    notes: "",
-    linkedPlannerBlockId: "",
-    linkedHabitId: "",
-    linkedTrackerId: "",
-    trackerLogAmount: "",
-    completedDate: "",
-    completedAt: "",
-    autoCompleteFromPlanner: true,
-    autoCompleteFromHabit: true,
-    focus: false,
-    recurring: "",
-    subtasks: []
-  });
+  openObjectiveModal(null, type);
+}
+
+function openObjectiveModal(index = null, defaultType = "Task") {
+  editingObjectiveIndex = index;
+  const isEdit = index !== null;
+  const objective = isEdit ? systemsData.objectives[index] : null;
+  
+  const modalHTML = `
+    <div id="objectiveModal" class="modal-backdrop" onclick="closeObjectiveModalFromBackdrop(event)">
+      <div class="planner-sheet objective-modal" role="dialog" aria-modal="true">
+        <div class="sheet-handle"></div>
+        <div class="objective-modal-header">
+          <h3>${isEdit ? "Edit" : "New"} ${objective?.type || defaultType}</h3>
+          <button class="icon-btn" onclick="closeObjectiveModal()">x</button>
+        </div>
+        
+        <div class="objective-modal-form">
+          <div>
+            <label>Title *</label>
+            <input type="text" id="objectiveTitle" value="${escapeHTML(objective?.title || "")}" placeholder="What do you want to accomplish?">
+          </div>
+          
+          <div class="objective-modal-row">
+            <div>
+              <label>Type</label>
+              <select id="objectiveType">
+                <option value="Task" ${(objective?.type || defaultType) === "Task" ? "selected" : ""}>Task</option>
+                <option value="Objective" ${(objective?.type || defaultType) === "Objective" ? "selected" : ""}>Objective</option>
+              </select>
+            </div>
+            <div>
+              <label>Priority</label>
+              <select id="objectivePriority">
+                <option value="Low" ${objective?.priority === "Low" ? "selected" : ""}>Low</option>
+                <option value="Medium" ${(objective?.priority || "Medium") === "Medium" ? "selected" : ""}>Medium</option>
+                <option value="High" ${objective?.priority === "High" ? "selected" : ""}>High</option>
+              </select>
+            </div>
+          </div>
+          
+          <div class="objective-modal-row">
+            <div>
+              <label>Due Date</label>
+              <input type="date" id="objectiveDueDate" value="${objective?.dueDate || getTodayISO()}">
+            </div>
+            <div>
+              <label>Due Time</label>
+              <input type="time" id="objectiveDueTime" value="${objective?.dueTime || ""}">
+            </div>
+          </div>
+          
+          <div class="objective-modal-row">
+            <div>
+              <label>Estimated Minutes</label>
+              <input type="number" id="objectiveEstimatedMinutes" value="${objective?.estimatedMinutes || ""}" placeholder="e.g. 30" min="0">
+            </div>
+            <div>
+              <label>Category</label>
+              <select id="objectiveCategory">
+                <option value="">Select category</option>
+                <option value="Work" ${objective?.category === "Work" ? "selected" : ""}>Work</option>
+                <option value="Personal" ${objective?.category === "Personal" ? "selected" : ""}>Personal</option>
+                <option value="Health" ${objective?.category === "Health" ? "selected" : ""}>Health</option>
+                <option value="Learning" ${objective?.category === "Learning" ? "selected" : ""}>Learning</option>
+                <option value="Finance" ${objective?.category === "Finance" ? "selected" : ""}>Finance</option>
+                <option value="Social" ${objective?.category === "Social" ? "selected" : ""}>Social</option>
+                <option value="Home" ${objective?.category === "Home" ? "selected" : ""}>Home</option>
+                <option value="School" ${objective?.category === "School" ? "selected" : ""}>School</option>
+              </select>
+            </div>
+          </div>
+          
+          <div>
+            <label>Tags</label>
+            <input type="text" id="objectiveTags" value="${escapeHTML(objective?.tags || "")}" placeholder="Comma-separated tags">
+          </div>
+          
+          <div>
+            <label>Notes</label>
+            <textarea id="objectiveNotes" placeholder="Add any notes..." rows="3">${escapeHTML(objective?.notes || "")}</textarea>
+          </div>
+          
+          <details class="objective-advanced-section">
+            <summary>Link to other items</summary>
+            <div class="objective-modal-links">
+              <div>
+                <label>Link to Planner Block</label>
+                <select id="objectiveLinkedPlannerBlock">
+                  <option value="">None</option>
+                  ${scheduleData.blocks.filter(b => b.date === getTodayISO()).map(b => 
+                    `<option value="${b.id}" ${objective?.linkedPlannerBlockId === b.id ? "selected" : ""}>${escapeHTML(b.name)}</option>`
+                  ).join("")}
+                </select>
+              </div>
+              <div>
+                <label>Link to Habit</label>
+                <select id="objectiveLinkedHabit">
+                  <option value="">None</option>
+                  ${systemsData.habits.map(h => 
+                    `<option value="${h.id}" ${objective?.linkedHabitId === h.id ? "selected" : ""}>${escapeHTML(h.name)}</option>`
+                  ).join("")}
+                </select>
+              </div>
+              <div>
+                <label>Link to Tracker</label>
+                <select id="objectiveLinkedTracker" onchange="toggleTrackerAmountField()">
+                  <option value="">None</option>
+                  ${systemsData.trackers.map(t => 
+                    `<option value="${t.id}" ${objective?.linkedTrackerId === t.id ? "selected" : ""}>${escapeHTML(t.name)}</option>`
+                  ).join("")}
+                </select>
+              </div>
+              <div id="trackerAmountContainer" style="display:${objective?.linkedTrackerId ? "block" : "none"}">
+                <label>Tracker Log Amount</label>
+                <input type="number" id="objectiveTrackerLogAmount" value="${objective?.trackerLogAmount || ""}" placeholder="Amount to log on completion">
+              </div>
+              
+              <div class="objective-auto-complete-options">
+                <label style="display:flex;align-items:center;gap:8px">
+                  <input type="checkbox" id="objectiveAutoCompleteFromPlanner" ${objective?.autoCompleteFromPlanner !== false ? "checked" : ""}>
+                  Auto-complete when linked planner block is completed
+                </label>
+                <label style="display:flex;align-items:center;gap:8px">
+                  <input type="checkbox" id="objectiveAutoCompleteFromHabit" ${objective?.autoCompleteFromHabit !== false ? "checked" : ""}>
+                  Auto-complete when linked habit is completed
+                </label>
+              </div>
+            </div>
+          </details>
+          
+          <div class="objective-modal-actions">
+            <button class="secondary-btn" onclick="closeObjectiveModal()">Cancel</button>
+            <button onclick="saveObjectiveFromModal()">${isEdit ? "Update" : "Create"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  const modalContainer = document.createElement("div");
+  modalContainer.id = "objectiveModalContainer";
+  modalContainer.innerHTML = modalHTML;
+  document.body.appendChild(modalContainer);
+  
+  setTimeout(() => {
+    const titleInput = document.getElementById("objectiveTitle");
+    if (titleInput) titleInput.focus();
+  }, 100);
+}
+
+function toggleTrackerAmountField() {
+  const trackerId = document.getElementById("objectiveLinkedTracker")?.value;
+  const container = document.getElementById("trackerAmountContainer");
+  if (container) container.style.display = trackerId ? "block" : "none";
+}
+
+function closeObjectiveModal() {
+  editingObjectiveIndex = null;
+  const container = document.getElementById("objectiveModalContainer");
+  if (container) container.remove();
+}
+
+function closeObjectiveModalFromBackdrop(event) {
+  if (event.target && event.target.id === "objectiveModal") {
+    closeObjectiveModal();
+  }
+}
+
+function saveObjectiveFromModal() {
+  const title = document.getElementById("objectiveTitle")?.value.trim();
+  if (!title) {
+    alert("Please enter a title.");
+    return;
+  }
+  
+  const isEdit = editingObjectiveIndex !== null;
+  const existingObjective = isEdit ? systemsData.objectives[editingObjectiveIndex] : null;
+  const now = new Date().toISOString();
+  
+  const objective = {
+    id: existingObjective?.id || createId("objective"),
+    title,
+    type: document.getElementById("objectiveType")?.value || "Task",
+    status: existingObjective?.status || "Not started",
+    priority: document.getElementById("objectivePriority")?.value || "Medium",
+    dueDate: document.getElementById("objectiveDueDate")?.value || getTodayISO(),
+    dueTime: document.getElementById("objectiveDueTime")?.value || "",
+    estimatedMinutes: document.getElementById("objectiveEstimatedMinutes")?.value || "",
+    category: document.getElementById("objectiveCategory")?.value || "",
+    tags: document.getElementById("objectiveTags")?.value.trim() || "",
+    notes: document.getElementById("objectiveNotes")?.value.trim() || "",
+    linkedPlannerBlockId: document.getElementById("objectiveLinkedPlannerBlock")?.value || "",
+    linkedHabitId: document.getElementById("objectiveLinkedHabit")?.value || "",
+    linkedTrackerId: document.getElementById("objectiveLinkedTracker")?.value || "",
+    trackerLogAmount: document.getElementById("objectiveTrackerLogAmount")?.value || "",
+    completedDate: existingObjective?.completedDate || "",
+    completedAt: existingObjective?.completedAt || "",
+    autoCompleteFromPlanner: document.getElementById("objectiveAutoCompleteFromPlanner")?.checked !== false,
+    autoCompleteFromHabit: document.getElementById("objectiveAutoCompleteFromHabit")?.checked !== false,
+    focus: existingObjective?.focus || false,
+    recurring: existingObjective?.recurring || "",
+    subtasks: existingObjective?.subtasks || [],
+    createdAt: existingObjective?.createdAt || now,
+    updatedAt: now,
+    deferredCount: existingObjective?.deferredCount || 0
+  };
+  
+  if (isEdit) {
+    systemsData.objectives[editingObjectiveIndex] = objective;
+  } else {
+    systemsData.objectives.push(objective);
+  }
+  
+  closeObjectiveModal();
   saveSystemsData();
   main.innerHTML = getPageHTML("Home");
   renderHome();
@@ -2985,6 +3531,7 @@ function setObjectiveStatus(index, status) {
   const objective = systemsData.objectives[index];
   if (!objective) return;
   objective.status = status;
+  objective.updatedAt = new Date().toISOString();
   if (status === "Complete") {
     objective.completedDate = getTodayISO();
     objective.completedAt = new Date().toTimeString().slice(0, 5);
@@ -3012,6 +3559,8 @@ function deferObjective(index) {
   if (!objective) return;
   objective.status = "Deferred";
   objective.dueDate = getDateOffset(getTodayISO(), 1);
+  objective.deferredCount = (objective.deferredCount || 0) + 1;
+  objective.updatedAt = new Date().toISOString();
   saveSystemsData();
   renderHome();
 }
@@ -3464,22 +4013,67 @@ function renderHabitFormFields() {
       <option value="Weekly">Target frequency: Weekly</option>
       <option value="Custom">Target frequency: Custom</option>
     </select>
-    <input id="habitTarget" placeholder="Target (e.g. 30, 8 glasses)">
-    <div class="habit-meta-row">
-      <select id="habitUnit">
-        <option value="">Unit</option>
-        <option>times</option>
-        <option>minutes</option>
-        <option>hours</option>
-        <option>pages</option>
-        <option>miles</option>
-        <option>reps</option>
-        <option>glasses</option>
-        <option>calories</option>
-        <option>steps</option>
-        <option>Custom</option>
+    
+    <p style="margin-top:12px;margin-bottom:4px;font-weight:600;font-size:13px">Completion Type</p>
+    <div class="completion-type-toggle">
+      <label>
+        <input type="radio" name="habitCompletionType" value="checkbox" checked onchange="toggleHabitTargetFields()">
+        Checkbox only
+      </label>
+      <label>
+        <input type="radio" name="habitCompletionType" value="amount" onchange="toggleHabitTargetFields()">
+        Amount-based
+      </label>
+    </div>
+    
+    <div id="habitTargetFields" class="habit-target-fields" style="display:none">
+      <div class="habit-target-row">
+        <div>
+          <label style="font-size:12px;color:var(--text-muted)">Daily target</label>
+          <input id="habitDailyTargetAmount" type="number" placeholder="e.g. 2" min="0" step="0.5">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted)">Weekly target</label>
+          <input id="habitWeeklyTargetAmount" type="number" placeholder="e.g. 12" min="0" step="0.5">
+        </div>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted)">Unit</label>
+        <select id="habitUnit">
+          <option value="">Unit</option>
+          <option>times</option>
+          <option>sessions</option>
+          <option>classes</option>
+          <option>minutes</option>
+          <option>hours</option>
+          <option>pages</option>
+          <option>miles</option>
+          <option>reps</option>
+          <option>glasses</option>
+          <option>calories</option>
+          <option>steps</option>
+          <option>dollars</option>
+          <option>Custom</option>
+        </select>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:4px">
+        <input type="checkbox" id="habitAutoLogToTracker" checked style="width:auto;min-height:unset;margin:0">
+        Auto-log to linked tracker when completing
+      </label>
+    </div>
+    
+    <input id="habitTarget" placeholder="Target description (e.g. 30 min workout)" style="margin-top:10px">
+    <div class="habit-meta-row" id="habitUnitRowOld" style="display:none">
+      <select id="habitUnitOld">
+        <option value="">Unit (legacy)</option>
       </select>
       <select id="habitLinkedGoalId">
+        <option value="">Link to goal</option>
+        ${systemsData.goals.map(g => `<option value="${g.id}">${escapeHTML(g.name)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="habit-meta-row">
+      <select id="habitLinkedGoalIdNew">
         <option value="">Link to goal</option>
         ${systemsData.goals.map(g => `<option value="${g.id}">${escapeHTML(g.name)}</option>`).join("")}
       </select>
@@ -3488,6 +4082,12 @@ function renderHabitFormFields() {
     <button id="habitSaveButton" onclick="saveHabit()">${editingHabitIndex === null ? "Save Habit" : "Update Habit"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
   `;
+}
+
+function toggleHabitTargetFields() {
+  const isAmount = document.querySelector('input[name="habitCompletionType"]:checked')?.value === "amount";
+  const fields = document.getElementById("habitTargetFields");
+  if (fields) fields.style.display = isAmount ? "grid" : "none";
 }
 
 function getRecentPlannerBlocksForLogSelect(limit = 100) {
@@ -3808,6 +4408,9 @@ function saveHabit() {
   const name = document.getElementById("habitName").value.trim();
   if (!name) return;
 
+  const completionType = document.querySelector('input[name="habitCompletionType"]:checked')?.value || "checkbox";
+  const linkedGoalId = document.getElementById("habitLinkedGoalIdNew")?.value || document.getElementById("habitLinkedGoalId")?.value || "";
+
   const habit = {
     id: editingHabitIndex === null ? createId("habit") : systemsData.habits[editingHabitIndex].id,
     name,
@@ -3816,12 +4419,17 @@ function saveHabit() {
     targetFrequency: document.getElementById("habitTargetFrequency")?.value || document.getElementById("habitFrequency").value,
     target: document.getElementById("habitTarget").value.trim(),
     unit: document.getElementById("habitUnit")?.value || "",
-    linkedGoalId: document.getElementById("habitLinkedGoalId")?.value || "",
+    linkedGoalId,
     notes: document.getElementById("habitNotes").value.trim(),
     completions: editingHabitIndex === null ? [] : systemsData.habits[editingHabitIndex].completions,
     skippedDates: editingHabitIndex === null ? [] : (systemsData.habits[editingHabitIndex].skippedDates || []),
     completionHistory: editingHabitIndex === null ? [] : (systemsData.habits[editingHabitIndex].completionHistory || []),
-    paused: editingHabitIndex === null ? false : Boolean(systemsData.habits[editingHabitIndex].paused)
+    paused: editingHabitIndex === null ? false : Boolean(systemsData.habits[editingHabitIndex].paused),
+    // Amount-based completion fields
+    completionType,
+    dailyTargetAmount: document.getElementById("habitDailyTargetAmount")?.value || "",
+    weeklyTargetAmount: document.getElementById("habitWeeklyTargetAmount")?.value || "",
+    autoLogToTracker: document.getElementById("habitAutoLogToTracker")?.checked !== false
   };
 
   if (editingHabitIndex === null) {
@@ -3854,8 +4462,27 @@ function fillEditingHabitForm() {
   if (habitUnitEl) habitUnitEl.value = habit.unit || "";
   const habitGoalEl = document.getElementById("habitLinkedGoalId");
   if (habitGoalEl) habitGoalEl.value = habit.linkedGoalId || "";
+  const habitGoalElNew = document.getElementById("habitLinkedGoalIdNew");
+  if (habitGoalElNew) habitGoalElNew.value = habit.linkedGoalId || "";
   document.getElementById("habitNotes").value = habit.notes;
   document.getElementById("habitSaveButton").textContent = "Update Habit";
+  
+  // Fill completion type fields
+  const completionType = habit.completionType || "checkbox";
+  const radioCheckbox = document.querySelector('input[name="habitCompletionType"][value="checkbox"]');
+  const radioAmount = document.querySelector('input[name="habitCompletionType"][value="amount"]');
+  if (radioCheckbox && radioAmount) {
+    radioCheckbox.checked = completionType === "checkbox";
+    radioAmount.checked = completionType === "amount";
+    toggleHabitTargetFields();
+  }
+  
+  const dailyTargetEl = document.getElementById("habitDailyTargetAmount");
+  if (dailyTargetEl) dailyTargetEl.value = habit.dailyTargetAmount || "";
+  const weeklyTargetEl = document.getElementById("habitWeeklyTargetAmount");
+  if (weeklyTargetEl) weeklyTargetEl.value = habit.weeklyTargetAmount || "";
+  const autoLogEl = document.getElementById("habitAutoLogToTracker");
+  if (autoLogEl) autoLogEl.checked = habit.autoLogToTracker !== false;
 }
 
 function resetHabitForm() {
@@ -3949,6 +4576,200 @@ function completeHabitToday(index) {
 
   autoCompleteObjectivesForHabit(habit);
   saveSystemsData();
+  renderSystems();
+}
+
+// Habit Completion Modal Functions
+function openHabitCompleteModal(index) {
+  const habit = systemsData.habits[index];
+  if (!habit || habit.paused) return;
+  
+  habitCompleteModalIndex = index;
+  const today = getTodayISO();
+  const todayProgress = getHabitTodayProgress(habit);
+  const dailyTarget = Number(habit.dailyTargetAmount) || 0;
+  const weeklyProgress = getHabitWeeklyProgress(habit);
+  const weeklyTarget = Number(habit.weeklyTargetAmount) || 0;
+  
+  const modalHTML = `
+    <div id="habitCompleteModal" class="modal-backdrop" onclick="closeHabitCompleteModalFromBackdrop(event)">
+      <div class="habit-complete-modal" role="dialog" aria-modal="true">
+        <div class="sheet-handle"></div>
+        <div class="habit-complete-header">
+          <h3>Log Progress</h3>
+          <button class="icon-btn" onclick="closeHabitCompleteModal()">x</button>
+        </div>
+        <p style="margin-bottom:12px;color:var(--text-muted);font-size:14px">${escapeHTML(habit.name)}</p>
+        
+        ${dailyTarget > 0 ? `
+          <div class="habit-today-progress">
+            <p>Today: <strong>${todayProgress} / ${dailyTarget} ${escapeHTML(habit.unit || "")}</strong></p>
+            <div class="tracker-progress-bar">
+              <div class="tracker-progress-fill" style="width:${Math.min(100, (todayProgress / dailyTarget) * 100)}%"></div>
+            </div>
+          </div>
+        ` : ""}
+        
+        ${weeklyTarget > 0 ? `
+          <div class="habit-today-progress" style="margin-top:8px">
+            <p>This week: <strong>${weeklyProgress} / ${weeklyTarget} ${escapeHTML(habit.unit || "")}</strong></p>
+            <div class="tracker-progress-bar">
+              <div class="tracker-progress-fill" style="width:${Math.min(100, (weeklyProgress / weeklyTarget) * 100)}%"></div>
+            </div>
+          </div>
+        ` : ""}
+        
+        <div class="habit-complete-form">
+          <div class="habit-complete-row">
+            <div>
+              <label>Amount</label>
+              <input type="number" id="habitCompleteAmount" value="1" min="0" step="0.5" placeholder="Amount">
+            </div>
+            <div>
+              <label>Unit</label>
+              <input type="text" id="habitCompleteUnit" value="${escapeHTML(habit.unit || "")}" placeholder="Unit">
+            </div>
+          </div>
+          <div>
+            <label>Date</label>
+            <input type="date" id="habitCompleteDate" value="${today}">
+          </div>
+          <div>
+            <label>Notes (optional)</label>
+            <textarea id="habitCompleteNotes" placeholder="Add any notes..." rows="2"></textarea>
+          </div>
+          <div class="habit-complete-actions">
+            <button class="secondary-btn" onclick="closeHabitCompleteModal()">Cancel</button>
+            <button onclick="saveHabitCompletion()">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  // Add modal to page
+  const modalContainer = document.createElement("div");
+  modalContainer.id = "habitCompleteModalContainer";
+  modalContainer.innerHTML = modalHTML;
+  document.body.appendChild(modalContainer);
+  
+  // Focus the amount input
+  setTimeout(() => {
+    const amountInput = document.getElementById("habitCompleteAmount");
+    if (amountInput) amountInput.focus();
+  }, 100);
+}
+
+function closeHabitCompleteModal() {
+  habitCompleteModalIndex = null;
+  const container = document.getElementById("habitCompleteModalContainer");
+  if (container) container.remove();
+}
+
+function closeHabitCompleteModalFromBackdrop(event) {
+  if (event.target && event.target.id === "habitCompleteModal") {
+    closeHabitCompleteModal();
+  }
+}
+
+function saveHabitCompletion() {
+  if (habitCompleteModalIndex === null) return;
+  
+  const habit = systemsData.habits[habitCompleteModalIndex];
+  if (!habit) {
+    closeHabitCompleteModal();
+    return;
+  }
+  
+  const amount = document.getElementById("habitCompleteAmount")?.value || "1";
+  const unit = document.getElementById("habitCompleteUnit")?.value || habit.unit || "";
+  const date = document.getElementById("habitCompleteDate")?.value || getTodayISO();
+  const notes = document.getElementById("habitCompleteNotes")?.value.trim() || "";
+  
+  const amountNum = Number(amount);
+  if (isNaN(amountNum) || amountNum <= 0) {
+    alert("Please enter a valid amount greater than 0.");
+    return;
+  }
+  
+  // Add habit log entry with amount
+  systemsData.logs.push({
+    id: createId("log"),
+    title: habit.name,
+    type: "Habit",
+    valueType: "Number",
+    value: String(amountNum),
+    unit: unit,
+    date: date,
+    notes: notes || `Logged ${amountNum} ${unit}`,
+    linkedHabitId: habit.id,
+    linkedItemType: "habit",
+    linkedMetricId: "",
+    linkedTrackerId: "",
+    linkedGoalId: habit.linkedGoalId || "",
+    linkedPlannerBlockId: "",
+    logSource: "habit",
+    plannerAutoLogKey: "",
+    inactive: false
+  });
+  
+  // Update habit completion history
+  if (!Array.isArray(habit.completionHistory)) habit.completionHistory = [];
+  habit.completionHistory.push({
+    date: date,
+    time: new Date().toTimeString().slice(0, 5),
+    amount: amountNum,
+    unit: unit,
+    notes: notes
+  });
+  
+  // Check if daily target is met to mark as complete for the day
+  const dailyTarget = Number(habit.dailyTargetAmount) || 0;
+  const todayProgress = getHabitTodayProgress(habit);
+  
+  if (dailyTarget > 0 && todayProgress >= dailyTarget && date === getTodayISO()) {
+    if (!habit.completions.includes(date)) {
+      habit.completions.push(date);
+    }
+  } else if (dailyTarget === 0 && !habit.completions.includes(date)) {
+    // For habits without daily target, any log counts as completion
+    habit.completions.push(date);
+  }
+  
+  // Remove from skipped if was skipped
+  habit.skippedDates = (habit.skippedDates || []).filter(d => d !== date);
+  
+  // Auto-log to linked trackers if enabled
+  if (habit.autoLogToTracker !== false) {
+    systemsData.trackers
+      .filter(t => t.linkedHabitId === habit.id)
+      .forEach(tracker => {
+        systemsData.logs.push({
+          id: createId("log"),
+          title: tracker.name,
+          type: tracker.category || "Custom",
+          valueType: "Number",
+          value: String(amountNum),
+          unit: unit || tracker.unit || "count",
+          date: date,
+          notes: "Habit auto",
+          linkedHabitId: habit.id,
+          linkedItemType: "tracker",
+          linkedMetricId: "",
+          linkedTrackerId: tracker.id,
+          linkedGoalId: "",
+          linkedPlannerBlockId: "",
+          logSource: "habit",
+          plannerAutoLogKey: "",
+          inactive: false
+        });
+        recalcTrackerCurrentFromLogs(tracker);
+      });
+  }
+  
+  autoCompleteObjectivesForHabit(habit);
+  saveSystemsData();
+  closeHabitCompleteModal();
   renderSystems();
 }
 
@@ -4766,6 +5587,20 @@ function renderHabitsList() {
       const skippedToday = (habit.skippedDates || []).includes(getTodayISO());
       const pct = getHabitCompletionPct(habit, 30);
       const weekly = getHabitWeeklyConsistency(habit);
+      const isAmountBased = habit.completionType === "amount";
+      const todayProgress = getHabitTodayProgress(habit);
+      const dailyTarget = Number(habit.dailyTargetAmount) || 0;
+      const hasMetDailyTarget = dailyTarget > 0 && todayProgress >= dailyTarget;
+      
+      // Determine button label and action
+      const buttonLabel = isAmountBased 
+        ? (hasMetDailyTarget ? "Done" : "Log Progress") 
+        : (doneToday ? "Done" : "Complete");
+      const buttonAction = isAmountBased 
+        ? `openHabitCompleteModal(${index})` 
+        : `completeHabitToday(${index})`;
+      const buttonDisabled = habit.paused || (!isAmountBased && doneToday);
+      
       return `
         <div class="system-item habit-card ${habit.paused ? "paused" : ""}">
           <div class="item-title">
@@ -4775,8 +5610,17 @@ function renderHabitsList() {
           <div class="habit-pill-row">
             <span class="metric-type-pill metric-type-progress">${escapeHTML(habit.category || "No category")}</span>
             <span class="metric-type-pill">${escapeHTML(habit.targetFrequency || habit.frequency)}</span>
+            ${isAmountBased ? `<span class="metric-type-pill">Amount</span>` : ""}
             ${habit.paused ? `<span class="metric-type-pill metric-type-milestone">Paused</span>` : ""}
           </div>
+          ${isAmountBased && dailyTarget > 0 ? `
+            <div class="habit-today-progress">
+              <p>Today: <strong>${todayProgress} / ${dailyTarget} ${escapeHTML(habit.unit || "")}</strong></p>
+              <div class="tracker-progress-bar">
+                <div class="tracker-progress-fill" style="width:${Math.min(100, (todayProgress / dailyTarget) * 100)}%"></div>
+              </div>
+            </div>
+          ` : ""}
           <div class="habit-stat-row">
             <div><strong>${pct}%</strong><span>30-day completion</span></div>
             <div><strong>${weekly}%</strong><span>weekly consistency</span></div>
@@ -4786,7 +5630,7 @@ function renderHabitsList() {
           ${habit.target ? `<p>${escapeHTML(habit.target)} ${escapeHTML(habit.unit || "")}</p>` : ""}
           ${habit.notes ? `<p>${escapeHTML(habit.notes)}</p>` : ""}
           <div class="button-row three-actions">
-            <button onclick="completeHabitToday(${index})" ${habit.paused || doneToday ? "disabled" : ""}>${doneToday ? "Done" : "Complete"}</button>
+            <button onclick="${buttonAction}" ${buttonDisabled ? "disabled" : ""}>${buttonLabel}</button>
             <button class="secondary-btn" onclick="skipHabitToday(${index})" ${habit.paused || skippedToday ? "disabled" : ""}>${skippedToday ? "Skipped" : "Skip"}</button>
             <button class="secondary-btn" onclick="scheduleHabitInPlanner(${index})">Plan</button>
           </div>
@@ -4799,6 +5643,31 @@ function renderHabitsList() {
       `;
     }).join("")}</div>`
     : `<div class="empty-state"><p>No habits saved yet.</p><button onclick="openSystemsForm('habit')">Add first habit</button></div>`;
+}
+
+function getHabitTodayProgress(habit) {
+  const today = getTodayISO();
+  const todayLogs = systemsData.logs.filter(log => 
+    log.linkedHabitId === habit.id && 
+    log.date === today && 
+    log.type === "Habit"
+  );
+  return todayLogs.reduce((sum, log) => sum + (Number(log.value) || 0), 0);
+}
+
+function getHabitWeeklyProgress(habit) {
+  const today = new Date(getTodayISO());
+  const startOfWeek = new Date(today);
+  startOfWeek.setDate(today.getDate() - today.getDay());
+  const startISO = startOfWeek.toISOString().slice(0, 10);
+  
+  const weekLogs = systemsData.logs.filter(log => 
+    log.linkedHabitId === habit.id && 
+    log.date >= startISO && 
+    log.date <= getTodayISO() && 
+    log.type === "Habit"
+  );
+  return weekLogs.reduce((sum, log) => sum + (Number(log.value) || 0), 0);
 }
 
 function renderSystemsLogsList() {
