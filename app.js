@@ -4400,7 +4400,6 @@ function renderHabitFormFields() {
       <option value="Weekly">Target frequency: Weekly</option>
       <option value="Custom">Target frequency: Custom</option>
     </select>
-<<<<<<< HEAD
     
     <p style="margin-top:12px;margin-bottom:4px;font-weight:600;font-size:13px">Completion Type</p>
     <div class="completion-type-toggle">
@@ -4455,24 +4454,20 @@ function renderHabitFormFields() {
       <select id="habitUnitOld">
         <option value="">Unit (legacy)</option>
       </select>
-=======
     <input id="habitTarget" placeholder="Target (e.g. 30, 8 glasses)">
     <div class="habit-meta-row">
       ${renderUnitComboInput("habitUnit")}
->>>>>>> 406e2f6 (codex)
       <select id="habitLinkedGoalId">
         <option value="">Link to goal</option>
         ${systemsData.goals.map(g => `<option value="${g.id}">${escapeHTML(g.name)}</option>`).join("")}
       </select>
     </div>
-<<<<<<< HEAD
     <div class="habit-meta-row">
       <select id="habitLinkedGoalIdNew">
         <option value="">Link to goal</option>
         ${systemsData.goals.map(g => `<option value="${g.id}">${escapeHTML(g.name)}</option>`).join("")}
       </select>
     </div>
-=======
     ${renderSharedUnitDatalist()}
     <details class="advanced-options link-options">
       <summary>More links</summary>
@@ -4485,7 +4480,6 @@ function renderHabitFormFields() {
       <label class="inline-check"><input type="checkbox" id="habitAutoLogTracker"> Update linked tracker when completed</label>
       <input id="habitTrackerLogAmount" type="number" step="any" placeholder="Tracker amount on habit completion">
     </details>
->>>>>>> 406e2f6 (codex)
     <textarea id="habitNotes" placeholder="Notes"></textarea>
     <button id="habitSaveButton" onclick="saveHabit()">${editingHabitIndex === null ? "Save Habit" : "Update Habit"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
@@ -5033,10 +5027,8 @@ function saveHabit() {
     frequency: document.getElementById("habitFrequency").value,
     targetFrequency: document.getElementById("habitTargetFrequency")?.value || document.getElementById("habitFrequency").value,
     target: document.getElementById("habitTarget").value.trim(),
-<<<<<<< HEAD
     unit: document.getElementById("habitUnit")?.value || "",
     linkedGoalId,
-=======
     unit,
     linkedGoalId: document.getElementById("habitLinkedGoalId")?.value || "",
     linkedTrackerId: document.getElementById("habitLinkedTrackerId")?.value || "",
@@ -5044,7 +5036,6 @@ function saveHabit() {
     linkedPlannerBlockId: document.getElementById("habitLinkedPlannerBlockId")?.value || "",
     autoLogTrackerOnComplete: Boolean(document.getElementById("habitAutoLogTracker")?.checked),
     trackerLogAmount: document.getElementById("habitTrackerLogAmount")?.value || "",
->>>>>>> 406e2f6 (codex)
     notes: document.getElementById("habitNotes").value.trim(),
     completions: editingHabitIndex === null ? [] : systemsData.habits[editingHabitIndex].completions,
     skippedDates: editingHabitIndex === null ? [] : (systemsData.habits[editingHabitIndex].skippedDates || []),
@@ -5088,16 +5079,13 @@ function fillEditingHabitForm() {
   if (habitUnitEl) habitUnitEl.value = habit.unit || "";
   const habitGoalEl = document.getElementById("habitLinkedGoalId");
   if (habitGoalEl) habitGoalEl.value = habit.linkedGoalId || "";
-<<<<<<< HEAD
   const habitGoalElNew = document.getElementById("habitLinkedGoalIdNew");
   if (habitGoalElNew) habitGoalElNew.value = habit.linkedGoalId || "";
-=======
   if (document.getElementById("habitLinkedTrackerId")) document.getElementById("habitLinkedTrackerId").value = habit.linkedTrackerId || "";
   if (document.getElementById("habitLinkedRoutineId")) document.getElementById("habitLinkedRoutineId").value = habit.linkedRoutineId || "";
   if (document.getElementById("habitLinkedPlannerBlockId")) document.getElementById("habitLinkedPlannerBlockId").value = habit.linkedPlannerBlockId || "";
   if (document.getElementById("habitAutoLogTracker")) document.getElementById("habitAutoLogTracker").checked = Boolean(habit.autoLogTrackerOnComplete);
   if (document.getElementById("habitTrackerLogAmount")) document.getElementById("habitTrackerLogAmount").value = habit.trackerLogAmount || "";
->>>>>>> 406e2f6 (codex)
   document.getElementById("habitNotes").value = habit.notes;
   document.getElementById("habitSaveButton").textContent = "Update Habit";
   
@@ -6402,7 +6390,6 @@ function renderHabitsList() {
             ${isAmountBased ? `<span class="metric-type-pill">Amount</span>` : ""}
             ${habit.paused ? `<span class="metric-type-pill metric-type-milestone">Paused</span>` : ""}
           </div>
-<<<<<<< HEAD
           ${isAmountBased && dailyTarget > 0 ? `
             <div class="habit-today-progress">
               <p>Today: <strong>${todayProgress} / ${dailyTarget} ${escapeHTML(habit.unit || "")}</strong></p>
@@ -6411,14 +6398,12 @@ function renderHabitsList() {
               </div>
             </div>
           ` : ""}
-=======
           ${renderConnectionBadges({
             plannerBlockId: habit.linkedPlannerBlockId,
             routineId: habit.linkedRoutineId,
             trackerId: habit.linkedTrackerId,
             goalId: habit.linkedGoalId
           })}
->>>>>>> 406e2f6 (codex)
           <div class="habit-stat-row">
             <div><strong>${pct}%</strong><span>30-day completion</span></div>
             <div><strong>${weekly}%</strong><span>weekly consistency</span></div>
