@@ -135,7 +135,12 @@ systemsData.habits = systemsData.habits.map(habit => ({
   skippedDates: Array.isArray(habit.skippedDates) ? habit.skippedDates : [],
   completionHistory: Array.isArray(habit.completionHistory) ? habit.completionHistory : [],
   notes: habit.notes || "",
-  completions: Array.isArray(habit.completions) ? habit.completions : []
+  completions: Array.isArray(habit.completions) ? habit.completions : [],
+  // Amount-based completion fields
+  completionType: habit.completionType || "checkbox", // "checkbox" or "amount"
+  dailyTargetAmount: habit.dailyTargetAmount || "",
+  weeklyTargetAmount: habit.weeklyTargetAmount || "",
+  autoLogToTracker: habit.autoLogToTracker !== false // default true
 }));
 
 systemsData.objectives = systemsData.objectives.map(objective => ({
@@ -276,6 +281,7 @@ let visiblePlannerMonth = getTodayISO().slice(0, 7);
 let plannerWeekStart = getStartOfWeekISO(getTodayISO());
 let plannerWeekEnd = getDateOffset(plannerWeekStart, 6);
 let pendingSocialImport = null;
+let habitCompleteModalIndex = null;
 
 // SAVE
 function savePlannerData() {
@@ -3464,22 +3470,67 @@ function renderHabitFormFields() {
       <option value="Weekly">Target frequency: Weekly</option>
       <option value="Custom">Target frequency: Custom</option>
     </select>
-    <input id="habitTarget" placeholder="Target (e.g. 30, 8 glasses)">
-    <div class="habit-meta-row">
-      <select id="habitUnit">
-        <option value="">Unit</option>
-        <option>times</option>
-        <option>minutes</option>
-        <option>hours</option>
-        <option>pages</option>
-        <option>miles</option>
-        <option>reps</option>
-        <option>glasses</option>
-        <option>calories</option>
-        <option>steps</option>
-        <option>Custom</option>
+    
+    <p style="margin-top:12px;margin-bottom:4px;font-weight:600;font-size:13px">Completion Type</p>
+    <div class="completion-type-toggle">
+      <label>
+        <input type="radio" name="habitCompletionType" value="checkbox" checked onchange="toggleHabitTargetFields()">
+        Checkbox only
+      </label>
+      <label>
+        <input type="radio" name="habitCompletionType" value="amount" onchange="toggleHabitTargetFields()">
+        Amount-based
+      </label>
+    </div>
+    
+    <div id="habitTargetFields" class="habit-target-fields" style="display:none">
+      <div class="habit-target-row">
+        <div>
+          <label style="font-size:12px;color:var(--text-muted)">Daily target</label>
+          <input id="habitDailyTargetAmount" type="number" placeholder="e.g. 2" min="0" step="0.5">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted)">Weekly target</label>
+          <input id="habitWeeklyTargetAmount" type="number" placeholder="e.g. 12" min="0" step="0.5">
+        </div>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted)">Unit</label>
+        <select id="habitUnit">
+          <option value="">Unit</option>
+          <option>times</option>
+          <option>sessions</option>
+          <option>classes</option>
+          <option>minutes</option>
+          <option>hours</option>
+          <option>pages</option>
+          <option>miles</option>
+          <option>reps</option>
+          <option>glasses</option>
+          <option>calories</option>
+          <option>steps</option>
+          <option>dollars</option>
+          <option>Custom</option>
+        </select>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:4px">
+        <input type="checkbox" id="habitAutoLogToTracker" checked style="width:auto;min-height:unset;margin:0">
+        Auto-log to linked tracker when completing
+      </label>
+    </div>
+    
+    <input id="habitTarget" placeholder="Target description (e.g. 30 min workout)" style="margin-top:10px">
+    <div class="habit-meta-row" id="habitUnitRowOld" style="display:none">
+      <select id="habitUnitOld">
+        <option value="">Unit (legacy)</option>
       </select>
       <select id="habitLinkedGoalId">
+        <option value="">Link to goal</option>
+        ${systemsData.goals.map(g => `<option value="${g.id}">${escapeHTML(g.name)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="habit-meta-row">
+      <select id="habitLinkedGoalIdNew">
         <option value="">Link to goal</option>
         ${systemsData.goals.map(g => `<option value="${g.id}">${escapeHTML(g.name)}</option>`).join("")}
       </select>
@@ -3488,6 +3539,12 @@ function renderHabitFormFields() {
     <button id="habitSaveButton" onclick="saveHabit()">${editingHabitIndex === null ? "Save Habit" : "Update Habit"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
   `;
+}
+
+function toggleHabitTargetFields() {
+  const isAmount = document.querySelector('input[name="habitCompletionType"]:checked')?.value === "amount";
+  const fields = document.getElementById("habitTargetFields");
+  if (fields) fields.style.display = isAmount ? "grid" : "none";
 }
 
 function getRecentPlannerBlocksForLogSelect(limit = 100) {
@@ -3808,6 +3865,9 @@ function saveHabit() {
   const name = document.getElementById("habitName").value.trim();
   if (!name) return;
 
+  const completionType = document.querySelector('input[name="habitCompletionType"]:checked')?.value || "checkbox";
+  const linkedGoalId = document.getElementById("habitLinkedGoalIdNew")?.value || document.getElementById("habitLinkedGoalId")?.value || "";
+
   const habit = {
     id: editingHabitIndex === null ? createId("habit") : systemsData.habits[editingHabitIndex].id,
     name,
@@ -3816,12 +3876,17 @@ function saveHabit() {
     targetFrequency: document.getElementById("habitTargetFrequency")?.value || document.getElementById("habitFrequency").value,
     target: document.getElementById("habitTarget").value.trim(),
     unit: document.getElementById("habitUnit")?.value || "",
-    linkedGoalId: document.getElementById("habitLinkedGoalId")?.value || "",
+    linkedGoalId,
     notes: document.getElementById("habitNotes").value.trim(),
     completions: editingHabitIndex === null ? [] : systemsData.habits[editingHabitIndex].completions,
     skippedDates: editingHabitIndex === null ? [] : (systemsData.habits[editingHabitIndex].skippedDates || []),
     completionHistory: editingHabitIndex === null ? [] : (systemsData.habits[editingHabitIndex].completionHistory || []),
-    paused: editingHabitIndex === null ? false : Boolean(systemsData.habits[editingHabitIndex].paused)
+    paused: editingHabitIndex === null ? false : Boolean(systemsData.habits[editingHabitIndex].paused),
+    // Amount-based completion fields
+    completionType,
+    dailyTargetAmount: document.getElementById("habitDailyTargetAmount")?.value || "",
+    weeklyTargetAmount: document.getElementById("habitWeeklyTargetAmount")?.value || "",
+    autoLogToTracker: document.getElementById("habitAutoLogToTracker")?.checked !== false
   };
 
   if (editingHabitIndex === null) {
@@ -3854,8 +3919,27 @@ function fillEditingHabitForm() {
   if (habitUnitEl) habitUnitEl.value = habit.unit || "";
   const habitGoalEl = document.getElementById("habitLinkedGoalId");
   if (habitGoalEl) habitGoalEl.value = habit.linkedGoalId || "";
+  const habitGoalElNew = document.getElementById("habitLinkedGoalIdNew");
+  if (habitGoalElNew) habitGoalElNew.value = habit.linkedGoalId || "";
   document.getElementById("habitNotes").value = habit.notes;
   document.getElementById("habitSaveButton").textContent = "Update Habit";
+  
+  // Fill completion type fields
+  const completionType = habit.completionType || "checkbox";
+  const radioCheckbox = document.querySelector('input[name="habitCompletionType"][value="checkbox"]');
+  const radioAmount = document.querySelector('input[name="habitCompletionType"][value="amount"]');
+  if (radioCheckbox && radioAmount) {
+    radioCheckbox.checked = completionType === "checkbox";
+    radioAmount.checked = completionType === "amount";
+    toggleHabitTargetFields();
+  }
+  
+  const dailyTargetEl = document.getElementById("habitDailyTargetAmount");
+  if (dailyTargetEl) dailyTargetEl.value = habit.dailyTargetAmount || "";
+  const weeklyTargetEl = document.getElementById("habitWeeklyTargetAmount");
+  if (weeklyTargetEl) weeklyTargetEl.value = habit.weeklyTargetAmount || "";
+  const autoLogEl = document.getElementById("habitAutoLogToTracker");
+  if (autoLogEl) autoLogEl.checked = habit.autoLogToTracker !== false;
 }
 
 function resetHabitForm() {
@@ -3949,6 +4033,200 @@ function completeHabitToday(index) {
 
   autoCompleteObjectivesForHabit(habit);
   saveSystemsData();
+  renderSystems();
+}
+
+// Habit Completion Modal Functions
+function openHabitCompleteModal(index) {
+  const habit = systemsData.habits[index];
+  if (!habit || habit.paused) return;
+  
+  habitCompleteModalIndex = index;
+  const today = getTodayISO();
+  const todayProgress = getHabitTodayProgress(habit);
+  const dailyTarget = Number(habit.dailyTargetAmount) || 0;
+  const weeklyProgress = getHabitWeeklyProgress(habit);
+  const weeklyTarget = Number(habit.weeklyTargetAmount) || 0;
+  
+  const modalHTML = `
+    <div id="habitCompleteModal" class="modal-backdrop" onclick="closeHabitCompleteModalFromBackdrop(event)">
+      <div class="habit-complete-modal" role="dialog" aria-modal="true">
+        <div class="sheet-handle"></div>
+        <div class="habit-complete-header">
+          <h3>Log Progress</h3>
+          <button class="icon-btn" onclick="closeHabitCompleteModal()">x</button>
+        </div>
+        <p style="margin-bottom:12px;color:var(--text-muted);font-size:14px">${escapeHTML(habit.name)}</p>
+        
+        ${dailyTarget > 0 ? `
+          <div class="habit-today-progress">
+            <p>Today: <strong>${todayProgress} / ${dailyTarget} ${escapeHTML(habit.unit || "")}</strong></p>
+            <div class="tracker-progress-bar">
+              <div class="tracker-progress-fill" style="width:${Math.min(100, (todayProgress / dailyTarget) * 100)}%"></div>
+            </div>
+          </div>
+        ` : ""}
+        
+        ${weeklyTarget > 0 ? `
+          <div class="habit-today-progress" style="margin-top:8px">
+            <p>This week: <strong>${weeklyProgress} / ${weeklyTarget} ${escapeHTML(habit.unit || "")}</strong></p>
+            <div class="tracker-progress-bar">
+              <div class="tracker-progress-fill" style="width:${Math.min(100, (weeklyProgress / weeklyTarget) * 100)}%"></div>
+            </div>
+          </div>
+        ` : ""}
+        
+        <div class="habit-complete-form">
+          <div class="habit-complete-row">
+            <div>
+              <label>Amount</label>
+              <input type="number" id="habitCompleteAmount" value="1" min="0" step="0.5" placeholder="Amount">
+            </div>
+            <div>
+              <label>Unit</label>
+              <input type="text" id="habitCompleteUnit" value="${escapeHTML(habit.unit || "")}" placeholder="Unit">
+            </div>
+          </div>
+          <div>
+            <label>Date</label>
+            <input type="date" id="habitCompleteDate" value="${today}">
+          </div>
+          <div>
+            <label>Notes (optional)</label>
+            <textarea id="habitCompleteNotes" placeholder="Add any notes..." rows="2"></textarea>
+          </div>
+          <div class="habit-complete-actions">
+            <button class="secondary-btn" onclick="closeHabitCompleteModal()">Cancel</button>
+            <button onclick="saveHabitCompletion()">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  // Add modal to page
+  const modalContainer = document.createElement("div");
+  modalContainer.id = "habitCompleteModalContainer";
+  modalContainer.innerHTML = modalHTML;
+  document.body.appendChild(modalContainer);
+  
+  // Focus the amount input
+  setTimeout(() => {
+    const amountInput = document.getElementById("habitCompleteAmount");
+    if (amountInput) amountInput.focus();
+  }, 100);
+}
+
+function closeHabitCompleteModal() {
+  habitCompleteModalIndex = null;
+  const container = document.getElementById("habitCompleteModalContainer");
+  if (container) container.remove();
+}
+
+function closeHabitCompleteModalFromBackdrop(event) {
+  if (event.target && event.target.id === "habitCompleteModal") {
+    closeHabitCompleteModal();
+  }
+}
+
+function saveHabitCompletion() {
+  if (habitCompleteModalIndex === null) return;
+  
+  const habit = systemsData.habits[habitCompleteModalIndex];
+  if (!habit) {
+    closeHabitCompleteModal();
+    return;
+  }
+  
+  const amount = document.getElementById("habitCompleteAmount")?.value || "1";
+  const unit = document.getElementById("habitCompleteUnit")?.value || habit.unit || "";
+  const date = document.getElementById("habitCompleteDate")?.value || getTodayISO();
+  const notes = document.getElementById("habitCompleteNotes")?.value.trim() || "";
+  
+  const amountNum = Number(amount);
+  if (isNaN(amountNum) || amountNum <= 0) {
+    alert("Please enter a valid amount greater than 0.");
+    return;
+  }
+  
+  // Add habit log entry with amount
+  systemsData.logs.push({
+    id: createId("log"),
+    title: habit.name,
+    type: "Habit",
+    valueType: "Number",
+    value: String(amountNum),
+    unit: unit,
+    date: date,
+    notes: notes || `Logged ${amountNum} ${unit}`,
+    linkedHabitId: habit.id,
+    linkedItemType: "habit",
+    linkedMetricId: "",
+    linkedTrackerId: "",
+    linkedGoalId: habit.linkedGoalId || "",
+    linkedPlannerBlockId: "",
+    logSource: "habit",
+    plannerAutoLogKey: "",
+    inactive: false
+  });
+  
+  // Update habit completion history
+  if (!Array.isArray(habit.completionHistory)) habit.completionHistory = [];
+  habit.completionHistory.push({
+    date: date,
+    time: new Date().toTimeString().slice(0, 5),
+    amount: amountNum,
+    unit: unit,
+    notes: notes
+  });
+  
+  // Check if daily target is met to mark as complete for the day
+  const dailyTarget = Number(habit.dailyTargetAmount) || 0;
+  const todayProgress = getHabitTodayProgress(habit);
+  
+  if (dailyTarget > 0 && todayProgress >= dailyTarget && date === getTodayISO()) {
+    if (!habit.completions.includes(date)) {
+      habit.completions.push(date);
+    }
+  } else if (dailyTarget === 0 && !habit.completions.includes(date)) {
+    // For habits without daily target, any log counts as completion
+    habit.completions.push(date);
+  }
+  
+  // Remove from skipped if was skipped
+  habit.skippedDates = (habit.skippedDates || []).filter(d => d !== date);
+  
+  // Auto-log to linked trackers if enabled
+  if (habit.autoLogToTracker !== false) {
+    systemsData.trackers
+      .filter(t => t.linkedHabitId === habit.id)
+      .forEach(tracker => {
+        systemsData.logs.push({
+          id: createId("log"),
+          title: tracker.name,
+          type: tracker.category || "Custom",
+          valueType: "Number",
+          value: String(amountNum),
+          unit: unit || tracker.unit || "count",
+          date: date,
+          notes: "Habit auto",
+          linkedHabitId: habit.id,
+          linkedItemType: "tracker",
+          linkedMetricId: "",
+          linkedTrackerId: tracker.id,
+          linkedGoalId: "",
+          linkedPlannerBlockId: "",
+          logSource: "habit",
+          plannerAutoLogKey: "",
+          inactive: false
+        });
+        recalcTrackerCurrentFromLogs(tracker);
+      });
+  }
+  
+  autoCompleteObjectivesForHabit(habit);
+  saveSystemsData();
+  closeHabitCompleteModal();
   renderSystems();
 }
 
@@ -4766,6 +5044,20 @@ function renderHabitsList() {
       const skippedToday = (habit.skippedDates || []).includes(getTodayISO());
       const pct = getHabitCompletionPct(habit, 30);
       const weekly = getHabitWeeklyConsistency(habit);
+      const isAmountBased = habit.completionType === "amount";
+      const todayProgress = getHabitTodayProgress(habit);
+      const dailyTarget = Number(habit.dailyTargetAmount) || 0;
+      const hasMetDailyTarget = dailyTarget > 0 && todayProgress >= dailyTarget;
+      
+      // Determine button label and action
+      const buttonLabel = isAmountBased 
+        ? (hasMetDailyTarget ? "Done" : "Log Progress") 
+        : (doneToday ? "Done" : "Complete");
+      const buttonAction = isAmountBased 
+        ? `openHabitCompleteModal(${index})` 
+        : `completeHabitToday(${index})`;
+      const buttonDisabled = habit.paused || (!isAmountBased && doneToday);
+      
       return `
         <div class="system-item habit-card ${habit.paused ? "paused" : ""}">
           <div class="item-title">
@@ -4775,8 +5067,17 @@ function renderHabitsList() {
           <div class="habit-pill-row">
             <span class="metric-type-pill metric-type-progress">${escapeHTML(habit.category || "No category")}</span>
             <span class="metric-type-pill">${escapeHTML(habit.targetFrequency || habit.frequency)}</span>
+            ${isAmountBased ? `<span class="metric-type-pill">Amount</span>` : ""}
             ${habit.paused ? `<span class="metric-type-pill metric-type-milestone">Paused</span>` : ""}
           </div>
+          ${isAmountBased && dailyTarget > 0 ? `
+            <div class="habit-today-progress">
+              <p>Today: <strong>${todayProgress} / ${dailyTarget} ${escapeHTML(habit.unit || "")}</strong></p>
+              <div class="tracker-progress-bar">
+                <div class="tracker-progress-fill" style="width:${Math.min(100, (todayProgress / dailyTarget) * 100)}%"></div>
+              </div>
+            </div>
+          ` : ""}
           <div class="habit-stat-row">
             <div><strong>${pct}%</strong><span>30-day completion</span></div>
             <div><strong>${weekly}%</strong><span>weekly consistency</span></div>
@@ -4786,7 +5087,7 @@ function renderHabitsList() {
           ${habit.target ? `<p>${escapeHTML(habit.target)} ${escapeHTML(habit.unit || "")}</p>` : ""}
           ${habit.notes ? `<p>${escapeHTML(habit.notes)}</p>` : ""}
           <div class="button-row three-actions">
-            <button onclick="completeHabitToday(${index})" ${habit.paused || doneToday ? "disabled" : ""}>${doneToday ? "Done" : "Complete"}</button>
+            <button onclick="${buttonAction}" ${buttonDisabled ? "disabled" : ""}>${buttonLabel}</button>
             <button class="secondary-btn" onclick="skipHabitToday(${index})" ${habit.paused || skippedToday ? "disabled" : ""}>${skippedToday ? "Skipped" : "Skip"}</button>
             <button class="secondary-btn" onclick="scheduleHabitInPlanner(${index})">Plan</button>
           </div>
@@ -4799,6 +5100,31 @@ function renderHabitsList() {
       `;
     }).join("")}</div>`
     : `<div class="empty-state"><p>No habits saved yet.</p><button onclick="openSystemsForm('habit')">Add first habit</button></div>`;
+}
+
+function getHabitTodayProgress(habit) {
+  const today = getTodayISO();
+  const todayLogs = systemsData.logs.filter(log => 
+    log.linkedHabitId === habit.id && 
+    log.date === today && 
+    log.type === "Habit"
+  );
+  return todayLogs.reduce((sum, log) => sum + (Number(log.value) || 0), 0);
+}
+
+function getHabitWeeklyProgress(habit) {
+  const today = new Date(getTodayISO());
+  const startOfWeek = new Date(today);
+  startOfWeek.setDate(today.getDate() - today.getDay());
+  const startISO = startOfWeek.toISOString().slice(0, 10);
+  
+  const weekLogs = systemsData.logs.filter(log => 
+    log.linkedHabitId === habit.id && 
+    log.date >= startISO && 
+    log.date <= getTodayISO() && 
+    log.type === "Habit"
+  );
+  return weekLogs.reduce((sum, log) => sum + (Number(log.value) || 0), 0);
 }
 
 function renderSystemsLogsList() {
