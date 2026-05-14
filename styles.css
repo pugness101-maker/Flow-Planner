@@ -517,12 +517,39 @@ textarea:focus {
   font-size: 14px;
 }
 
-.day-time-row {
+.day-time-group {
+  padding: 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.day-time-group-header {
   display: grid;
-  grid-template-columns: 48px 1fr 1fr;
+  grid-template-columns: 1fr auto;
   gap: 8px;
   align-items: center;
   margin-bottom: 8px;
+}
+
+.day-time-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.day-time-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.day-time-row:last-child {
+  margin-bottom: 0;
 }
 
 .day-time-label {
@@ -536,6 +563,50 @@ textarea:focus {
   padding: 8px;
   font-size: 13px;
   min-height: 40px;
+}
+
+.small-btn {
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.routine-copy-panel {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.routine-copy-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.routine-copy-targets label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.routine-copy-targets input {
+  width: auto;
+  min-height: unset;
+  margin-top: 0;
+}
+
+.compact-row {
+  gap: 6px;
 }
 
 .routine-item {
@@ -1174,11 +1245,11 @@ button:disabled {
   left: 10px;
   right: 8px;
   min-height: 42px;
-  overflow: visible;
-  padding: 10px;
+  overflow: hidden;
+  padding: 10px 42px 12px 10px;
   border: 1px solid var(--border);
   border-left-width: 5px;
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--card);
   box-shadow: 0 4px 18px var(--shadow);
   z-index: 2;
@@ -1186,28 +1257,39 @@ button:disabled {
 
 .visual-block:hover {
   z-index: 20;
+}
+
+.visual-block.action-menu-open {
+  z-index: 40;
   overflow: visible;
 }
 
 .visual-block-main {
   cursor: pointer;
+  min-width: 0;
 }
 
 .visual-block-title {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   justify-content: space-between;
   gap: 8px;
   align-items: flex-start;
+  min-width: 0;
 }
 
 .visual-block-title strong {
   font-size: 14px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
 }
 
 .visual-block-title span,
 .visual-block-main p {
   color: var(--text-muted);
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .visual-block-meta {
@@ -1218,57 +1300,102 @@ button:disabled {
   margin-top: 6px;
 }
 
-.visual-block-actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px;
+.block-status {
+  display: inline-flex;
   align-items: center;
-  margin-top: 8px;
+  min-height: 20px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
 }
 
-.visual-block-toolbar {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  margin-top: 8px;
-  position: relative;
-  z-index: 3;
+.status-open {
+  background: #eef2ff;
+  color: #3730a3;
 }
 
-.visual-block-toolbar button {
+.status-complete {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.visual-task-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+  min-width: 0;
+}
+
+.visual-task-preview span {
+  max-width: 100%;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.block-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+}
+
+.block-actions-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  margin-top: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.block-actions-menu {
+  position: absolute;
+  top: 34px;
+  right: 0;
+  width: min(164px, calc(100vw - 80px));
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 14px 34px var(--shadow);
+}
+
+.block-actions-menu button {
   width: 100%;
-  margin-top: 0;
   min-height: 34px;
-  padding: 7px 8px;
-  font-size: 12px;
-}
-
-.visual-block-actions input {
   margin-top: 0;
-  min-height: 36px;
-  padding: 8px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 13px;
 }
 
-.visual-block-actions button,
-.visual-block-actions .block-complete {
-  margin-top: 0;
-  min-height: 36px;
-  width: auto;
-  padding: 8px 10px;
+.block-actions-menu button:hover {
+  background: var(--surface-2);
 }
 
-.visual-task-list {
-  margin-top: 8px;
-}
-
-.compact-task {
-  padding: 7px 8px;
-  margin-top: 5px;
-  cursor: grab;
-}
-
-.dragging-task {
-  opacity: 0.5;
+.block-actions-menu .danger-menu-item {
+  color: var(--danger);
 }
 
 .resize-handle {
@@ -1283,15 +1410,18 @@ button:disabled {
 }
 
 .completed-block {
-  opacity: 0.62;
+  opacity: 0.86;
   text-decoration: none;
+  background: color-mix(in srgb, var(--card) 78%, #dcfce7);
 }
 
 .completed-block .visual-block-title strong {
   text-decoration: line-through;
+  color: var(--text-muted);
 }
 
 .overlap-block {
+  z-index: 4;
   box-shadow: inset 0 0 0 2px #ef4444, 0 4px 18px var(--shadow);
 }
 
@@ -1705,16 +1835,21 @@ button:disabled {
     font-size: 10px;
   }
 
-  .visual-block-actions {
-    grid-template-columns: 1fr auto;
+  .visual-block {
+    padding-right: 38px;
   }
 
-  .visual-block-actions input {
-    grid-column: auto;
+  .visual-block-title {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
   }
 
-  .visual-block-toolbar {
-    grid-template-columns: 1fr;
+  .visual-block-title span {
+    white-space: normal;
+  }
+
+  .block-actions-menu {
+    width: min(150px, calc(100vw - 64px));
   }
 
   .planner-sheet {

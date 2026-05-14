@@ -188,6 +188,7 @@ scheduleData.routines.forEach(routine => {
   if (!Array.isArray(routine.repeatDays)) routine.repeatDays = [];
   if (!Array.isArray(routine.tasks)) routine.tasks = [];
   if (!routine.dayTimes || typeof routine.dayTimes !== "object") routine.dayTimes = {};
+  routine.dayTimes = normalizeRoutineDayTimes(routine);
   if (!routine.completions || typeof routine.completions !== "object") routine.completions = {};
   if (!Array.isArray(routine.completedDates)) routine.completedDates = [];
   if (typeof routine.streak !== "number") routine.streak = 0;
@@ -208,6 +209,8 @@ let editingIdeaIndex = null;
 let editingHabitIndex = null;
 let editingTrackerIndex = null;
 let editingGoalIndex = null;
+let openBlockActionMenuIndex = null;
+let routineCopySourceDay = null;
 let editingMetricIndex = null;
 let activePlannerSection = "Day";
 let activeSystemsSection = "Overview";
@@ -380,8 +383,14 @@ const pages = {
           <option>Night</option>
           <option>Custom</option>
         </select>
-        <input id="routineStart" type="time">
-        <input id="routineEnd" type="time">
+        <label class="inline-check">
+          <input type="checkbox" id="routineSameTimeMode" checked onchange="updateRoutineTimeMode()">
+          Use same time for all selected days
+        </label>
+        <div id="routineGlobalTimes" class="time-input-row">
+          <input id="routineStart" type="time">
+          <input id="routineEnd" type="time">
+        </div>
         <div class="repeat-days">
           <label><input type="checkbox" name="routineDay" value="0" onchange="updateDayTimesSection()"> Sun</label>
           <label><input type="checkbox" name="routineDay" value="1" onchange="updateDayTimesSection()"> Mon</label>
@@ -745,6 +754,7 @@ function renderPlannerNav() {
 
 function setPlannerSection(section) {
   activePlannerSection = section;
+  openBlockActionMenuIndex = null;
   main.innerHTML = getPageHTML("Planner");
   renderPlanner();
 }
@@ -780,6 +790,7 @@ function openSocialSection(section) {
 document.querySelectorAll(".bottom-nav button").forEach(btn => {
   btn.addEventListener("click", () => {
     const tab = btn.dataset.tab;
+    openBlockActionMenuIndex = null;
     setActiveBottomNav(tab);
     main.innerHTML = getPageHTML(tab);
 
@@ -788,6 +799,13 @@ document.querySelectorAll(".bottom-nav button").forEach(btn => {
     if (tab === "Systems") renderSystems();
     if (tab === "Social") renderSocial();
   });
+});
+
+document.addEventListener("click", event => {
+  if (openBlockActionMenuIndex === null) return;
+  if (event.target.closest(".block-actions")) return;
+  openBlockActionMenuIndex = null;
+  renderTimeBlocks();
 });
 
 dailyAutoInsert();
@@ -1012,6 +1030,7 @@ function renderTimeBlocks() {
   const timelineEnd = 23 * 60;
   const pxPerMinute = 1;
   const timelineHeight = (timelineEnd - timelineStart) * pxPerMinute;
+  const blockLayouts = getVisualBlockLayouts(blocks);
 
   box.innerHTML = blocks.length
     ? `
@@ -1023,7 +1042,7 @@ function renderTimeBlocks() {
           }).join("")}
         </div>
         ${currentTimeTop !== null ? `<div class="current-time-line" style="top:${currentTimeTop}px"><span>Now</span></div>` : ""}
-        ${blocks.map(({ block, index }) => renderVisualTimeBlock(block, index, overlapIndexes.has(index), timelineStart, pxPerMinute)).join("")}
+        ${blocks.map(({ block, index }) => renderVisualTimeBlock(block, index, overlapIndexes.has(index), timelineStart, pxPerMinute, blockLayouts.get(index))).join("")}
       </div>
     `
     : `<div class="empty-state"><p>No blocks for this day.</p><button onclick="focusTimeBlockForm()">Create time block</button></div>`;
@@ -1032,58 +1051,110 @@ function renderTimeBlocks() {
   enableTaskDragDrop();
 }
 
-function renderVisualTimeBlock(block, index, isOverlapping, timelineStart, pxPerMinute) {
+function getVisualBlockLayouts(blocks) {
+  const layouts = new Map();
+  let cluster = [];
+  let clusterEnd = null;
+
+  const flushCluster = () => {
+    if (!cluster.length) return;
+    const laneEnds = [];
+    const assigned = cluster.map(item => {
+      const start = timeToMinutes(item.block.start);
+      const end = timeToMinutes(item.block.end);
+      let lane = laneEnds.findIndex(laneEnd => laneEnd <= start);
+      if (lane === -1) lane = laneEnds.length;
+      laneEnds[lane] = end;
+      return { ...item, lane };
+    });
+    const total = Math.max(laneEnds.length, 1);
+    assigned.forEach(item => layouts.set(item.index, { lane: item.lane, total }));
+    cluster = [];
+    clusterEnd = null;
+  };
+
+  blocks.forEach(item => {
+    const start = timeToMinutes(item.block.start || "00:00");
+    const end = timeToMinutes(item.block.end || item.block.start || "00:00");
+    if (cluster.length && start >= clusterEnd) flushCluster();
+    cluster.push(item);
+    clusterEnd = clusterEnd === null ? end : Math.max(clusterEnd, end);
+  });
+  flushCluster();
+
+  return layouts;
+}
+
+function getVisualBlockPositionStyle(top, height, layout) {
+  const base = `top:${top}px;height:${height}px`;
+  if (!layout || layout.total <= 1) return base;
+  const width = 100 / layout.total;
+  const left = layout.lane * width;
+  return `${base};left:calc(10px + ${left}%);right:auto;width:calc(${width}% - 14px)`;
+}
+
+function renderTaskPreview(block) {
+  const tasks = Array.isArray(block.tasks) ? block.tasks : [];
+  if (!tasks.length) return "";
+  const visibleTasks = tasks.slice(0, 3);
+  const remaining = tasks.length - visibleTasks.length;
+  return `
+    <div class="visual-task-preview" aria-label="Tasks preview">
+      ${visibleTasks.map(task => `
+        <span class="${task.completed ? "task-done" : ""}">${escapeHTML(task.text)}</span>
+      `).join("")}
+      ${remaining > 0 ? `<span class="muted-text">+${remaining} more</span>` : ""}
+    </div>
+  `;
+}
+
+function renderVisualTimeBlock(block, index, isOverlapping, timelineStart, pxPerMinute, layout) {
   const startMinutes = timeToMinutes(block.start || "06:00");
   const endMinutes = timeToMinutes(block.end || block.start || "06:30");
   const top = Math.max((startMinutes - timelineStart) * pxPerMinute, 0);
   const height = Math.max((endMinutes - startMinutes) * pxPerMinute, 34);
   const categoryClass = getCategoryClass(block.category);
+  const isMenuOpen = openBlockActionMenuIndex === index;
+  const positionStyle = getVisualBlockPositionStyle(top, height, layout);
 
   return `
-    <div class="timeline-block visual-block ${categoryClass} ${block.completed ? "completed-block" : ""} ${isOverlapping ? "overlap-block" : ""} block-type-${block.type || "task"}"
+    <div class="timeline-block visual-block ${categoryClass} ${block.completed ? "completed-block" : ""} ${isOverlapping ? "overlap-block" : ""} ${isMenuOpen ? "action-menu-open" : ""} block-type-${block.type || "task"}"
       draggable="true"
       data-index="${index}"
-      style="top:${top}px;height:${height}px">
+      style="${positionStyle}">
       <div class="visual-block-main" onclick="editTimeBlock(${index})">
         <div class="visual-block-title">
-          <strong>${escapeHTML(block.title)}</strong>
+          <strong>${escapeHTML(block.title || "Untitled block")}</strong>
           <span>${escapeHTML(block.start)}-${escapeHTML(block.end)}</span>
         </div>
         <div class="visual-block-meta">
           ${renderCategoryPill(block.category)}
           ${block.type && block.type !== "task" ? `<span class="block-tag block-tag-${block.type}">${block.type}</span>` : ""}
+          <span class="block-status ${block.completed ? "status-complete" : "status-open"}">${block.completed ? "Complete" : "Open"}</span>
           ${isOverlapping ? `<span class="overlap-pill">Overlap</span>` : ""}
         </div>
-        ${block.notes ? `<p>${escapeHTML(block.notes)}</p>` : ""}
+        ${renderTaskPreview(block)}
       </div>
-      <div class="visual-block-toolbar">
-        <button class="secondary-btn" onclick="event.stopPropagation(); editTimeBlock(${index})">Edit Block</button>
-        <button class="secondary-btn" onclick="event.stopPropagation(); duplicateTimeBlock(${index})">Duplicate Block</button>
-        <button class="secondary-btn" onclick="event.stopPropagation(); toggleBlockComplete(${index})">${block.completed ? "Reopen Block" : "Complete Block"}</button>
-        <button class="danger-btn" onclick="event.stopPropagation(); deleteTimeBlock(${index})">Delete Block</button>
-      </div>
-      <div class="visual-task-list" data-block-index="${index}">
-        ${
-          block.tasks.length
-            ? block.tasks.map((task, taskIndex) => `
-              <div class="task-row compact-task ${task.completed ? "task-done" : ""}" draggable="true" data-block-index="${index}" data-task-index="${taskIndex}">
-                <label>
-                  <input type="checkbox" ${task.completed ? "checked" : ""} onchange="toggleTaskComplete(${index}, ${taskIndex})">
-                  ${escapeHTML(task.text)}
-                </label>
-                <button onclick="deleteTaskFromBlock(${index}, ${taskIndex})">x</button>
-              </div>
-            `).join("")
-            : `<p class="muted-text">No tasks yet.</p>`
-        }
-      </div>
-      <div class="visual-block-actions">
-        <input id="taskInput${index}" placeholder="Add task">
-        <button class="secondary-btn" onclick="addTaskToBlock(${index})">Add</button>
+      <div class="block-actions" onclick="event.stopPropagation()">
+        <button class="block-actions-trigger" type="button" aria-label="Actions for ${escapeHTML(block.title || "block")}" onclick="toggleBlockActionMenu(event, ${index})">⋯</button>
+        ${isMenuOpen ? `
+          <div class="block-actions-menu" role="menu">
+            <button type="button" onclick="toggleBlockComplete(${index})">${block.completed ? "Reopen" : "Complete"}</button>
+            <button type="button" onclick="editTimeBlock(${index})">Edit</button>
+            <button type="button" onclick="duplicateTimeBlock(${index})">Duplicate</button>
+            <button type="button" class="danger-menu-item" onclick="deleteTimeBlock(${index})">Delete</button>
+          </div>
+        ` : ""}
       </div>
       ${block.isBuffer ? "" : `<div class="resize-handle" data-index="${index}" title="Drag to resize"></div>`}
     </div>
   `;
+}
+
+function toggleBlockActionMenu(event, index) {
+  event.stopPropagation();
+  openBlockActionMenuIndex = openBlockActionMenuIndex === index ? null : index;
+  renderTimeBlocks();
 }
 
 function focusTimeBlockForm() {
@@ -1543,11 +1614,119 @@ function getSelectedRoutineDays() {
     .map(input => Number(input.value));
 }
 
+function normalizeRoutineTimeRanges(value, fallbackStart = "", fallbackEnd = "") {
+  const source = Array.isArray(value) ? value : value ? [value] : [];
+  const ranges = source
+    .map(range => ({
+      start: range && typeof range === "object" ? (range.start || fallbackStart) : fallbackStart,
+      end: range && typeof range === "object" ? (range.end || fallbackEnd) : fallbackEnd
+    }))
+    .filter(range => range.start && range.end);
+
+  if (!ranges.length && fallbackStart && fallbackEnd) {
+    ranges.push({ start: fallbackStart, end: fallbackEnd });
+  }
+
+  return ranges;
+}
+
+function normalizeRoutineDayTimes(routine) {
+  const dayTimes = routine && routine.dayTimes && typeof routine.dayTimes === "object"
+    ? routine.dayTimes
+    : {};
+  const normalized = {};
+  Object.keys(dayTimes).forEach(dayKey => {
+    const dayIndex = Number(dayKey);
+    if (!Number.isInteger(dayIndex) || dayIndex < 0 || dayIndex > 6) return;
+    normalized[dayIndex] = normalizeRoutineTimeRanges(dayTimes[dayKey], routine.start, routine.end);
+  });
+  return normalized;
+}
+
+function getRoutineTimeRangesForDay(routine, dayIndex) {
+  return normalizeRoutineTimeRanges(
+    routine.dayTimes && routine.dayTimes[dayIndex],
+    routine.start,
+    routine.end
+  );
+}
+
+function routineBlockExists(date, routineId, range) {
+  return scheduleData.blocks.some(block =>
+    block.date === date &&
+    block.routineId === routineId &&
+    block.start === range.start &&
+    block.end === range.end
+  );
+}
+
+function createRoutinePlannerBlock(routine, date, range) {
+  return {
+    id: createId("block"),
+    routineId: routine.id,
+    title: routine.name,
+    date,
+    start: range.start,
+    end: range.end,
+    category: routine.type,
+    notes: routine.notes || "",
+    type: "routine",
+    completed: false,
+    tasks: routine.tasks.map(task => ({ text: task, completed: false }))
+  };
+}
+
+function addRoutineBlocksForDate(routine, date, dayIndex) {
+  let addedCount = 0;
+  getRoutineTimeRangesForDay(routine, dayIndex).forEach(range => {
+    if (routineBlockExists(date, routine.id, range)) return;
+    scheduleData.blocks.push(createRoutinePlannerBlock(routine, date, range));
+    addedCount++;
+  });
+  return addedCount;
+}
+
+function getDayTimeRowsFromForm(dayIndex) {
+  return [...document.querySelectorAll(`.day-time-row[data-day="${dayIndex}"]`)]
+    .map(row => {
+      const startEl = row.querySelector(".day-start-input");
+      const endEl = row.querySelector(".day-end-input");
+      return {
+        start: startEl ? startEl.value : "",
+        end: endEl ? endEl.value : ""
+      };
+    });
+}
+
+function isRoutineSameTimeMode() {
+  const toggle = document.getElementById("routineSameTimeMode");
+  return toggle ? toggle.checked : true;
+}
+
+function usesCustomRoutineTimes(routine) {
+  if (!routine) return false;
+  const repeatDays = Array.isArray(routine.repeatDays) ? routine.repeatDays : [];
+  return repeatDays.some(dayIndex => {
+    const ranges = getRoutineTimeRangesForDay(routine, dayIndex);
+    if (ranges.length !== 1) return true;
+    return ranges[0].start !== routine.start || ranges[0].end !== routine.end;
+  });
+}
+
+function getFirstRoutineRange(dayTimes, repeatDays) {
+  for (const dayIndex of repeatDays) {
+    const range = dayTimes[dayIndex] && dayTimes[dayIndex][0];
+    if (range && range.start && range.end) return range;
+  }
+  return { start: "", end: "" };
+}
+
 function saveRoutine() {
   const name = document.getElementById("routineName").value.trim();
   const type = document.getElementById("routineType").value;
   const start = document.getElementById("routineStart").value;
   const end = document.getElementById("routineEnd").value;
+  const sameTimeMode = isRoutineSameTimeMode();
   const repeatDays = getSelectedRoutineDays();
   const tasks = document.getElementById("routineTasks").value
     .split("\n")
@@ -1555,20 +1734,43 @@ function saveRoutine() {
     .filter(Boolean);
   const notes = document.getElementById("routineNotes").value.trim();
 
-  if (!name || !start || !end || !repeatDays.length) {
-    alert("Add a routine name, start time, end time, and at least one repeat day.");
+  if (!name || !repeatDays.length) {
+    alert("Add a routine name and at least one repeat day.");
     return;
   }
 
   const dayTimes = {};
-  repeatDays.forEach(dayIndex => {
-    const startEl = document.getElementById(`dayStart_${dayIndex}`);
-    const endEl = document.getElementById(`dayEnd_${dayIndex}`);
-    dayTimes[dayIndex] = {
-      start: startEl ? startEl.value || start : start,
-      end: endEl ? endEl.value || end : end
-    };
-  });
+  let routineStart = start;
+  let routineEnd = end;
+
+  if (sameTimeMode) {
+    if (!start || !end) {
+      alert("Add a start time and end time for this routine.");
+      return;
+    }
+    repeatDays.forEach(dayIndex => {
+      dayTimes[dayIndex] = [{ start, end }];
+    });
+  } else {
+    let hasInvalidCustomTimes = false;
+    repeatDays.forEach(dayIndex => {
+      const rows = getDayTimeRowsFromForm(dayIndex);
+      const validRanges = rows
+        .filter(range => range.start && range.end)
+        .map(range => ({ start: range.start, end: range.end }));
+      if (!validRanges.length || validRanges.length !== rows.length) {
+        hasInvalidCustomTimes = true;
+      }
+      dayTimes[dayIndex] = validRanges;
+    });
+    if (hasInvalidCustomTimes) {
+      alert("Every selected day needs at least one complete start/end time row.");
+      return;
+    }
+    const firstRange = getFirstRoutineRange(dayTimes, repeatDays);
+    routineStart = firstRange.start;
+    routineEnd = firstRange.end;
+  }
 
   const autoAdd = document.getElementById("routineAutoAdd")?.checked || false;
   const existing = editingRoutineIndex !== null ? scheduleData.routines[editingRoutineIndex] : null;
@@ -1577,8 +1779,8 @@ function saveRoutine() {
     id: existing ? existing.id : createId("routine"),
     name,
     type,
-    start,
-    end,
+    start: routineStart,
+    end: routineEnd,
     repeatDays,
     dayTimes,
     tasks,
@@ -1609,24 +1811,7 @@ function autoInsertRoutineBlocks(routine) {
     const date = getDateOffset(today, offset);
     const dayIndex = new Date(date + "T00:00:00").getDay();
     if (!routine.repeatDays.includes(dayIndex)) continue;
-    const alreadyAdded = scheduleData.blocks.some(b =>
-      b.date === date && b.routineId === routine.id
-    );
-    if (alreadyAdded) continue;
-    const times = getRoutineTimeForDay(routine, dayIndex);
-    scheduleData.blocks.push({
-      id: createId("block"),
-      routineId: routine.id,
-      title: routine.name,
-      date,
-      start: times.start,
-      end: times.end,
-      category: routine.type,
-      notes: routine.notes || "",
-      type: "routine",
-      completed: false,
-      tasks: routine.tasks.map(task => ({ text: task, completed: false }))
-    });
+    addRoutineBlocksForDate(routine, date, dayIndex);
   }
 }
 
@@ -1650,8 +1835,8 @@ function renderRoutines() {
               <strong>${escapeHTML(routine.name)}</strong>
               <span class="streak-badge">🔥 ${streak} day${streak === 1 ? "" : "s"}</span>
             </div>
-            <p>${escapeHTML(routine.type)} • ${escapeHTML(routine.start)}–${escapeHTML(routine.end)}</p>
-            <p>${routine.repeatDays.map(getDayName).join(", ")}</p>
+            <p>${escapeHTML(routine.type)}</p>
+            <p>${renderRoutineScheduleSummary(routine)}</p>
             ${routine.autoAdd ? `<span class="auto-add-badge">Auto-add on</span>` : ""}
             ${stepsTotal ? `
               <div class="routine-steps">
@@ -1676,6 +1861,15 @@ function renderRoutines() {
         `;
       }).join("")
     : `<div class="empty-state"><p>No routines saved yet.</p><button onclick="openPlannerSection('Routines')">Add first routine</button></div>`;
+}
+
+function renderRoutineScheduleSummary(routine) {
+  return routine.repeatDays.map(dayIndex => {
+    const ranges = getRoutineTimeRangesForDay(routine, dayIndex)
+      .map(range => `${escapeHTML(range.start)}-${escapeHTML(range.end)}`)
+      .join(", ");
+    return `${getDayName(dayIndex)} ${ranges}`;
+  }).join(" • ");
 }
 
 function toggleRoutineStep(routineIndex, stepIndex) {
@@ -1730,25 +1924,7 @@ function dailyAutoInsert() {
   scheduleData.routines.forEach(routine => {
     if (!routine.autoAdd) return;
     if (!routine.repeatDays.includes(todayDay)) return;
-    const alreadyAdded = scheduleData.blocks.some(b =>
-      b.date === today && b.routineId === routine.id
-    );
-    if (alreadyAdded) return;
-    const times = getRoutineTimeForDay(routine, todayDay);
-    scheduleData.blocks.push({
-      id: createId("block"),
-      routineId: routine.id,
-      title: routine.name,
-      date: today,
-      start: times.start,
-      end: times.end,
-      category: routine.type,
-      notes: routine.notes || "",
-      type: "routine",
-      completed: false,
-      tasks: routine.tasks.map(task => ({ text: task, completed: false }))
-    });
-    inserted = true;
+    if (addRoutineBlocksForDate(routine, today, todayDay) > 0) inserted = true;
   });
   if (inserted) {
     addBufferBlocksForDate(today);
@@ -1775,6 +1951,8 @@ function fillEditingRoutineForm() {
   document.getElementById("routineEnd").value = routine.end;
   document.getElementById("routineTasks").value = routine.tasks.join("\n");
   document.getElementById("routineNotes").value = routine.notes || "";
+  const sameTimeEl = document.getElementById("routineSameTimeMode");
+  if (sameTimeEl) sameTimeEl.checked = !usesCustomRoutineTimes(routine);
   const autoAddEl = document.getElementById("routineAutoAdd");
   if (autoAddEl) autoAddEl.checked = routine.autoAdd || false;
   document.querySelectorAll("input[name='routineDay']").forEach(input => {
@@ -1782,15 +1960,7 @@ function fillEditingRoutineForm() {
   });
   document.getElementById("routineSaveButton").textContent = "Update Routine";
 
-  updateDayTimesSection();
-
-  routine.repeatDays.forEach(dayIndex => {
-    const times = getRoutineTimeForDay(routine, dayIndex);
-    const startEl = document.getElementById(`dayStart_${dayIndex}`);
-    const endEl = document.getElementById(`dayEnd_${dayIndex}`);
-    if (startEl) startEl.value = times.start;
-    if (endEl) endEl.value = times.end;
-  });
+  updateRoutineTimeMode();
 }
 
 function resetRoutineForm() {
@@ -1809,15 +1979,33 @@ function deleteRoutine(index) {
 }
 
 function getRoutineTimeForDay(routine, dayIndex) {
-  return (routine.dayTimes && routine.dayTimes[dayIndex])
-    ? routine.dayTimes[dayIndex]
-    : { start: routine.start, end: routine.end };
+  return getRoutineTimeRangesForDay(routine, dayIndex)[0] || { start: routine.start, end: routine.end };
+}
+
+function updateRoutineTimeMode() {
+  const sameTimeMode = isRoutineSameTimeMode();
+  const globalTimes = document.getElementById("routineGlobalTimes");
+  const startEl = document.getElementById("routineStart");
+  const endEl = document.getElementById("routineEnd");
+
+  if (globalTimes) globalTimes.style.display = sameTimeMode ? "" : "none";
+  if (startEl) startEl.disabled = !sameTimeMode;
+  if (endEl) endEl.disabled = !sameTimeMode;
+
+  updateDayTimesSection();
 }
 
 function updateDayTimesSection() {
   const section = document.getElementById("dayTimesSection");
   const rowsBox = document.getElementById("dayTimeRows");
   if (!section || !rowsBox) return;
+
+  if (isRoutineSameTimeMode()) {
+    section.style.display = "none";
+    rowsBox.innerHTML = "";
+    routineCopySourceDay = null;
+    return;
+  }
 
   const checkedInputs = [...document.querySelectorAll("input[name='routineDay']:checked")];
   const defaultStart = document.getElementById("routineStart") ? document.getElementById("routineStart").value : "";
@@ -1826,33 +2014,179 @@ function updateDayTimesSection() {
 
   if (!checkedInputs.length) {
     section.style.display = "none";
+    rowsBox.innerHTML = "";
+    routineCopySourceDay = null;
     return;
   }
 
   section.style.display = "";
+  const selectedDays = checkedInputs
+    .map(input => Number(input.value))
+    .sort((a, b) => a - b);
+  if (routineCopySourceDay !== null && !selectedDays.includes(routineCopySourceDay)) {
+    routineCopySourceDay = null;
+  }
 
   const existingValues = {};
   [0, 1, 2, 3, 4, 5, 6].forEach(i => {
-    const s = document.getElementById(`dayStart_${i}`);
-    const e = document.getElementById(`dayEnd_${i}`);
-    if (s) existingValues[i] = { start: s.value, end: e ? e.value : "" };
+    const rows = getDayTimeRowsFromForm(i);
+    if (rows.length) existingValues[i] = rows;
   });
 
-  rowsBox.innerHTML = checkedInputs
-    .sort((a, b) => Number(a.value) - Number(b.value))
-    .map(input => {
-      const d = Number(input.value);
-      const prev = existingValues[d];
-      const s = prev ? prev.start : defaultStart;
-      const e = prev ? prev.end : defaultEnd;
+  if (editingRoutineIndex !== null) {
+    const routine = scheduleData.routines[editingRoutineIndex];
+    if (routine) {
+      routine.repeatDays.forEach(dayIndex => {
+        if (!existingValues[dayIndex]) {
+          existingValues[dayIndex] = getRoutineTimeRangesForDay(routine, dayIndex);
+        }
+      });
+    }
+  }
+
+  rowsBox.innerHTML = selectedDays
+    .map(dayIndex => {
+      const ranges = existingValues[dayIndex] && existingValues[dayIndex].length
+        ? existingValues[dayIndex]
+        : [{ start: defaultStart, end: defaultEnd }];
       return `
-        <div class="day-time-row">
-          <span class="day-time-label">${dayNames[d]}</span>
-          <input type="time" id="dayStart_${d}" value="${s}">
-          <input type="time" id="dayEnd_${d}" value="${e}">
+        <div class="day-time-group">
+          <div class="day-time-group-header">
+            <span class="day-time-label">${dayNames[dayIndex]}</span>
+            <div class="day-time-tools">
+              <button type="button" class="secondary-btn small-btn" onclick="addRoutineTimeRow(${dayIndex})">+ Add time</button>
+              <button type="button" class="secondary-btn small-btn" onclick="toggleRoutineCopyPanel(event, ${dayIndex})">Copy times</button>
+            </div>
+          </div>
+          ${ranges.map((range, rowIndex) => renderRoutineTimeRow(dayIndex, range, rowIndex, ranges.length, defaultStart, defaultEnd)).join("")}
+          ${routineCopySourceDay === dayIndex ? renderRoutineCopyPanel(dayIndex, selectedDays, dayNames) : ""}
         </div>
       `;
     }).join("");
+}
+
+function renderRoutineTimeRow(dayIndex, range, rowIndex, rowCount, defaultStart = "", defaultEnd = "") {
+  return `
+    <div class="day-time-row" data-day="${dayIndex}">
+      <input class="day-start-input" type="time" value="${escapeHTML(range.start || defaultStart)}">
+      <input class="day-end-input" type="time" value="${escapeHTML(range.end || defaultEnd)}">
+      <button type="button" class="secondary-btn small-btn" onclick="removeRoutineTimeRow(${dayIndex}, ${rowIndex})" ${rowCount === 1 ? "disabled" : ""}>Remove</button>
+    </div>
+  `;
+}
+
+function renderRoutineCopyPanel(sourceDay, selectedDays, dayNames) {
+  const targetDays = selectedDays.filter(dayIndex => dayIndex !== sourceDay);
+  return `
+    <div class="routine-copy-panel">
+      ${targetDays.length ? `
+        <div class="routine-copy-targets">
+          ${targetDays.map(dayIndex => `
+            <label>
+              <input type="checkbox" name="routineCopyTarget_${sourceDay}" value="${dayIndex}">
+              ${dayNames[dayIndex]}
+            </label>
+          `).join("")}
+        </div>
+        <div class="button-row compact-row">
+          <button type="button" class="secondary-btn small-btn" onclick="copyRoutineTimesToDays(${sourceDay}, 'replace')">Replace existing times</button>
+          <button type="button" class="secondary-btn small-btn" onclick="copyRoutineTimesToDays(${sourceDay}, 'add')">Add to existing times</button>
+          <button type="button" class="secondary-btn small-btn" onclick="closeRoutineCopyPanel()">Cancel</button>
+        </div>
+      ` : `<p class="muted-text">Select another repeat day first.</p>`}
+    </div>
+  `;
+}
+
+function toggleRoutineCopyPanel(event, dayIndex) {
+  event.stopPropagation();
+  routineCopySourceDay = routineCopySourceDay === dayIndex ? null : dayIndex;
+  updateDayTimesSection();
+}
+
+function closeRoutineCopyPanel() {
+  routineCopySourceDay = null;
+  updateDayTimesSection();
+}
+
+function addRoutineTimeRow(dayIndex) {
+  const currentRows = getDayTimeRowsFromForm(dayIndex);
+  const row = document.createElement("div");
+  row.className = "day-time-row";
+  row.dataset.day = String(dayIndex);
+  row.innerHTML = `
+    <input class="day-start-input" type="time" value="">
+    <input class="day-end-input" type="time" value="">
+    <button type="button" class="secondary-btn small-btn" onclick="removeRoutineTimeRow(${dayIndex}, ${currentRows.length})">Remove</button>
+  `;
+  const group = [...document.querySelectorAll(".day-time-group")]
+    .find(item => item.querySelector(`.day-time-row[data-day="${dayIndex}"]`));
+  if (!group) return;
+  group.appendChild(row);
+  syncRoutineTimeRemoveButtons(dayIndex);
+}
+
+function setRoutineTimeRowsForDay(dayIndex, ranges) {
+  const group = [...document.querySelectorAll(".day-time-group")]
+    .find(item => item.querySelector(`.day-time-row[data-day="${dayIndex}"]`));
+  if (!group) return;
+  group.querySelectorAll(`.day-time-row[data-day="${dayIndex}"]`).forEach(row => row.remove());
+  const panel = group.querySelector(".routine-copy-panel");
+  ranges.forEach((range, rowIndex) => {
+    const wrapper = document.createElement("template");
+    wrapper.innerHTML = renderRoutineTimeRow(dayIndex, range, rowIndex, ranges.length).trim();
+    const row = wrapper.content.firstElementChild;
+    if (panel) group.insertBefore(row, panel);
+    else group.appendChild(row);
+  });
+  syncRoutineTimeRemoveButtons(dayIndex);
+}
+
+function copyRoutineTimesToDays(sourceDay, mode) {
+  const sourceRanges = getDayTimeRowsFromForm(sourceDay);
+  if (!sourceRanges.length || sourceRanges.some(range => !range.start || !range.end)) {
+    alert("Complete every time row for the source day before copying.");
+    return;
+  }
+
+  const targetDays = [...document.querySelectorAll(`input[name="routineCopyTarget_${sourceDay}"]:checked`)]
+    .map(input => Number(input.value));
+  if (!targetDays.length) {
+    alert("Choose at least one day to copy times to.");
+    return;
+  }
+
+  const message = mode === "replace"
+    ? "Replace existing times on the selected days?"
+    : "Add these times to the selected days?";
+  if (!confirm(message)) return;
+
+  targetDays.forEach(dayIndex => {
+    const nextRanges = mode === "add"
+      ? [...getDayTimeRowsFromForm(dayIndex), ...sourceRanges]
+      : sourceRanges;
+    setRoutineTimeRowsForDay(dayIndex, nextRanges.map(range => ({ ...range })));
+  });
+
+  routineCopySourceDay = null;
+  updateDayTimesSection();
+}
+
+function removeRoutineTimeRow(dayIndex, rowIndex) {
+  const rows = [...document.querySelectorAll(`.day-time-row[data-day="${dayIndex}"]`)];
+  if (rows.length <= 1 || !rows[rowIndex]) return;
+  rows[rowIndex].remove();
+  syncRoutineTimeRemoveButtons(dayIndex);
+}
+
+function syncRoutineTimeRemoveButtons(dayIndex) {
+  const rows = [...document.querySelectorAll(`.day-time-row[data-day="${dayIndex}"]`)];
+  rows.forEach((row, index) => {
+    const button = row.querySelector("button");
+    if (!button) return;
+    button.disabled = rows.length === 1;
+    button.setAttribute("onclick", `removeRoutineTimeRow(${dayIndex}, ${index})`);
+  });
 }
 
 function autoFillToday() {
@@ -1870,32 +2204,7 @@ function autoFillToday() {
   let addedCount = 0;
 
   matchingRoutines.forEach(routine => {
-    const alreadyAdded = scheduleData.blocks.some(block =>
-      block.date === today && block.routineId === routine.id
-    );
-
-    if (alreadyAdded) return;
-
-    const times = getRoutineTimeForDay(routine, todayDay);
-
-    scheduleData.blocks.push({
-      id: createId("block"),
-      routineId: routine.id,
-      title: routine.name,
-      date: today,
-      start: times.start,
-      end: times.end,
-      category: routine.type,
-      notes: routine.notes || "",
-      type: "routine",
-      completed: false,
-      tasks: routine.tasks.map(task => ({
-        text: task,
-        completed: false
-      }))
-    });
-
-    addedCount++;
+    addedCount += addRoutineBlocksForDate(routine, today, todayDay);
   });
 
   addBufferBlocksForDate(today);
@@ -6238,22 +6547,26 @@ function normalizeScheduleBackupData(data) {
       tasks: Array.isArray(block.tasks) ? block.tasks.map(normalizeTask) : [],
       isBuffer: Boolean(block.isBuffer)
     })),
-    routines: routines.map(routine => ({
-      ...routine,
-      id: routine.id || createId("routine"),
-      name: routine.name || "",
-      type: routine.type || "Custom",
-      start: routine.start || "",
-      end: routine.end || "",
-      repeatDays: Array.isArray(routine.repeatDays) ? routine.repeatDays.map(Number).filter(day => day >= 0 && day <= 6) : [],
-      dayTimes: routine.dayTimes && typeof routine.dayTimes === "object" ? routine.dayTimes : {},
-      tasks: Array.isArray(routine.tasks) ? routine.tasks : [],
-      notes: routine.notes || "",
-      autoAdd: Boolean(routine.autoAdd),
-      completions: routine.completions && typeof routine.completions === "object" ? routine.completions : {},
-      completedDates: Array.isArray(routine.completedDates) ? routine.completedDates : [],
-      streak: typeof routine.streak === "number" ? routine.streak : 0
-    })),
+    routines: routines.map(routine => {
+      const normalizedRoutine = {
+        ...routine,
+        id: routine.id || createId("routine"),
+        name: routine.name || "",
+        type: routine.type || "Custom",
+        start: routine.start || "",
+        end: routine.end || "",
+        repeatDays: Array.isArray(routine.repeatDays) ? routine.repeatDays.map(Number).filter(day => day >= 0 && day <= 6) : [],
+        dayTimes: routine.dayTimes && typeof routine.dayTimes === "object" ? routine.dayTimes : {},
+        tasks: Array.isArray(routine.tasks) ? routine.tasks : [],
+        notes: routine.notes || "",
+        autoAdd: Boolean(routine.autoAdd),
+        completions: routine.completions && typeof routine.completions === "object" ? routine.completions : {},
+        completedDates: Array.isArray(routine.completedDates) ? routine.completedDates : [],
+        streak: typeof routine.streak === "number" ? routine.streak : 0
+      };
+      normalizedRoutine.dayTimes = normalizeRoutineDayTimes(normalizedRoutine);
+      return normalizedRoutine;
+    }),
     bufferMinutes: typeof data.bufferMinutes === "number" ? data.bufferMinutes : 15
   };
 }
