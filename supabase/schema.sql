@@ -138,3 +138,16 @@ create policy "owner access hangouts" on public.hangouts for all using (owner_id
 create policy "owner access social_ideas" on public.social_ideas for all using (owner_id = auth.uid()) with check (owner_id = auth.uid());
 create policy "owner access logs" on public.logs for all using (owner_id = auth.uid()) with check (owner_id = auth.uid());
 create policy "owner access settings" on public.settings for all using (owner_id = auth.uid()) with check (owner_id = auth.uid());
+
+-- Unified sync table for Flow Planner
+create table if not exists public.flow_planner_sync (
+  id uuid primary key default gen_random_uuid(),
+  user_id text not null,
+  data jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now(),
+  unique(user_id)
+);
+
+alter table public.flow_planner_sync enable row level security;
+
+create policy "user access flow_planner_sync" on public.flow_planner_sync for all using (user_id = auth.uid()::text) with check (user_id = auth.uid()::text);

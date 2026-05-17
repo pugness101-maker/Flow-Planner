@@ -26,7 +26,10 @@ const DataService = {
 
   // Check if Supabase is configured
   isSupabaseConfigured() {
-    return typeof window.flowSupabaseStorage === 'object' && window.flowSupabaseStorage !== null;
+    return typeof window.flowSupabaseStorage === 'object' && 
+           window.flowSupabaseStorage !== null &&
+           window.flowSupabaseStorage.enabled &&
+           window.flowSupabaseStorage.client !== null;
   },
 
   // Get data from localStorage
@@ -110,47 +113,61 @@ const DataService = {
 
   // Load data from Supabase and merge with local data
   async loadFromSupabase() {
+    console.log("[SYNC] DataService.loadFromSupabase called");
     if (!this.isSupabaseConfigured()) {
-      console.log("Supabase not configured, using localStorage only");
+      console.log("[SYNC] Supabase not configured, using localStorage only");
       this.syncStatus.isCloudConnected = false;
       return null;
     }
 
     try {
-      const remoteData = await window.flowSupabaseStorage.loadAll?.();
-      if (!remoteData) return null;
+      const localData = {
+        plannerData,
+        scheduleData,
+        systemsData,
+        socialData,
+        allZipData,
+        allZipCustomOptions,
+        updatedAt: this.syncStatus.lastSyncTime
+      };
+
+      const result = await window.flowSupabaseStorage.syncFromCloud?.(localData);
+      
+      if (!result || !result.success) {
+        if (result?.conflict) {
+          console.log("[SYNC] Conflict detected, not overwriting local data");
+        }
+        return null;
+      }
+
+      if (!result.data) {
+        console.log("[SYNC] No cloud data found (first sync)");
+        return null;
+      }
 
       this.syncStatus.isCloudConnected = true;
       this.syncStatus.lastSyncTime = new Date().toISOString();
 
-      // Merge remote data with local data
-      if (remoteData.plannerData) {
-        plannerData = this.mergeObjects(plannerData, remoteData.plannerData);
-      }
-      if (remoteData.scheduleData) {
-        scheduleData.blocks = this.mergeArrays(scheduleData.blocks, remoteData.scheduleData.blocks || []);
-        scheduleData.routines = this.mergeArrays(scheduleData.routines, remoteData.scheduleData.routines || []);
-      }
-      if (remoteData.systemsData) {
-        systemsData.goals = this.mergeArrays(systemsData.goals, remoteData.systemsData.goals || []);
-        systemsData.habits = this.mergeArrays(systemsData.habits, remoteData.systemsData.habits || []);
-        systemsData.trackers = this.mergeArrays(systemsData.trackers, remoteData.systemsData.trackers || []);
-        systemsData.logs = this.mergeArrays(systemsData.logs, remoteData.systemsData.logs || []);
-        systemsData.metrics = this.mergeArrays(systemsData.metrics, remoteData.systemsData.metrics || []);
-        systemsData.objectives = this.mergeArrays(systemsData.objectives, remoteData.systemsData.objectives || []);
-      }
-      if (remoteData.socialData) {
-        socialData.friends = this.mergeArrays(socialData.friends, remoteData.socialData.friends || []);
-        socialData.hangouts = this.mergeArrays(socialData.hangouts, remoteData.socialData.hangouts || []);
-        socialData.ideas = this.mergeArrays(socialData.ideas, remoteData.socialData.ideas || []);
+      console.log("[SYNC] Merging cloud data with local data");
+      const mergedData = window.flowSupabaseStorage.mergeCloudAndLocalData?.(localData, result.data);
+
+      if (mergedData) {
+        // Apply merged data to global variables
+        if (mergedData.plannerData) plannerData = mergedData.plannerData;
+        if (mergedData.scheduleData) scheduleData = mergedData.scheduleData;
+        if (mergedData.systemsData) systemsData = mergedData.systemsData;
+        if (mergedData.socialData) socialData = mergedData.socialData;
+        if (mergedData.allZipData) allZipData = mergedData.allZipData;
+        if (mergedData.allZipCustomOptions) allZipCustomOptions = mergedData.allZipCustomOptions;
+
+        // Save merged data to localStorage
+        this.saveAll();
+        console.log("[SYNC] Data merged and saved to localStorage");
       }
 
-      // Save merged data to localStorage
-      this.saveAll();
-
-      return remoteData;
+      return result.data;
     } catch (error) {
-      console.error("Error loading from Supabase:", error);
+      console.error("[SYNC] Error loading from Supabase:", error);
       this.syncStatus.syncErrors.push({ time: new Date().toISOString(), error: error.message });
       this.syncStatus.isCloudConnected = false;
       return null;
@@ -159,19 +176,37 @@ const DataService = {
 
   // Save data to Supabase
   async saveToSupabase(data) {
+    console.log("[SYNC] DataService.saveToSupabase called");
     if (!this.isSupabaseConfigured()) {
+      console.log("[SYNC] Supabase not configured");
       this.syncStatus.isCloudConnected = false;
       return false;
     }
 
     try {
-      await window.flowSupabaseStorage.saveAll?.(data);
-      this.syncStatus.isCloudConnected = true;
-      this.syncStatus.lastSyncTime = new Date().toISOString();
-      this.syncStatus.syncErrors = [];
-      return true;
+      const syncData = {
+        ...data,
+        settingsData: null,
+        customOptionsData: data.allZipCustomOptions || null,
+        updatedAt: new Date().toISOString()
+      };
+
+      const result = await window.flowSupabaseStorage.syncToCloud?.(syncData);
+      
+      if (result && result.success) {
+        this.syncStatus.isCloudConnected = true;
+        this.syncStatus.lastSyncTime = new Date().toISOString();
+        this.syncStatus.syncErrors = [];
+        console.log("[SYNC] Data saved to cloud successfully");
+        return true;
+      } else if (result?.conflict) {
+        console.log("[SYNC] Conflict detected, cloud data is newer");
+        return false;
+      }
+
+      return false;
     } catch (error) {
-      console.error("Error saving to Supabase:", error);
+      console.error("[SYNC] Error saving to Supabase:", error);
       this.syncStatus.syncErrors.push({ time: new Date().toISOString(), error: error.message });
       this.syncStatus.isCloudConnected = false;
       return false;
@@ -355,6 +390,137 @@ const DataService = {
     }
   }
 };
+
+// ==================== APP STATE HELPERS ====================
+
+// Save all app state to localStorage
+function saveAllAppState() {
+  console.log("[LOCAL] saveAllAppState called");
+  const state = {
+    plannerData,
+    scheduleData,
+    systemsData,
+    socialData,
+    allZipData,
+    allZipCustomOptions,
+    updatedAt: new Date().toISOString()
+  };
+  
+  // Store with the keys specified in requirements
+  localStorage.setItem("flow-planner-state-v3", JSON.stringify({
+    plannerData,
+    scheduleData,
+    updatedAt: state.updatedAt
+  }));
+  
+  localStorage.setItem("flow-planner-social-v2", JSON.stringify({
+    socialData,
+    updatedAt: state.updatedAt
+  }));
+  
+  localStorage.setItem("flow-planner-systems-v2", JSON.stringify({
+    systemsData,
+    updatedAt: state.updatedAt
+  }));
+  
+  localStorage.setItem("flow-planner-allzip-v2", JSON.stringify({
+    allZipData,
+    allZipCustomOptions,
+    updatedAt: state.updatedAt
+  }));
+  
+  // Also save with existing keys for backward compatibility
+  DataService.saveAll();
+  
+  console.log("[LOCAL] All app state saved");
+  return state;
+}
+
+// Load all app state from localStorage
+function loadAllAppState() {
+  console.log("[LOCAL] loadAllAppState called");
+  
+  // Try new keys first (specified in requirements)
+  const stateV3 = localStorage.getItem("flow-planner-state-v3");
+  const socialV2 = localStorage.getItem("flow-planner-social-v2");
+  const systemsV2 = localStorage.getItem("flow-planner-systems-v2");
+  const allzipV2 = localStorage.getItem("flow-planner-allzip-v2");
+  
+  let loadedState = {
+    updatedAt: null
+  };
+  
+  if (stateV3) {
+    try {
+      const parsed = JSON.parse(stateV3);
+      loadedState.plannerData = parsed.plannerData;
+      loadedState.scheduleData = parsed.scheduleData;
+      loadedState.updatedAt = parsed.updatedAt;
+    } catch (e) {
+      console.error("[LOCAL] Error parsing state-v3:", e);
+    }
+  }
+  
+  if (socialV2) {
+    try {
+      const parsed = JSON.parse(socialV2);
+      loadedState.socialData = parsed.socialData;
+      if (parsed.updatedAt && (!loadedState.updatedAt || new Date(parsed.updatedAt) > new Date(loadedState.updatedAt))) {
+        loadedState.updatedAt = parsed.updatedAt;
+      }
+    } catch (e) {
+      console.error("[LOCAL] Error parsing social-v2:", e);
+    }
+  }
+  
+  if (systemsV2) {
+    try {
+      const parsed = JSON.parse(systemsV2);
+      loadedState.systemsData = parsed.systemsData;
+      if (parsed.updatedAt && (!loadedState.updatedAt || new Date(parsed.updatedAt) > new Date(loadedState.updatedAt))) {
+        loadedState.updatedAt = parsed.updatedAt;
+      }
+    } catch (e) {
+      console.error("[LOCAL] Error parsing systems-v2:", e);
+    }
+  }
+  
+  if (allzipV2) {
+    try {
+      const parsed = JSON.parse(allzipV2);
+      loadedState.allZipData = parsed.allZipData;
+      loadedState.allZipCustomOptions = parsed.allZipCustomOptions;
+      if (parsed.updatedAt && (!loadedState.updatedAt || new Date(parsed.updatedAt) > new Date(loadedState.updatedAt))) {
+        loadedState.updatedAt = parsed.updatedAt;
+      }
+    } catch (e) {
+      console.error("[LOCAL] Error parsing allzip-v2:", e);
+    }
+  }
+  
+  // Fall back to existing keys if new keys don't have data
+  if (!loadedState.plannerData) {
+    loadedState.plannerData = DataService.get(DataService.KEYS.PLANNER_DATA);
+  }
+  if (!loadedState.scheduleData) {
+    loadedState.scheduleData = DataService.get(DataService.KEYS.SCHEDULE_DATA);
+  }
+  if (!loadedState.systemsData) {
+    loadedState.systemsData = DataService.get(DataService.KEYS.SYSTEMS_DATA);
+  }
+  if (!loadedState.socialData) {
+    loadedState.socialData = DataService.get(DataService.KEYS.SOCIAL_DATA);
+  }
+  if (!loadedState.allZipData) {
+    loadedState.allZipData = DataService.get(DataService.KEYS.ALL_ZIP_DATA);
+  }
+  if (!loadedState.allZipCustomOptions) {
+    loadedState.allZipCustomOptions = DataService.get(DataService.KEYS.ALL_ZIP_CUSTOM_OPTIONS);
+  }
+  
+  console.log("[LOCAL] All app state loaded");
+  return loadedState;
+}
 
 // DATA - Initialize using DataService
 let plannerData = DataService.get(DataService.KEYS.PLANNER_DATA) || {
@@ -1247,11 +1413,15 @@ function handleAllZipDataImport(event) {
 }
 
 function saveAllZipData() {
-  return DataService.saveAllZipData(allZipData);
+  const result = DataService.saveAllZipData(allZipData);
+  triggerAutosync();
+  return result;
 }
 
 function saveAllZipCustomOptions() {
-  return DataService.saveAllZipCustomOptions(allZipCustomOptions);
+  const result = DataService.saveAllZipCustomOptions(allZipCustomOptions);
+  triggerAutosync();
+  return result;
 }
 
 // Social Data Import Functions
@@ -2640,19 +2810,27 @@ let manageOptionsOpen = false;
 
 // SAVE - All save functions now use centralized DataService
 function savePlannerData() {
-  return DataService.savePlannerData(plannerData);
+  const result = DataService.savePlannerData(plannerData);
+  triggerAutosync();
+  return result;
 }
 
 function saveSocialData() {
-  return DataService.saveSocialData(socialData);
+  const result = DataService.saveSocialData(socialData);
+  triggerAutosync();
+  return result;
 }
 
 function saveSystemsData() {
-  return DataService.saveSystemsData(systemsData);
+  const result = DataService.saveSystemsData(systemsData);
+  triggerAutosync();
+  return result;
 }
 
 function saveScheduleData() {
-  return DataService.saveScheduleData(scheduleData);
+  const result = DataService.saveScheduleData(scheduleData);
+  triggerAutosync();
+  return result;
 }
 
 // CLEAR - All clear functions now use centralized DataService
@@ -2709,13 +2887,34 @@ function updateSyncStatusDisplay() {
   }
 
   if (cloudStatus) {
-    cloudStatus.textContent = DataService.syncStatus.isCloudConnected ? "Connected ✓" : "Not Connected";
+    if (DataService.syncStatus.isCloudConnected) {
+      cloudStatus.textContent = "Connected ✓";
+      cloudStatus.style.color = "green";
+    } else {
+      cloudStatus.textContent = "Not Connected";
+      cloudStatus.style.color = "orange";
+    }
   }
 
   if (lastSyncTime) {
-    if (DataService.syncStatus.lastSyncTime) {
-      const syncDate = new Date(DataService.syncStatus.lastSyncTime);
-      lastSyncTime.textContent = syncDate.toLocaleString();
+    const lastSync = localStorage.getItem("flow-planner-last-sync") || DataService.syncStatus.lastSyncTime;
+    if (lastSync) {
+      const syncDate = new Date(lastSync);
+      const now = new Date();
+      const diffMs = now - syncDate;
+      const diffMins = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMins / 60);
+      const diffDays = Math.floor(diffHours / 24);
+
+      if (diffMins < 1) {
+        lastSyncTime.textContent = "Just now";
+      } else if (diffMins < 60) {
+        lastSyncTime.textContent = `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
+      } else if (diffHours < 24) {
+        lastSyncTime.textContent = `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+      } else {
+        lastSyncTime.textContent = `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+      }
     } else {
       lastSyncTime.textContent = "Never";
     }
@@ -2723,17 +2922,53 @@ function updateSyncStatusDisplay() {
 }
 
 async function forceSyncFromCloud() {
+  console.log("[SYNC] Manual sync from cloud triggered");
+  const cloudStatus = document.getElementById("cloudStatus");
+  const syncErrorMessage = document.getElementById("syncErrorMessage");
+  
+  if (cloudStatus) {
+    cloudStatus.textContent = "Syncing...";
+    cloudStatus.style.color = "blue";
+  }
+  if (syncErrorMessage) {
+    syncErrorMessage.textContent = "";
+    syncErrorMessage.style.display = "none";
+  }
+
   const result = await DataService.loadFromSupabase();
   if (result) {
     alert("Sync from cloud successful!");
     updateSyncStatusDisplay();
     location.reload();
   } else {
-    alert("Sync from cloud failed or Supabase not configured.");
+    const errorMsg = "Sync from cloud failed. " + 
+      (DataService.syncStatus.syncErrors.length > 0 
+        ? DataService.syncStatus.syncErrors[DataService.syncStatus.syncErrors.length - 1].error 
+        : "Supabase not configured or connection error.");
+    alert(errorMsg);
+    if (syncErrorMessage) {
+      syncErrorMessage.textContent = errorMsg;
+      syncErrorMessage.style.display = "block";
+      syncErrorMessage.style.color = "red";
+    }
+    updateSyncStatusDisplay();
   }
 }
 
 async function forceSyncToCloud() {
+  console.log("[SYNC] Manual sync to cloud triggered");
+  const cloudStatus = document.getElementById("cloudStatus");
+  const syncErrorMessage = document.getElementById("syncErrorMessage");
+  
+  if (cloudStatus) {
+    cloudStatus.textContent = "Syncing...";
+    cloudStatus.style.color = "blue";
+  }
+  if (syncErrorMessage) {
+    syncErrorMessage.textContent = "";
+    syncErrorMessage.style.display = "none";
+  }
+
   const data = {
     plannerData,
     scheduleData,
@@ -2747,7 +2982,129 @@ async function forceSyncToCloud() {
     alert("Sync to cloud successful!");
     updateSyncStatusDisplay();
   } else {
-    alert("Sync to cloud failed or Supabase not configured.");
+    const errorMsg = "Sync to cloud failed. " + 
+      (DataService.syncStatus.syncErrors.length > 0 
+        ? DataService.syncStatus.syncErrors[DataService.syncStatus.syncErrors.length - 1].error 
+        : "Supabase not configured or connection error.");
+    alert(errorMsg);
+    if (syncErrorMessage) {
+      syncErrorMessage.textContent = errorMsg;
+      syncErrorMessage.style.display = "block";
+      syncErrorMessage.style.color = "red";
+    }
+    updateSyncStatusDisplay();
+  }
+}
+
+async function testCloudSync() {
+  console.log("[SYNC] Testing cloud sync");
+  const testButton = document.getElementById("testCloudSyncButton");
+  const testResult = document.getElementById("testCloudSyncResult");
+  
+  if (testButton) {
+    testButton.textContent = "Testing...";
+    testButton.disabled = true;
+  }
+  if (testResult) {
+    testResult.textContent = "";
+    testResult.style.display = "none";
+  }
+
+  if (!window.flowSupabaseStorage?.enabled) {
+    const errorMsg = "Supabase not configured. Please check your environment variables.";
+    if (testResult) {
+      testResult.textContent = errorMsg;
+      testResult.style.display = "block";
+      testResult.style.color = "red";
+    }
+    if (testButton) {
+      testButton.textContent = "Test Cloud Sync";
+      testButton.disabled = false;
+    }
+    alert(errorMsg);
+    return;
+  }
+
+  try {
+    const ownerId = await window.flowSupabaseStorage.getOwnerId();
+    if (!ownerId) {
+      throw new Error("Could not get owner ID");
+    }
+
+    // Write test object
+    const testData = {
+      test: true,
+      timestamp: new Date().toISOString(),
+      message: "Cloud sync test"
+    };
+
+    const { error: upsertError } = await window.flowSupabaseStorage.client
+      .from("flow_planner_sync")
+      .upsert({
+        user_id: ownerId,
+        data: testData,
+        updated_at: new Date().toISOString()
+      }, {
+        onConflict: "user_id"
+      });
+
+    if (upsertError) {
+      throw new Error("Write failed: " + upsertError.message);
+    }
+
+    // Read test object back
+    const { data: readData, error: readError } = await window.flowSupabaseStorage.client
+      .from("flow_planner_sync")
+      .select("data")
+      .eq("user_id", ownerId)
+      .maybeSingle();
+
+    if (readError) {
+      throw new Error("Read failed: " + readError.message);
+    }
+
+    if (!readData || !readData.data || readData.data.test !== true) {
+      throw new Error("Data verification failed");
+    }
+
+    // Restore actual data
+    const actualData = {
+      plannerData,
+      scheduleData,
+      systemsData,
+      socialData,
+      allZipData,
+      allZipCustomOptions,
+      updatedAt: new Date().toISOString()
+    };
+
+    await window.flowSupabaseStorage.syncToCloud(actualData);
+
+    const successMsg = "Cloud sync test passed! Write and read successful.";
+    if (testResult) {
+      testResult.textContent = successMsg;
+      testResult.style.display = "block";
+      testResult.style.color = "green";
+    }
+    if (testButton) {
+      testButton.textContent = "Test Cloud Sync";
+      testButton.disabled = false;
+    }
+    alert(successMsg);
+    console.log("[SYNC] Test passed");
+  } catch (error) {
+    const errorMsg = "Cloud sync test failed: " + error.message;
+    if (testResult) {
+      testResult.textContent = errorMsg;
+      testResult.style.display = "block";
+      testResult.style.color = "red";
+    }
+    if (testButton) {
+      testButton.textContent = "Test Cloud Sync";
+      testButton.disabled = false;
+    }
+    alert(errorMsg);
+    console.error("[SYNC] Test failed:", error);
   }
 }
 
@@ -3370,13 +3727,20 @@ const pages = {
     </div>
     <div class="card">
       <h3>Data Sync Status</h3>
+      <div id="offlineModeBanner" class="offline-banner" style="display:none; background:#fff3cd; color:#856404; padding:10px; border-radius:4px; margin-bottom:10px;">
+        ⚠️ Offline mode active — local storage only.
+      </div>
       <div id="syncStatusDisplay">
         <p><strong>Local Storage:</strong> <span id="localStorageStatus">Checking...</span></p>
         <p><strong>Cloud Connection:</strong> <span id="cloudStatus">Checking...</span></p>
         <p><strong>Last Sync:</strong> <span id="lastSyncTime">Never</span></p>
       </div>
+      <p id="syncErrorMessage" class="sync-error" style="display:none; color:red; margin:10px 0;"></p>
       <button onclick="forceSyncFromCloud()">Sync from Cloud</button>
       <button onclick="forceSyncToCloud()">Sync to Cloud</button>
+      <button id="testCloudSyncButton" onclick="testCloudSync()" class="secondary-btn">Test Cloud Sync</button>
+      <p id="testCloudSyncResult" class="test-result" style="display:none; margin:10px 0;"></p>
+      <p id="cloudSyncNotConnected" class="muted-text" style="display:none;">Cloud sync not connected. Local backup still works.</p>
     </div>
     <div class="card backup-restore-card">
       <h3>Backup + Restore</h3>
@@ -3553,6 +3917,37 @@ function setActiveBottomNav(tab) {
   document.querySelectorAll(".bottom-nav button").forEach(button => {
     button.classList.toggle("active", button.dataset.tab === tab);
   });
+}
+
+function setPage(tab) {
+  openBlockActionMenuIndex = null;
+  setActiveBottomNav(tab);
+  main.innerHTML = getPageHTML(tab);
+
+  if (tab === "Home") renderHome();
+  if (tab === "Planner") renderPlanner();
+  if (tab === "Systems") renderSystems();
+  if (tab === "Social") renderSocial();
+  if (tab === "Settings") renderSettings();
+}
+
+function getSmartSocialSuggestions() {
+  const suggestions = [];
+  
+  // Suggest reaching out to friends not seen recently
+  socialData.friends.forEach(friend => {
+    const { score, reason } = computeFriendScore(friend);
+    if (score > 50) {
+      suggestions.push(`Reach out to ${friend.name} (${reason})`);
+    }
+  });
+
+  // Suggest scheduling hangouts from ideas
+  socialData.ideas.filter(idea => idea.favorite).forEach(idea => {
+    suggestions.push(`Schedule hangout: ${idea.title}`);
+  });
+
+  return suggestions.slice(0, 3);
 }
 
 function renderSettings() {
@@ -11972,12 +12367,142 @@ function getFriendSuggestions() {
     .sort((a, b) => b.score - a.score);
 }
 
-function getDaysSince(dateString) {
-  if (!dateString) return null;
-  const [year, month, day] = dateString.split("-").map(Number);
-  const seenDate = new Date(year, month - 1, day);
-  const today = new Date();
-  const diffTime = today - seenDate;
-  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-  return diffDays;
+// ==================== CLOUD SYNC INITIALIZATION ====================
+
+// Autosync timer
+let autosyncTimer = null;
+let syncDebounceTimer = null;
+
+// Check Supabase connection on startup
+async function checkCloudConnection() {
+  console.log("[SYNC] Checking cloud connection on startup");
+  const cloudStatus = document.getElementById("cloudStatus");
+  const cloudSyncNotConnected = document.getElementById("cloudSyncNotConnected");
+  const offlineModeBanner = document.getElementById("offlineModeBanner");
+  
+  if (cloudStatus) {
+    cloudStatus.textContent = "Checking...";
+    cloudStatus.style.color = "blue";
+  }
+
+  if (DataService.isSupabaseConfigured()) {
+    try {
+      // Try to get owner ID to verify connection
+      const ownerId = await window.flowSupabaseStorage.getOwnerId?.();
+      if (ownerId) {
+        console.log("[SYNC] Cloud connection successful");
+        DataService.syncStatus.isCloudConnected = true;
+        if (cloudStatus) {
+          cloudStatus.textContent = "Connected ✓";
+          cloudStatus.style.color = "green";
+        }
+        if (cloudSyncNotConnected) {
+          cloudSyncNotConnected.style.display = "none";
+        }
+        if (offlineModeBanner) {
+          offlineModeBanner.style.display = "none";
+        }
+      } else {
+        console.log("[SYNC] Could not get owner ID");
+        DataService.syncStatus.isCloudConnected = false;
+        if (cloudStatus) {
+          cloudStatus.textContent = "Offline";
+          cloudStatus.style.color = "orange";
+        }
+        if (cloudSyncNotConnected) {
+          cloudSyncNotConnected.style.display = "block";
+        }
+        if (offlineModeBanner) {
+          offlineModeBanner.style.display = "block";
+        }
+      }
+    } catch (error) {
+      console.error("[SYNC] Connection check failed:", error);
+      DataService.syncStatus.isCloudConnected = false;
+      if (cloudStatus) {
+        cloudStatus.textContent = "Error";
+        cloudStatus.style.color = "red";
+      }
+      if (cloudSyncNotConnected) {
+        cloudSyncNotConnected.style.display = "block";
+      }
+      if (offlineModeBanner) {
+        offlineModeBanner.style.display = "block";
+      }
+    }
+  } else {
+    console.log("[SYNC] Supabase not configured");
+    DataService.syncStatus.isCloudConnected = false;
+    if (cloudStatus) {
+      cloudStatus.textContent = "Not Configured";
+      cloudStatus.style.color = "gray";
+    }
+    if (cloudSyncNotConnected) {
+      cloudSyncNotConnected.style.display = "block";
+    }
+    if (offlineModeBanner) {
+      offlineModeBanner.style.display = "block";
+    }
+  }
+
+  updateSyncStatusDisplay();
+}
+
+// Debounced autosync after major changes
+function triggerAutosync() {
+  console.log("[SYNC] Autosync triggered (debounced)");
+  clearTimeout(syncDebounceTimer);
+  syncDebounceTimer = setTimeout(async () => {
+    console.log("[SYNC] Executing debounced autosync");
+    const data = {
+      plannerData,
+      scheduleData,
+      systemsData,
+      socialData,
+      allZipData,
+      allZipCustomOptions
+    };
+    await DataService.saveToSupabase(data);
+    updateSyncStatusDisplay();
+  }, 2000); // 2 second debounce
+}
+
+// Periodic autosync every 60 seconds
+function startPeriodicAutosync() {
+  console.log("[SYNC] Starting periodic autosync (60 seconds)");
+  if (autosyncTimer) clearInterval(autosyncTimer);
+  
+  autosyncTimer = setInterval(async () => {
+    console.log("[SYNC] Periodic autosync running");
+    const data = {
+      plannerData,
+      scheduleData,
+      systemsData,
+      socialData,
+      allZipData,
+      allZipCustomOptions
+    };
+    const result = await DataService.saveToSupabase(data);
+    if (result) {
+      console.log("[CLOUD] Periodic autosync successful");
+    }
+    updateSyncStatusDisplay();
+  }, 60000); // 60 seconds
+}
+
+// Initialize cloud sync on app load
+function initializeCloudSync() {
+  console.log("[SYNC] Initializing cloud sync");
+  checkCloudConnection();
+  startPeriodicAutosync();
+  
+  // Update sync timestamp display every minute
+  setInterval(updateSyncStatusDisplay, 60000);
+}
+
+// Initialize when DOM is ready
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initializeCloudSync);
+} else {
+  initializeCloudSync();
 }
