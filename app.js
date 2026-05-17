@@ -2,8 +2,362 @@ console.log("Flow Planner Loaded");
 
 const main = document.querySelector("main");
 
-// DATA
-let plannerData = JSON.parse(localStorage.getItem("flowPlannerData")) || {
+// ==================== CENTRALIZED DATA SERVICE ====================
+// This service provides a single source of truth for all data operations
+// ensuring consistency across all environments (local, GitHub, Vercel, etc.)
+
+const DataService = {
+  // Storage keys - DO NOT CHANGE these to maintain backward compatibility
+  KEYS: {
+    PLANNER_DATA: "flowPlannerData",
+    SCHEDULE_DATA: "flowScheduleData",
+    SYSTEMS_DATA: "flowSystemsData",
+    SOCIAL_DATA: "flowSocialData",
+    ALL_ZIP_DATA: "flowAllZipData",
+    ALL_ZIP_CUSTOM_OPTIONS: "flowAllZipCustomOptions"
+  },
+
+  // Sync status tracking
+  syncStatus: {
+    lastSyncTime: null,
+    isCloudConnected: false,
+    syncErrors: []
+  },
+
+  // Check if Supabase is configured
+  isSupabaseConfigured() {
+    return typeof window.flowSupabaseStorage === 'object' && window.flowSupabaseStorage !== null;
+  },
+
+  // Get data from localStorage
+  get(key) {
+    try {
+      const data = localStorage.getItem(key);
+      return data ? JSON.parse(data) : null;
+    } catch (error) {
+      console.error(`Error getting data for key ${key}:`, error);
+      return null;
+    }
+  },
+
+  // Set data to localStorage
+  set(key, data) {
+    try {
+      localStorage.setItem(key, JSON.stringify(data));
+      return true;
+    } catch (error) {
+      console.error(`Error setting data for key ${key}:`, error);
+      return false;
+    }
+  },
+
+  // Remove data from localStorage
+  remove(key) {
+    try {
+      localStorage.removeItem(key);
+      return true;
+    } catch (error) {
+      console.error(`Error removing data for key ${key}:`, error);
+      return false;
+    }
+  },
+
+  // Safe merge logic - merge arrays by id, respect timestamps
+  mergeArrays(localArray, remoteArray) {
+    if (!localArray) return remoteArray || [];
+    if (!remoteArray) return localArray;
+
+    const merged = [...localArray];
+    const localIds = new Set(localArray.map(item => item.id));
+
+    remoteArray.forEach(remoteItem => {
+      if (!remoteItem.id) return;
+
+      const localIndex = merged.findIndex(item => item.id === remoteItem.id);
+      if (localIndex === -1) {
+        // Item doesn't exist locally, add it
+        merged.push(remoteItem);
+      } else {
+        // Item exists, merge based on updatedAt
+        const localItem = merged[localIndex];
+        const localTime = localItem.updatedAt || localItem.createdAt || 0;
+        const remoteTime = remoteItem.updatedAt || remoteItem.createdAt || 0;
+
+        if (remoteTime > localTime) {
+          // Remote is newer, use remote data
+          merged[localIndex] = remoteItem;
+        }
+        // If local is newer or same time, keep local data
+      }
+    });
+
+    return merged;
+  },
+
+  // Merge objects with timestamp comparison
+  mergeObjects(localObj, remoteObj) {
+    if (!localObj) return remoteObj || {};
+    if (!remoteObj) return localObj;
+
+    const localTime = localObj.updatedAt || localObj.createdAt || 0;
+    const remoteTime = remoteObj.updatedAt || remoteObj.createdAt || 0;
+
+    if (remoteTime > localTime) {
+      return remoteObj;
+    }
+    return localObj;
+  },
+
+  // Load data from Supabase and merge with local data
+  async loadFromSupabase() {
+    if (!this.isSupabaseConfigured()) {
+      console.log("Supabase not configured, using localStorage only");
+      this.syncStatus.isCloudConnected = false;
+      return null;
+    }
+
+    try {
+      const remoteData = await window.flowSupabaseStorage.loadAll?.();
+      if (!remoteData) return null;
+
+      this.syncStatus.isCloudConnected = true;
+      this.syncStatus.lastSyncTime = new Date().toISOString();
+
+      // Merge remote data with local data
+      if (remoteData.plannerData) {
+        plannerData = this.mergeObjects(plannerData, remoteData.plannerData);
+      }
+      if (remoteData.scheduleData) {
+        scheduleData.blocks = this.mergeArrays(scheduleData.blocks, remoteData.scheduleData.blocks || []);
+        scheduleData.routines = this.mergeArrays(scheduleData.routines, remoteData.scheduleData.routines || []);
+      }
+      if (remoteData.systemsData) {
+        systemsData.goals = this.mergeArrays(systemsData.goals, remoteData.systemsData.goals || []);
+        systemsData.habits = this.mergeArrays(systemsData.habits, remoteData.systemsData.habits || []);
+        systemsData.trackers = this.mergeArrays(systemsData.trackers, remoteData.systemsData.trackers || []);
+        systemsData.logs = this.mergeArrays(systemsData.logs, remoteData.systemsData.logs || []);
+        systemsData.metrics = this.mergeArrays(systemsData.metrics, remoteData.systemsData.metrics || []);
+        systemsData.objectives = this.mergeArrays(systemsData.objectives, remoteData.systemsData.objectives || []);
+      }
+      if (remoteData.socialData) {
+        socialData.friends = this.mergeArrays(socialData.friends, remoteData.socialData.friends || []);
+        socialData.hangouts = this.mergeArrays(socialData.hangouts, remoteData.socialData.hangouts || []);
+        socialData.ideas = this.mergeArrays(socialData.ideas, remoteData.socialData.ideas || []);
+      }
+
+      // Save merged data to localStorage
+      this.saveAll();
+
+      return remoteData;
+    } catch (error) {
+      console.error("Error loading from Supabase:", error);
+      this.syncStatus.syncErrors.push({ time: new Date().toISOString(), error: error.message });
+      this.syncStatus.isCloudConnected = false;
+      return null;
+    }
+  },
+
+  // Save data to Supabase
+  async saveToSupabase(data) {
+    if (!this.isSupabaseConfigured()) {
+      this.syncStatus.isCloudConnected = false;
+      return false;
+    }
+
+    try {
+      await window.flowSupabaseStorage.saveAll?.(data);
+      this.syncStatus.isCloudConnected = true;
+      this.syncStatus.lastSyncTime = new Date().toISOString();
+      this.syncStatus.syncErrors = [];
+      return true;
+    } catch (error) {
+      console.error("Error saving to Supabase:", error);
+      this.syncStatus.syncErrors.push({ time: new Date().toISOString(), error: error.message });
+      this.syncStatus.isCloudConnected = false;
+      return false;
+    }
+  },
+
+  // Get all app data at once
+  getAll() {
+    return {
+      plannerData: this.get(this.KEYS.PLANNER_DATA),
+      scheduleData: this.get(this.KEYS.SCHEDULE_DATA),
+      systemsData: this.get(this.KEYS.SYSTEMS_DATA),
+      socialData: this.get(this.KEYS.SOCIAL_DATA),
+      allZipData: this.get(this.KEYS.ALL_ZIP_DATA),
+      allZipCustomOptions: this.get(this.KEYS.ALL_ZIP_CUSTOM_OPTIONS)
+    };
+  },
+
+  // Save all data at once
+  saveAll() {
+    this.set(this.KEYS.PLANNER_DATA, plannerData);
+    this.set(this.KEYS.SCHEDULE_DATA, scheduleData);
+    this.set(this.KEYS.SYSTEMS_DATA, systemsData);
+    this.set(this.KEYS.SOCIAL_DATA, socialData);
+    this.set(this.KEYS.ALL_ZIP_DATA, allZipData);
+    this.set(this.KEYS.ALL_ZIP_CUSTOM_OPTIONS, allZipCustomOptions);
+  },
+
+  // Save planner data with Supabase sync
+  savePlannerData(data) {
+    if (this.set(this.KEYS.PLANNER_DATA, data)) {
+      this.saveToSupabase({
+        plannerData: data,
+        scheduleData,
+        systemsData,
+        socialData
+      });
+      return true;
+    }
+    return false;
+  },
+
+  // Save schedule data with Supabase sync
+  saveScheduleData(data) {
+    if (this.set(this.KEYS.SCHEDULE_DATA, data)) {
+      this.saveToSupabase({
+        plannerData,
+        scheduleData: data,
+        systemsData,
+        socialData
+      });
+      return true;
+    }
+    return false;
+  },
+
+  // Save systems data with Supabase sync
+  saveSystemsData(data) {
+    if (this.set(this.KEYS.SYSTEMS_DATA, data)) {
+      this.saveToSupabase({
+        plannerData,
+        scheduleData,
+        systemsData: data,
+        socialData
+      });
+      return true;
+    }
+    return false;
+  },
+
+  // Save social data with Supabase sync
+  saveSocialData(data) {
+    if (this.set(this.KEYS.SOCIAL_DATA, data)) {
+      this.saveToSupabase({
+        plannerData,
+        scheduleData,
+        systemsData,
+        socialData: data
+      });
+      return true;
+    }
+    return false;
+  },
+
+  // Save All Zip Data with Supabase sync
+  saveAllZipData(data) {
+    if (this.set(this.KEYS.ALL_ZIP_DATA, data)) {
+      this.saveToSupabase({
+        plannerData,
+        scheduleData,
+        systemsData,
+        socialData,
+        allZipData: data
+      });
+      return true;
+    }
+    return false;
+  },
+
+  // Save All Zip Custom Options with Supabase sync
+  saveAllZipCustomOptions(data) {
+    if (this.set(this.KEYS.ALL_ZIP_CUSTOM_OPTIONS, data)) {
+      this.saveToSupabase({
+        plannerData,
+        scheduleData,
+        systemsData,
+        socialData,
+        allZipCustomOptions: data
+      });
+      return true;
+    }
+    return false;
+  },
+
+  // Clear all data (for reset functionality)
+  clearAll() {
+    Object.values(this.KEYS).forEach(key => this.remove(key));
+    return true;
+  },
+
+  // Export all data as JSON
+  exportAllData() {
+    const data = {
+      plannerData,
+      scheduleData,
+      systemsData,
+      socialData,
+      allZipData,
+      allZipCustomOptions,
+      exportDate: new Date().toISOString(),
+      version: "1.0"
+    };
+    return JSON.stringify(data, null, 2);
+  },
+
+  // Import all data from JSON
+  importAllData(jsonString) {
+    try {
+      const data = JSON.parse(jsonString);
+      
+      // Validate data structure
+      if (!data || typeof data !== 'object') {
+        throw new Error("Invalid data format");
+      }
+
+      // Merge data with existing data using safe merge logic
+      if (data.plannerData) {
+        plannerData = this.mergeObjects(plannerData, data.plannerData);
+      }
+      if (data.scheduleData) {
+        scheduleData.blocks = this.mergeArrays(scheduleData.blocks, data.scheduleData.blocks || []);
+        scheduleData.routines = this.mergeArrays(scheduleData.routines, data.scheduleData.routines || []);
+      }
+      if (data.systemsData) {
+        systemsData.goals = this.mergeArrays(systemsData.goals, data.systemsData.goals || []);
+        systemsData.habits = this.mergeArrays(systemsData.habits, data.systemsData.habits || []);
+        systemsData.trackers = this.mergeArrays(systemsData.trackers, data.systemsData.trackers || []);
+        systemsData.logs = this.mergeArrays(systemsData.logs, data.systemsData.logs || []);
+        systemsData.metrics = this.mergeArrays(systemsData.metrics, data.systemsData.metrics || []);
+        systemsData.objectives = this.mergeArrays(systemsData.objectives, data.systemsData.objectives || []);
+      }
+      if (data.socialData) {
+        socialData.friends = this.mergeArrays(socialData.friends, data.socialData.friends || []);
+        socialData.hangouts = this.mergeArrays(socialData.hangouts, data.socialData.hangouts || []);
+        socialData.ideas = this.mergeArrays(socialData.ideas, data.socialData.ideas || []);
+      }
+      if (data.allZipData) {
+        allZipData = this.mergeArrays(allZipData, data.allZipData);
+      }
+      if (data.allZipCustomOptions) {
+        allZipCustomOptions = this.mergeObjects(allZipCustomOptions, data.allZipCustomOptions);
+      }
+
+      // Save merged data
+      this.saveAll();
+
+      return true;
+    } catch (error) {
+      console.error("Error importing data:", error);
+      return false;
+    }
+  }
+};
+
+// DATA - Initialize using DataService
+let plannerData = DataService.get(DataService.KEYS.PLANNER_DATA) || {
   plans: []
 };
 
@@ -59,10 +413,11 @@ socialData.ideas = socialData.ideas.map(idea => ({
   category: idea.category || "Cheap",
   cost: idea.cost || "",
   notes: idea.notes || "",
-  favorite: Boolean(idea.favorite)
+  favorite: Boolean(idea.favorite),
+  linkedFriendIds: Array.isArray(idea.linkedFriendIds) ? idea.linkedFriendIds : []
 }));
 
-let systemsData = JSON.parse(localStorage.getItem("flowSystemsData")) || {
+let systemsData = DataService.get(DataService.KEYS.SYSTEMS_DATA) || {
   habits: [],
   logs: [],
   trackers: [],
@@ -171,7 +526,9 @@ systemsData.habits = systemsData.habits.map(habit => ({
   completionType: habit.completionType || "checkbox", // "checkbox" or "amount"
   dailyTargetAmount: habit.dailyTargetAmount || "",
   weeklyTargetAmount: habit.weeklyTargetAmount || "",
-  autoLogToTracker: habit.autoLogToTracker !== false // default true
+  autoLogToTracker: habit.autoLogToTracker !== false, // default true
+  // System type field for backward compatibility
+  type: habit.type || "Daily"
 }));
 
 systemsData.objectives = systemsData.objectives.map(objective => ({
@@ -220,6 +577,1350 @@ function inferLegacyLogSource(log) {
   return "manual";
 }
 
+// ==================== ALL ZIP DATA - UNIFIED MASTER LOG ====================
+
+function convertToAllZipData() {
+  const unifiedRows = [];
+
+  // Helper to add row
+  const addRow = (row) => {
+    unifiedRows.push({
+      id: row.id || "",
+      date: row.date || "",
+      source: row.source || "",
+      category: row.category || "",
+      type: row.type || "",
+      name: row.name || "",
+      amount: row.amount || "",
+      unit: row.unit || "",
+      startTime: row.startTime || "",
+      endTime: row.endTime || "",
+      durationMinutes: row.durationMinutes || "",
+      status: row.status || "",
+      notes: row.notes || "",
+      linkedGoalId: row.linkedGoalId || "",
+      linkedHabitId: row.linkedHabitId || "",
+      linkedPlannerBlockId: row.linkedPlannerBlockId || "",
+      createdAt: row.createdAt || "",
+      updatedAt: row.updatedAt || ""
+    });
+  };
+
+  // Convert planner blocks
+  scheduleData.blocks.forEach(block => {
+    addRow({
+      id: block.id,
+      date: block.date || "",
+      source: "Planner",
+      category: block.category || "",
+      type: block.type || "task",
+      name: block.title || "",
+      amount: "",
+      unit: "",
+      startTime: block.startTime || "",
+      endTime: block.endTime || "",
+      durationMinutes: block.durationMinutes || "",
+      status: block.completed ? "completed" : "open",
+      notes: block.notes || "",
+      linkedGoalId: block.linkedGoalId || "",
+      linkedHabitId: block.linkedHabitId || "",
+      linkedPlannerBlockId: "",
+      createdAt: block.createdAt || "",
+      updatedAt: block.updatedAt || ""
+    });
+  });
+
+  // Convert routines
+  scheduleData.routines.forEach(routine => {
+    addRow({
+      id: routine.id,
+      date: "",
+      source: "Planner",
+      category: routine.category || "",
+      type: "routine",
+      name: routine.title || "",
+      amount: "",
+      unit: "",
+      startTime: routine.start || "",
+      endTime: routine.end || "",
+      durationMinutes: routine.durationMinutes || "",
+      status: "",
+      notes: routine.notes || "",
+      linkedGoalId: routine.linkedGoalId || "",
+      linkedHabitId: routine.linkedHabitId || "",
+      linkedPlannerBlockId: "",
+      createdAt: routine.createdAt || "",
+      updatedAt: routine.updatedAt || ""
+    });
+  });
+
+  // Convert habits
+  systemsData.habits.forEach(habit => {
+    addRow({
+      id: habit.id,
+      date: "",
+      source: "Systems",
+      category: habit.category || "",
+      type: "habit",
+      name: habit.name || "",
+      amount: habit.target || "",
+      unit: habit.unit || "",
+      startTime: "",
+      endTime: "",
+      durationMinutes: "",
+      status: habit.paused ? "paused" : "active",
+      notes: habit.notes || "",
+      linkedGoalId: habit.linkedGoalId || "",
+      linkedHabitId: "",
+      linkedPlannerBlockId: habit.linkedPlannerBlockId || "",
+      createdAt: habit.createdAt || "",
+      updatedAt: habit.updatedAt || ""
+    });
+  });
+
+  // Convert goals
+  systemsData.goals.forEach(goal => {
+    addRow({
+      id: goal.id,
+      date: goal.startDate || "",
+      source: "Systems",
+      category: goal.category || "",
+      type: "goal",
+      name: goal.name || "",
+      amount: goal.targetValue || "",
+      unit: goal.unit || "",
+      startTime: "",
+      endTime: goal.deadline || "",
+      durationMinutes: "",
+      status: goal.status || "",
+      notes: goal.notes || "",
+      linkedGoalId: "",
+      linkedHabitId: goal.linkedHabitId || "",
+      linkedPlannerBlockId: goal.linkedPlannerBlockId || "",
+      createdAt: goal.createdAt || "",
+      updatedAt: goal.updatedAt || ""
+    });
+  });
+
+  // Convert objectives
+  systemsData.objectives.forEach(objective => {
+    addRow({
+      id: objective.id,
+      date: objective.dueDate || "",
+      source: "Systems",
+      category: objective.category || "",
+      type: "objective",
+      name: objective.title || "",
+      amount: "",
+      unit: "",
+      startTime: "",
+      endTime: objective.dueTime || "",
+      durationMinutes: objective.estimatedMinutes || "",
+      status: objective.status || "",
+      notes: objective.notes || "",
+      linkedGoalId: objective.linkedGoalId || "",
+      linkedHabitId: objective.linkedHabitId || "",
+      linkedPlannerBlockId: objective.linkedPlannerBlockId || "",
+      createdAt: objective.createdAt || "",
+      updatedAt: objective.updatedAt || ""
+    });
+  });
+
+  // Convert metrics
+  systemsData.metrics.forEach(metric => {
+    addRow({
+      id: metric.id,
+      date: metric.startDate || "",
+      source: "Systems",
+      category: metric.type || "",
+      type: "metric",
+      name: metric.name || "",
+      amount: metric.currentValue || "",
+      unit: metric.unit || "",
+      startTime: "",
+      endTime: metric.deadline || "",
+      durationMinutes: "",
+      status: "",
+      notes: metric.notes || "",
+      linkedGoalId: metric.linkedGoalId || "",
+      linkedHabitId: metric.linkedHabitId || "",
+      linkedPlannerBlockId: "",
+      createdAt: metric.createdAt || "",
+      updatedAt: metric.updatedAt || ""
+    });
+  });
+
+  // Convert logs (includes study hours, body metrics, taper/recovery logs, course/license hours)
+  systemsData.logs.forEach(log => {
+    addRow({
+      id: log.id,
+      date: log.date || "",
+      source: log.logSource || "manual",
+      category: log.category || "",
+      type: log.type || "log",
+      name: log.title || "",
+      amount: log.value || "",
+      unit: log.unit || "",
+      startTime: "",
+      endTime: "",
+      durationMinutes: "",
+      status: "",
+      notes: log.notes || "",
+      linkedGoalId: log.linkedGoalId || "",
+      linkedHabitId: log.linkedHabitId || "",
+      linkedPlannerBlockId: log.linkedPlannerBlockId || "",
+      createdAt: log.createdAt || "",
+      updatedAt: log.updatedAt || ""
+    });
+  });
+
+  // Convert social hangouts
+  socialData.hangouts.forEach(hangout => {
+    addRow({
+      id: hangout.id || createId("hangout"),
+      date: hangout.date || "",
+      source: "Social",
+      category: "Social",
+      type: "hangout",
+      name: hangout.activity || "",
+      amount: hangout.cost || "",
+      unit: "",
+      startTime: hangout.time || "",
+      endTime: "",
+      durationMinutes: "",
+      status: hangout.completed ? "completed" : "planned",
+      notes: hangout.notes || "",
+      linkedGoalId: "",
+      linkedHabitId: "",
+      linkedPlannerBlockId: "",
+      createdAt: hangout.createdAt || "",
+      updatedAt: hangout.updatedAt || ""
+    });
+  });
+
+  // Convert social ideas
+  socialData.ideas.forEach(idea => {
+    addRow({
+      id: idea.id || createId("idea"),
+      date: "",
+      source: "Social",
+      category: idea.category || "",
+      type: "idea",
+      name: idea.title || "",
+      amount: idea.cost || "",
+      unit: "",
+      startTime: "",
+      endTime: "",
+      durationMinutes: "",
+      status: idea.favorite ? "favorite" : "",
+      notes: idea.notes || "",
+      linkedGoalId: "",
+      linkedHabitId: "",
+      linkedPlannerBlockId: "",
+      createdAt: idea.createdAt || "",
+      updatedAt: idea.updatedAt || ""
+    });
+  });
+
+  // Convert friends (as reference entries)
+  socialData.friends.forEach(friend => {
+    addRow({
+      id: friend.id || createId("friend"),
+      date: friend.birthday || "",
+      source: "Social",
+      category: friend.relationshipType || "",
+      type: "friend",
+      name: friend.name || "",
+      amount: "",
+      unit: "",
+      startTime: friend.lastSeen || "",
+      endTime: "",
+      durationMinutes: "",
+      status: friend.priority || "",
+      notes: friend.importantNotes || "",
+      linkedGoalId: "",
+      linkedHabitId: "",
+      linkedPlannerBlockId: "",
+      createdAt: friend.createdAt || "",
+      updatedAt: friend.updatedAt || ""
+    });
+  });
+
+  return unifiedRows;
+}
+
+function exportAllZipDataAsJSON() {
+  const data = window.filteredAllZipData || convertToAllZipData();
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `flow-planner-all-zip-data-${getTodayISO()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportAllZipDataAsCSV() {
+  const data = window.filteredAllZipData || convertToAllZipData();
+  if (data.length === 0) {
+    alert("No data to export.");
+    return;
+  }
+
+  const headers = Object.keys(data[0]);
+  const csvContent = [
+    headers.join(","),
+    ...data.map(row => headers.map(header => {
+      const value = row[header] || "";
+      const escaped = String(value).replace(/"/g, '""');
+      return `"${escaped}"`;
+    }).join(","))
+  ].join("\n");
+
+  const blob = new Blob([csvContent], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `flow-planner-all-zip-data-${getTodayISO()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importAllZipDataJSON(jsonString) {
+  try {
+    const importedRows = JSON.parse(jsonString);
+    if (!Array.isArray(importedRows)) {
+      alert("Invalid JSON format: Expected an array of rows.");
+      return;
+    }
+    mergeAllZipData(importedRows);
+    alert("Import successful!");
+  } catch (e) {
+    alert("Invalid JSON file: " + e.message);
+  }
+}
+
+function importAllZipDataCSV(csvString) {
+  try {
+    const lines = csvString.trim().split("\n");
+    if (lines.length < 2) {
+      alert("CSV file is empty or has no data rows.");
+      return;
+    }
+
+    const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+    const importedRows = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const values = parseCSVLine(lines[i]);
+      const row = {};
+      headers.forEach((header, index) => {
+        row[header] = values[index] || "";
+      });
+      importedRows.push(row);
+    }
+
+    mergeAllZipData(importedRows);
+    alert("Import successful!");
+  } catch (e) {
+    alert("Invalid CSV file: " + e.message);
+  }
+}
+
+function parseCSVLine(line) {
+  const result = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === "," && !inQuotes) {
+      result.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  result.push(current);
+  return result;
+}
+
+function mergeAllZipData(importedRows) {
+  const existingIds = new Set();
+
+  // Collect existing IDs from all data sources
+  scheduleData.blocks.forEach(b => existingIds.add(b.id));
+  scheduleData.routines.forEach(r => existingIds.add(r.id));
+  systemsData.habits.forEach(h => existingIds.add(h.id));
+  systemsData.goals.forEach(g => existingIds.add(g.id));
+  systemsData.objectives.forEach(o => existingIds.add(o.id));
+  systemsData.metrics.forEach(m => existingIds.add(m.id));
+  systemsData.logs.forEach(l => existingIds.add(l.id));
+  socialData.hangouts.forEach(h => h.id && existingIds.add(h.id));
+  socialData.ideas.forEach(i => i.id && existingIds.add(i.id));
+  socialData.friends.forEach(f => f.id && existingIds.add(f.id));
+
+  // Process imported rows
+  importedRows.forEach(row => {
+    if (!row.id || existingIds.has(row.id)) {
+      return; // Skip if no ID or already exists
+    }
+
+    switch (row.source) {
+      case "Planner":
+        if (row.type === "routine") {
+          scheduleData.routines.push({
+            id: row.id,
+            title: row.name,
+            category: row.category,
+            start: row.startTime,
+            end: row.endTime,
+            durationMinutes: row.durationMinutes,
+            notes: row.notes,
+            linkedGoalId: row.linkedGoalId,
+            linkedHabitId: row.linkedHabitId,
+            repeatDays: [],
+            dayTimes: {},
+            timesByDay: {},
+            completions: {},
+            completedDates: [],
+            streak: 0,
+            autoAdd: false,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt
+          });
+        } else {
+          scheduleData.blocks.push({
+            id: row.id,
+            title: row.name,
+            date: row.date,
+            startTime: row.startTime,
+            endTime: row.endTime,
+            durationMinutes: row.durationMinutes,
+            category: row.category,
+            type: row.type,
+            completed: row.status === "completed",
+            notes: row.notes,
+            linkedGoalId: row.linkedGoalId,
+            linkedHabitId: row.linkedHabitId,
+            linkedRoutineId: "",
+            linkedTrackerId: "",
+            linkedObjectiveId: "",
+            tasks: [],
+            trackerAutoLogMode: "none",
+            trackerLogAmount: "",
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt
+          });
+        }
+        break;
+
+      case "Systems":
+        if (row.type === "habit") {
+          systemsData.habits.push({
+            id: row.id,
+            name: row.name,
+            category: row.category,
+            frequency: "Daily",
+            targetFrequency: "Daily",
+            target: row.amount,
+            unit: row.unit,
+            linkedGoalId: row.linkedGoalId,
+            linkedTrackerId: "",
+            linkedRoutineId: "",
+            linkedPlannerBlockId: row.linkedPlannerBlockId,
+            autoLogTrackerOnComplete: false,
+            trackerLogAmount: "",
+            paused: row.status === "paused",
+            skippedDates: [],
+            completionHistory: [],
+            notes: row.notes,
+            completions: [],
+            completionType: "checkbox",
+            dailyTargetAmount: "",
+            weeklyTargetAmount: "",
+            autoLogToTracker: true,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt
+          });
+        } else if (row.type === "goal") {
+          systemsData.goals.push({
+            id: row.id,
+            name: row.name,
+            category: row.category,
+            goalType: "Increase toward target",
+            startValue: "",
+            currentValue: row.amount,
+            targetValue: row.amount,
+            unit: row.unit,
+            startDate: row.date,
+            deadline: row.endTime,
+            linkedTrackerId: "",
+            linkedHabitId: row.linkedHabitId,
+            linkedPlannerBlockId: row.linkedPlannerBlockId,
+            linkedRoutineId: "",
+            linkedObjectiveId: "",
+            recurringTarget: "",
+            milestones: [],
+            notes: row.notes,
+            resetCycle: "weekly",
+            status: row.status,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt
+          });
+        } else if (row.type === "objective") {
+          systemsData.objectives.push({
+            id: row.id,
+            title: row.name,
+            type: row.type,
+            status: row.status,
+            priority: "Medium",
+            dueDate: row.date,
+            dueTime: row.endTime,
+            estimatedMinutes: row.durationMinutes,
+            category: row.category,
+            tags: "",
+            notes: row.notes,
+            linkedPlannerBlockId: row.linkedPlannerBlockId,
+            linkedRoutineId: "",
+            linkedHabitId: row.linkedHabitId,
+            linkedTrackerId: "",
+            linkedGoalId: row.linkedGoalId,
+            trackerLogAmount: "",
+            completedDate: "",
+            completedAt: "",
+            autoCompleteFromPlanner: true,
+            autoCompleteFromHabit: true,
+            focus: false,
+            recurring: "",
+            subtasks: [],
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+            deferredCount: 0
+          });
+        } else if (row.type === "metric") {
+          systemsData.metrics.push({
+            id: row.id,
+            name: row.name,
+            type: row.category,
+            unit: row.unit,
+            startValue: "",
+            currentValue: row.amount,
+            targetValue: "",
+            startDate: row.date,
+            deadline: row.endTime,
+            linkedHabitId: row.linkedHabitId,
+            recurringTarget: "",
+            notes: row.notes,
+            entries: [],
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt
+          });
+        } else if (row.type === "log") {
+          systemsData.logs.push({
+            id: row.id,
+            title: row.name,
+            type: row.category,
+            valueType: row.category,
+            value: row.amount,
+            unit: row.unit,
+            date: row.date,
+            notes: row.notes,
+            linkedHabitId: row.linkedHabitId,
+            linkedItemType: "",
+            linkedMetricId: "",
+            linkedTrackerId: "",
+            linkedGoalId: row.linkedGoalId,
+            linkedPlannerBlockId: row.linkedPlannerBlockId,
+            linkedRoutineId: "",
+            linkedObjectiveId: "",
+            logSource: row.source,
+            plannerAutoLogKey: "",
+            inactive: false,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt
+          });
+        }
+        break;
+
+      case "Social":
+        if (row.type === "hangout") {
+          socialData.hangouts.push({
+            id: row.id,
+            activity: row.name,
+            date: row.date,
+            time: row.startTime,
+            location: row.endTime,
+            people: [],
+            cost: row.amount,
+            checklist: "",
+            moodAfter: "",
+            rating: "",
+            memories: "",
+            followUpReminder: "",
+            notes: row.notes,
+            completed: row.status === "completed",
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt
+          });
+        } else if (row.type === "idea") {
+          socialData.ideas.push({
+            id: row.id,
+            title: row.name,
+            category: row.category,
+            cost: row.amount,
+            notes: row.notes,
+            favorite: false,
+            linkedFriendIds: [],
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt
+          });
+        } else if (row.type === "friend") {
+          socialData.friends.push({
+            id: row.id,
+            name: row.name,
+            birthday: row.date,
+            phoneHandle: row.startTime,
+            favoriteFood: row.endTime,
+            giftIdeas: "",
+            importantNotes: row.notes,
+            relationshipType: row.category,
+            priority: row.status,
+            interests: "",
+            details: "",
+            notes: "",
+            favoriteActivities: "",
+            contactNotes: "",
+            lastContacted: "",
+            lastSeen: "",
+            preferredHangoutStyle: "",
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt
+          });
+        }
+        break;
+    }
+  });
+
+  // Recalculate tracker progress from imported logs
+  recalcAllTrackerCurrentsFromLogs();
+
+  // Save all data after merge
+  savePlannerData();
+  saveScheduleData();
+  saveSystemsData();
+  saveSocialData();
+  saveAllZipData();
+}
+
+function handleAllZipDataImport(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const content = e.target.result;
+    const fileExtension = file.name.split('.').pop().toLowerCase();
+
+    if (fileExtension === 'json') {
+      importAllZipDataJSON(content);
+    } else if (fileExtension === 'csv') {
+      importAllZipDataCSV(content);
+    } else {
+      alert("Unsupported file type. Please upload a JSON or CSV file.");
+    }
+
+    event.target.value = "";
+  };
+  reader.onerror = () => {
+    alert("Error reading file.");
+  };
+  reader.readAsText(file);
+}
+
+function saveAllZipData() {
+  return DataService.saveAllZipData(allZipData);
+}
+
+function saveAllZipCustomOptions() {
+  return DataService.saveAllZipCustomOptions(allZipCustomOptions);
+}
+
+// Social Data Import Functions
+function handleSocialImportFile(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      console.log("Social import file parsed:", parsed);
+      previewSocialImport(parsed);
+    } catch (error) {
+      console.error("Social import JSON parse error:", error);
+      alert("Invalid JSON file: " + error.message);
+      pendingSocialImport = null;
+      renderSocialImportPreview();
+    }
+  };
+
+  reader.onerror = () => {
+    console.error("Social import file read error");
+    alert("Could not read file.");
+  };
+
+  reader.readAsText(file);
+}
+
+function previewSocialImport(data) {
+  const social = data.socialData || data;
+
+  const normalized = {
+    friends: Array.isArray(social.friends) ? social.friends : [],
+    hangouts: Array.isArray(social.hangouts) ? social.hangouts : [],
+    ideas: Array.isArray(social.ideas) ? social.ideas : []
+  };
+
+  if (!normalized.friends.length && !normalized.hangouts.length && !normalized.ideas.length) {
+    alert("No friends, hangouts, or ideas found in this JSON.");
+    pendingSocialImport = null;
+  } else {
+    pendingSocialImport = normalized;
+  }
+
+  renderSocialImportPreview();
+}
+
+function renderSocialImportPreview() {
+  const box = document.getElementById("socialImportPreview");
+  const btn = document.getElementById("socialImportConfirmButton");
+  if (!box || !btn) return;
+
+  if (!pendingSocialImport) {
+    box.innerHTML = "<p>No import preview yet.</p>";
+    btn.disabled = true;
+    return;
+  }
+
+  box.innerHTML = `
+    <div class="summary-grid import-count-grid">
+      <div><strong>${pendingSocialImport.friends.length}</strong><span>Friends</span></div>
+      <div><strong>${pendingSocialImport.hangouts.length}</strong><span>Hangouts</span></div>
+      <div><strong>${pendingSocialImport.ideas.length}</strong><span>Ideas</span></div>
+    </div>
+  `;
+  btn.disabled = false;
+}
+
+function confirmSocialImport() {
+  if (!pendingSocialImport) {
+    alert("No data to import.");
+    return;
+  }
+
+  // Merge imported data with existing social data
+  socialData.friends = [...socialData.friends, ...pendingSocialImport.friends];
+  socialData.hangouts = [...socialData.hangouts, ...pendingSocialImport.hangouts];
+  socialData.ideas = [...socialData.ideas, ...pendingSocialImport.ideas];
+
+  saveSocialData();
+  pendingSocialImport = null;
+  renderSettings();
+  alert("Social data imported successfully.");
+}
+
+function previewSocialImportFromLocalStorage() {
+  try {
+    const stored = DataService.get(DataService.KEYS.SOCIAL_DATA);
+    if (stored) {
+      previewSocialImport(stored);
+    } else {
+      alert("No social data found in browser localStorage.");
+    }
+  } catch (error) {
+    console.error("Social import from localStorage error:", error);
+    alert("Error reading from localStorage: " + error.message);
+  }
+}
+
+function previewSocialImportFromTextarea() {
+  const textarea = document.getElementById("hangoutPlannerImportJson");
+  if (!textarea) return;
+
+  const jsonText = textarea.value.trim();
+  if (!jsonText) {
+    alert("Please paste JSON data first.");
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(jsonText);
+    console.log("Social import from textarea parsed:", parsed);
+    previewSocialImport(parsed);
+  } catch (error) {
+    console.error("Social import from textarea parse error:", error);
+    alert("Invalid JSON: " + error.message);
+  }
+}
+
+function exportCurrentSocialData() {
+  const data = {
+    friends: socialData.friends,
+    hangouts: socialData.hangouts,
+    ideas: socialData.ideas
+  };
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `flow-social-data-${getTodayISO()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function logToAllZipData(entry) {
+  const now = new Date().toISOString();
+  const row = {
+    id: entry.id || createId("zip"),
+    date: entry.date || getTodayISO(),
+    source: entry.source || "manual",
+    category: entry.category || "",
+    type: entry.type || "",
+    name: entry.name || "",
+    amount: entry.amount || "",
+    unit: entry.unit || "",
+    startTime: entry.startTime || "",
+    endTime: entry.endTime || "",
+    durationMinutes: entry.durationMinutes || "",
+    status: entry.status || "",
+    notes: entry.notes || "",
+    linkedGoalId: entry.linkedGoalId || "",
+    linkedHabitId: entry.linkedHabitId || "",
+    linkedPlannerBlockId: entry.linkedPlannerBlockId || "",
+    createdAt: entry.createdAt || now,
+    updatedAt: now
+  };
+
+  // Check if entry with same id exists and update, otherwise add new
+  const existingIndex = allZipData.findIndex(r => r.id === row.id);
+  if (existingIndex >= 0) {
+    allZipData[existingIndex] = row;
+  } else {
+    allZipData.push(row);
+  }
+
+  saveAllZipData();
+}
+
+function filterAllZipData() {
+  const categoryFilter = document.getElementById("allZipDataCategoryFilter")?.value || "All";
+  const typeFilter = document.getElementById("allZipDataTypeFilter")?.value || "All";
+  const unitFilter = document.getElementById("allZipDataUnitFilter")?.value || "All";
+  const sourceFilter = document.getElementById("allZipDataSourceFilter")?.value || "All";
+  const goalFilter = document.getElementById("allZipDataGoalFilter")?.value || "All";
+  const startDate = document.getElementById("allZipDataStartDate")?.value || "";
+  const endDate = document.getElementById("allZipDataEndDate")?.value || "";
+
+  const filtered = allZipData.filter(row => {
+    if (categoryFilter !== "All" && row.category !== categoryFilter) return false;
+    if (typeFilter !== "All" && row.type !== typeFilter) return false;
+    if (unitFilter !== "All" && row.unit !== unitFilter) return false;
+    if (sourceFilter !== "All" && row.source !== sourceFilter) return false;
+    if (goalFilter !== "All" && row.linkedGoalId !== goalFilter) return false;
+    if (startDate && row.date < startDate) return false;
+    if (endDate && row.date > endDate) return false;
+    return true;
+  });
+
+  // Update export functions to use filtered data if filters are active
+  window.filteredAllZipData = (categoryFilter !== "All" || typeFilter !== "All" || unitFilter !== "All" || sourceFilter !== "All" || goalFilter !== "All" || startDate || endDate) ? filtered : null;
+
+  // Update history display
+  renderAllZipDataHistory(filtered);
+}
+
+function addCustomCategory() {
+  const input = document.getElementById("newCategoryInput");
+  const value = input.value.trim();
+  if (!value) return;
+  if (!allZipCustomOptions.categories.includes(value)) {
+    allZipCustomOptions.categories.push(value);
+    saveAllZipCustomOptions();
+    populateAllZipDataDropdowns();
+    renderCustomOptionChips();
+  }
+  input.value = "";
+}
+
+function addCustomType() {
+  const input = document.getElementById("newTypeInput");
+  const value = input.value.trim();
+  if (!value) return;
+  if (!allZipCustomOptions.types.includes(value)) {
+    allZipCustomOptions.types.push(value);
+    saveAllZipCustomOptions();
+    populateAllZipDataDropdowns();
+    renderCustomOptionChips();
+  }
+  input.value = "";
+}
+
+function addCustomUnit() {
+  const input = document.getElementById("newUnitInput");
+  const value = input.value.trim();
+  if (!value) return;
+  if (!allZipCustomOptions.units.includes(value)) {
+    allZipCustomOptions.units.push(value);
+    saveAllZipCustomOptions();
+    populateAllZipDataDropdowns();
+    renderCustomOptionChips();
+  }
+  input.value = "";
+}
+
+function removeCustomCategory(category) {
+  allZipCustomOptions.categories = allZipCustomOptions.categories.filter(c => c !== category);
+  saveAllZipCustomOptions();
+  populateAllZipDataDropdowns();
+  renderCustomOptionChips();
+}
+
+function removeCustomType(type) {
+  allZipCustomOptions.types = allZipCustomOptions.types.filter(t => t !== type);
+  saveAllZipCustomOptions();
+  populateAllZipDataDropdowns();
+  renderCustomOptionChips();
+}
+
+function removeCustomUnit(unit) {
+  allZipCustomOptions.units = allZipCustomOptions.units.filter(u => u !== unit);
+  saveAllZipCustomOptions();
+  populateAllZipDataDropdowns();
+  renderCustomOptionChips();
+}
+
+function populateAllZipDataDropdowns() {
+  // Populate category filter
+  const categorySelect = document.getElementById("allZipDataCategoryFilter");
+  if (categorySelect) {
+    const currentValue = categorySelect.value;
+    categorySelect.innerHTML = `<option value="All">All Categories</option>` +
+      allZipCustomOptions.categories.map(cat => `<option value="${cat}">${cat}</option>`).join("");
+    categorySelect.value = currentValue || "All";
+  }
+
+  // Populate type filter
+  const typeSelect = document.getElementById("allZipDataTypeFilter");
+  if (typeSelect) {
+    const currentValue = typeSelect.value;
+    typeSelect.innerHTML = `<option value="All">All Types</option>` +
+      allZipCustomOptions.types.map(type => `<option value="${type}">${type}</option>`).join("");
+    typeSelect.value = currentValue || "All";
+  }
+
+  // Populate unit filter
+  const unitSelect = document.getElementById("allZipDataUnitFilter");
+  if (unitSelect) {
+    const currentValue = unitSelect.value;
+    unitSelect.innerHTML = `<option value="All">All Units</option>` +
+      allZipCustomOptions.units.map(unit => `<option value="${unit}">${unit}</option>`).join("");
+    unitSelect.value = currentValue || "All";
+  }
+
+  // Populate goal filter
+  const goalSelect = document.getElementById("allZipDataGoalFilter");
+  if (goalSelect) {
+    const currentValue = goalSelect.value;
+    goalSelect.innerHTML = `<option value="All">All Goals</option>` +
+      systemsData.goals.map(goal => `<option value="${goal.id}">${goal.name}</option>`).join("");
+    goalSelect.value = currentValue || "All";
+  }
+}
+
+function renderCustomOptionChips() {
+  // Render category chips
+  const categoryChips = document.getElementById("customCategoriesChips");
+  if (categoryChips) {
+    categoryChips.innerHTML = allZipCustomOptions.categories.map(cat =>
+      `<span class="chip">${escapeHTML(cat)} <button onclick="removeCustomCategory('${escapeHTML(cat)}')" class="chip-remove">×</button></span>`
+    ).join("");
+  }
+
+  // Render type chips
+  const typeChips = document.getElementById("customTypesChips");
+  if (typeChips) {
+    typeChips.innerHTML = allZipCustomOptions.types.map(type =>
+      `<span class="chip">${escapeHTML(type)} <button onclick="removeCustomType('${escapeHTML(type)}')" class="chip-remove">×</button></span>`
+    ).join("");
+  }
+
+  // Render unit chips
+  const unitChips = document.getElementById("customUnitsChips");
+  if (unitChips) {
+    unitChips.innerHTML = allZipCustomOptions.units.map(unit =>
+      `<span class="chip">${escapeHTML(unit)} <button onclick="removeCustomUnit('${escapeHTML(unit)}')" class="chip-remove">×</button></span>`
+    ).join("");
+  }
+}
+
+function renderAllZipDataHistory(data = allZipData) {
+  const container = document.getElementById("allZipDataHistory");
+  if (!container) return;
+
+  const sortedData = [...data].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  if (sortedData.length === 0) {
+    container.innerHTML = "<p>No logs to display.</p>";
+    return;
+  }
+
+  container.innerHTML = sortedData.slice(0, 50).map(row => `
+    <div class="card" style="padding: 12px;">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
+        <div>
+          <strong>${escapeHTML(row.name || "")}</strong>
+          <span style="font-size: 12px; color: var(--text-muted); margin-left: 8px;">${escapeHTML(row.type || "")}</span>
+        </div>
+        <span style="font-size: 12px; color: var(--text-muted);">${escapeHTML(row.date || "")}</span>
+      </div>
+      <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
+        ${row.source ? `Source: ${escapeHTML(row.source)}` : ""}
+        ${row.category ? ` | Category: ${escapeHTML(row.category)}` : ""}
+        ${row.amount ? ` | Amount: ${escapeHTML(row.amount)}${row.unit ? " " + escapeHTML(row.unit) : ""}` : ""}
+        ${row.status ? ` | Status: ${escapeHTML(row.status)}` : ""}
+      </div>
+      ${row.notes ? `<p style="font-size: 13px; margin-top: 6px;">${escapeHTML(row.notes)}</p>` : ""}
+    </div>
+  `).join("");
+}
+
+function calculateGoalProgressFromAllZipData(goalId) {
+  if (!goalId) return { current: 0, target: 0, percentage: 0, logs: [] };
+
+  const goal = systemsData.goals.find(g => g.id === goalId);
+  if (!goal) return { current: 0, target: 0, percentage: 0, logs: [] };
+
+  const target = Number(goal.targetValue) || 0;
+  const start = Number(goal.startValue) || 0;
+
+  // Get all logs linked to this goal
+  const goalLogs = allZipData.filter(row => row.linkedGoalId === goalId && row.amount);
+
+  let current = start;
+  goalLogs.forEach(log => {
+    const amount = Number(log.amount) || 0;
+    if (goal.goalType === "Decrease toward target") {
+      current -= amount;
+    } else {
+      current += amount;
+    }
+  });
+
+  const percentage = target > 0 ? Math.round((current / target) * 100) : 0;
+
+  return {
+    current,
+    target,
+    percentage: Math.min(percentage, 100),
+    logs: goalLogs
+  };
+}
+
+function populateGoalProgressDropdown() {
+  const select = document.getElementById("allZipDataGoalProgressSelect");
+  if (!select) return;
+
+  select.innerHTML = `<option value="">Select a goal</option>` +
+    systemsData.goals.map(goal => `<option value="${goal.id}">${escapeHTML(goal.name)}</option>`).join("");
+}
+
+function displayGoalProgressFromAllZipData() {
+  const goalId = document.getElementById("allZipDataGoalProgressSelect")?.value || "";
+  const container = document.getElementById("allZipDataGoalProgress");
+
+  if (!container) return;
+
+  if (!goalId) {
+    container.innerHTML = "<p>Select a goal to view progress.</p>";
+    return;
+  }
+
+  const progress = calculateGoalProgressFromAllZipData(goalId);
+  const goal = systemsData.goals.find(g => g.id === goalId);
+
+  container.innerHTML = `
+    <div class="tracker-progress-bar">
+      <div class="tracker-progress-fill" style="width: ${progress.percentage}%"></div>
+    </div>
+    <p class="tracker-pct">${progress.percentage}% complete</p>
+    <p><strong>${progress.current}</strong> / ${progress.target} ${goal.unit || ""}</p>
+    <p class="muted-text">${progress.logs.length} log entries linked to this goal</p>
+  `;
+}
+
+function addAllZipDataExamples() {
+  const today = getTodayISO();
+
+  // Weight loss example (body metric)
+  logToAllZipData({
+    id: "example_weight_loss_1",
+    date: getDateOffset(today, -7),
+    source: "manual",
+    category: "Body Metric",
+    type: "metric",
+    name: "Weight tracking",
+    amount: "185",
+    unit: "lbs",
+    startTime: "",
+    endTime: "",
+    durationMinutes: "",
+    status: "",
+    notes: "Starting weight measurement",
+    linkedGoalId: "",
+    linkedHabitId: "",
+    linkedPlannerBlockId: "",
+    createdAt: ""
+  });
+
+  logToAllZipData({
+    id: "example_weight_loss_2",
+    date: getDateOffset(today, -3),
+    source: "manual",
+    category: "Body Metric",
+    type: "metric",
+    name: "Weight tracking",
+    amount: "183",
+    unit: "lbs",
+    startTime: "",
+    endTime: "",
+    durationMinutes: "",
+    status: "",
+    notes: "Progress update",
+    linkedGoalId: "",
+    linkedHabitId: "",
+    linkedPlannerBlockId: "",
+    createdAt: ""
+  });
+
+  // Taper example (reduction log)
+  logToAllZipData({
+    id: "example_taper_1",
+    date: getDateOffset(today, -14),
+    source: "manual",
+    category: "Taper",
+    type: "log",
+    name: "Caffeine taper",
+    amount: "400",
+    unit: "mg",
+    startTime: "",
+    endTime: "",
+    durationMinutes: "",
+    status: "",
+    notes: "Starting caffeine intake",
+    linkedGoalId: "",
+    linkedHabitId: "",
+    linkedPlannerBlockId: "",
+    createdAt: ""
+  });
+
+  logToAllZipData({
+    id: "example_taper_2",
+    date: getDateOffset(today, -7),
+    source: "manual",
+    category: "Taper",
+    type: "log",
+    name: "Caffeine taper",
+    amount: "300",
+    unit: "mg",
+    startTime: "",
+    endTime: "",
+    durationMinutes: "",
+    status: "",
+    notes: "Reduced to 300mg",
+    linkedGoalId: "",
+    linkedHabitId: "",
+    linkedPlannerBlockId: "",
+    createdAt: ""
+  });
+
+  // ACC study hours example
+  logToAllZipData({
+    id: "example_acc_study_1",
+    date: getDateOffset(today, -5),
+    source: "manual",
+    category: "School",
+    type: "log",
+    name: "ACC study session",
+    amount: "2.5",
+    unit: "hours",
+    startTime: "09:00",
+    endTime: "11:30",
+    durationMinutes: "150",
+    status: "completed",
+    notes: "Chapter 5-7 review",
+    linkedGoalId: "",
+    linkedHabitId: "",
+    linkedPlannerBlockId: "",
+    createdAt: ""
+  });
+
+  logToAllZipData({
+    id: "example_acc_study_2",
+    date: getDateOffset(today, -2),
+    source: "manual",
+    category: "School",
+    type: "log",
+    name: "ACC study session",
+    amount: "3",
+    unit: "hours",
+    startTime: "14:00",
+    endTime: "17:00",
+    durationMinutes: "180",
+    status: "completed",
+    notes: "Practice exam",
+    linkedGoalId: "",
+    linkedHabitId: "",
+    linkedPlannerBlockId: "",
+    createdAt: ""
+  });
+
+  // Kings MMA classes example (routine)
+  logToAllZipData({
+    id: "example_mma_1",
+    date: getDateOffset(today, -6),
+    source: "Planner",
+    category: "Gym",
+    type: "routine",
+    name: "Kings MMA BJJ class",
+    amount: "",
+    unit: "",
+    startTime: "18:00",
+    endTime: "19:30",
+    durationMinutes: "90",
+    status: "completed",
+    notes: "Drills and sparring",
+    linkedGoalId: "",
+    linkedHabitId: "",
+    linkedPlannerBlockId: "",
+    createdAt: ""
+  });
+
+  logToAllZipData({
+    id: "example_mma_2",
+    date: getDateOffset(today, -3),
+    source: "Planner",
+    category: "Gym",
+    type: "routine",
+    name: "Kings MMA striking class",
+    amount: "",
+    unit: "",
+    startTime: "17:30",
+    endTime: "18:30",
+    durationMinutes: "60",
+    status: "completed",
+    notes: "Muay Thai techniques",
+    linkedGoalId: "",
+    linkedHabitId: "",
+    linkedPlannerBlockId: "",
+    createdAt: ""
+  });
+
+  // Real estate license hours example (course hours)
+  logToAllZipData({
+    id: "example_real_estate_1",
+    date: getDateOffset(today, -10),
+    source: "manual",
+    category: "Work",
+    type: "log",
+    name: "Real estate pre-license course",
+    amount: "4",
+    unit: "hours",
+    startTime: "09:00",
+    endTime: "13:00",
+    durationMinutes: "240",
+    status: "completed",
+    notes: "Module 1: Property law",
+    linkedGoalId: "",
+    linkedHabitId: "",
+    linkedPlannerBlockId: "",
+    createdAt: ""
+  });
+
+  logToAllZipData({
+    id: "example_real_estate_2",
+    date: getDateOffset(today, -4),
+    source: "manual",
+    category: "Work",
+    type: "log",
+    name: "Real estate pre-license course",
+    amount: "3.5",
+    unit: "hours",
+    startTime: "10:00",
+    endTime: "13:30",
+    durationMinutes: "210",
+    status: "completed",
+    notes: "Module 2: Contracts",
+    linkedGoalId: "",
+    linkedHabitId: "",
+    linkedPlannerBlockId: "",
+    createdAt: ""
+  });
+
+  // Social/hangout logs example
+  logToAllZipData({
+    id: "example_social_1",
+    date: getDateOffset(today, -8),
+    source: "Social",
+    category: "Social",
+    type: "hangout",
+    name: "Dinner with Alex",
+    amount: "45",
+    unit: "dollars",
+    startTime: "19:00",
+    endTime: "21:00",
+    durationMinutes: "120",
+    status: "completed",
+    notes: "Italian restaurant downtown",
+    linkedGoalId: "",
+    linkedHabitId: "",
+    linkedPlannerBlockId: "",
+    createdAt: ""
+  });
+
+  logToAllZipData({
+    id: "example_social_2",
+    date: getDateOffset(today, -1),
+    source: "Social",
+    category: "Social",
+    type: "hangout",
+    name: "Coffee with Sarah",
+    amount: "8",
+    unit: "dollars",
+    startTime: "10:00",
+    endTime: "11:30",
+    durationMinutes: "90",
+    status: "completed",
+    notes: "Catching up on life updates",
+    linkedGoalId: "",
+    linkedHabitId: "",
+    linkedPlannerBlockId: "",
+    createdAt: ""
+  });
+
+  alert("Example data added to All Zip Data!");
+}
+
 systemsData.logs = systemsData.logs.map(log => ({
   id: log.id || createId("log"),
   title: log.title || "",
@@ -246,8 +1947,32 @@ migrateSystemsToUnifiedTrackers();
 
 systemsData.trackers = systemsData.trackers.map(normalizeUnifiedTrackerRecord);
 
-let scheduleData = JSON.parse(localStorage.getItem("flowScheduleData")) || {
+let scheduleData = DataService.get(DataService.KEYS.SCHEDULE_DATA) || {
   blocks: []
+};
+
+// All Zip Data - Unified Master Log for real-time tracking
+let allZipData = DataService.get(DataService.KEYS.ALL_ZIP_DATA) || [];
+
+// Custom options for All Zip Data filters
+let allZipCustomOptions = DataService.get(DataService.KEYS.ALL_ZIP_CUSTOM_OPTIONS) || {
+  categories: [],
+  habitTypes: [],
+  trackerTypes: [],
+  objectiveTypes: [],
+  activityTypes: [],
+  socialTypes: [],
+  units: [],
+  removedDefaults: {
+    categories: [],
+    types: [],
+    habitTypes: [],
+    trackerTypes: [],
+    objectiveTypes: [],
+    activityTypes: [],
+    socialTypes: [],
+    units: []
+  }
 };
 
 if (!Array.isArray(scheduleData.blocks)) {
@@ -256,6 +1981,558 @@ if (!Array.isArray(scheduleData.blocks)) {
 
 if (!Array.isArray(scheduleData.routines)) {
   scheduleData.routines = [];
+}
+
+// Helper functions for Categories, Types, and Units
+const DEFAULT_CATEGORIES = ["School", "Work", "Gym", "Social", "Personal", "Errand", "Custom"];
+const DEFAULT_UNITS = ["hours", "hrs", "minutes", "min", "dollars", "$", "lbs", "oz", "grams", "g", "kg", "miles", "km", "reps", "sets"];
+
+// System-specific types
+const DEFAULT_HABIT_TYPES = ["Daily", "Weekly", "Routine", "Wellness", "Recovery", "Discipline", "Custom"];
+const DEFAULT_TRACKER_TYPES = ["Progress", "Metric", "Taper", "Finance"];
+const DEFAULT_OBJECTIVE_TYPES = ["Task", "Deadline", "Reminder", "Errand", "Follow-up"];
+const DEFAULT_ACTIVITY_TYPES = ["Manual", "Habit completion", "Tracker update", "Objective completion", "Planner completion", "Imported"];
+const DEFAULT_SOCIAL_TYPES = ["Friend", "Hangout", "Group", "Family", "Networking", "Relationship"];
+
+// Legacy default types (for compatibility)
+const DEFAULT_TYPES = ["task", "routine", "habit", "goal", "objective", "metric", "log", "hangout", "idea", "friend"];
+
+function getAllCategories() {
+  const custom = allZipCustomOptions?.categories || [];
+  const removed = allZipCustomOptions?.removedDefaults?.categories || [];
+  const seen = new Set();
+  
+  return [...DEFAULT_CATEGORIES, ...custom].filter(c => {
+    const trimmed = String(c).trim();
+    if (!trimmed) return false;
+    if (removed.map(x => x.toLowerCase()).includes(trimmed.toLowerCase())) return false;
+    if (seen.has(trimmed.toLowerCase())) return false;
+    seen.add(trimmed.toLowerCase());
+    return true;
+  });
+}
+
+function getAllTypes() {
+  const custom = allZipCustomOptions?.types || [];
+  const removed = allZipCustomOptions?.removedDefaults?.types || [];
+  const seen = new Set();
+  
+  return [...DEFAULT_TYPES, ...custom].filter(t => {
+    const trimmed = String(t).trim();
+    if (!trimmed) return false;
+    if (removed.map(x => x.toLowerCase()).includes(trimmed.toLowerCase())) return false;
+    if (seen.has(trimmed.toLowerCase())) return false;
+    seen.add(trimmed.toLowerCase());
+    return true;
+  });
+}
+
+// System-specific type helper functions
+function getHabitTypes() {
+  const custom = allZipCustomOptions?.habitTypes || [];
+  const removed = allZipCustomOptions?.removedDefaults?.habitTypes || [];
+  const seen = new Set();
+  
+  return [...DEFAULT_HABIT_TYPES, ...custom].filter(t => {
+    const trimmed = String(t).trim();
+    if (!trimmed) return false;
+    if (removed.map(x => x.toLowerCase()).includes(trimmed.toLowerCase())) return false;
+    if (seen.has(trimmed.toLowerCase())) return false;
+    seen.add(trimmed.toLowerCase());
+    return true;
+  });
+}
+
+function renderHabitTypeOptions(selected = "") {
+  return getHabitTypes().map(type =>
+    `<option value="${escapeHTML(type)}" ${type === selected ? "selected" : ""}>${escapeHTML(type)}</option>`
+  ).join("");
+}
+
+function getTrackerTypes() {
+  const custom = allZipCustomOptions?.trackerTypes || [];
+  const removed = allZipCustomOptions?.removedDefaults?.trackerTypes || [];
+  const seen = new Set();
+  
+  return [...DEFAULT_TRACKER_TYPES, ...custom].filter(t => {
+    const trimmed = String(t).trim();
+    if (!trimmed) return false;
+    if (removed.map(x => x.toLowerCase()).includes(trimmed.toLowerCase())) return false;
+    if (seen.has(trimmed.toLowerCase())) return false;
+    seen.add(trimmed.toLowerCase());
+    return true;
+  });
+}
+
+function getObjectiveTypes() {
+  const custom = allZipCustomOptions?.objectiveTypes || [];
+  const removed = allZipCustomOptions?.removedDefaults?.objectiveTypes || [];
+  const seen = new Set();
+  
+  return [...DEFAULT_OBJECTIVE_TYPES, ...custom].filter(t => {
+    const trimmed = String(t).trim();
+    if (!trimmed) return false;
+    if (removed.map(x => x.toLowerCase()).includes(trimmed.toLowerCase())) return false;
+    if (seen.has(trimmed.toLowerCase())) return false;
+    seen.add(trimmed.toLowerCase());
+    return true;
+  });
+}
+
+function getActivityTypes() {
+  const custom = allZipCustomOptions?.activityTypes || [];
+  const removed = allZipCustomOptions?.removedDefaults?.activityTypes || [];
+  const seen = new Set();
+  
+  return [...DEFAULT_ACTIVITY_TYPES, ...custom].filter(t => {
+    const trimmed = String(t).trim();
+    if (!trimmed) return false;
+    if (removed.map(x => x.toLowerCase()).includes(trimmed.toLowerCase())) return false;
+    if (seen.has(trimmed.toLowerCase())) return false;
+    seen.add(trimmed.toLowerCase());
+    return true;
+  });
+}
+
+function getSocialTypes() {
+  const custom = allZipCustomOptions?.socialTypes || [];
+  const removed = allZipCustomOptions?.removedDefaults?.socialTypes || [];
+  const seen = new Set();
+  
+  return [...DEFAULT_SOCIAL_TYPES, ...custom].filter(t => {
+    const trimmed = String(t).trim();
+    if (!trimmed) return false;
+    if (removed.map(x => x.toLowerCase()).includes(trimmed.toLowerCase())) return false;
+    if (seen.has(trimmed.toLowerCase())) return false;
+    seen.add(trimmed.toLowerCase());
+    return true;
+  });
+}
+
+function getAllUnits() {
+  const custom = allZipCustomOptions?.units || [];
+  const removed = allZipCustomOptions?.removedDefaults?.units || [];
+  const seen = new Set();
+  
+  return [...DEFAULT_UNITS, ...custom].filter(u => {
+    const trimmed = String(u).trim();
+    if (!trimmed) return false;
+    if (removed.map(x => x.toLowerCase()).includes(trimmed.toLowerCase())) return false;
+    if (seen.has(trimmed.toLowerCase())) return false;
+    seen.add(trimmed.toLowerCase());
+    return true;
+  });
+}
+
+function renderCategoryOptions(selected = "") {
+  return getAllCategories().map(c => `<option value="${escapeHTML(c)}" ${c === selected ? "selected" : ""}>${escapeHTML(c)}</option>`).join("");
+}
+
+function renderTypeOptions(selected = "", systemType = null) {
+  return getAllTypes(systemType).map(t => `<option value="${escapeHTML(t)}" ${t === selected ? "selected" : ""}>${escapeHTML(t)}</option>`).join("");
+}
+
+function renderUnitOptions(selected = "") {
+  return getAllUnits().map(u => `<option value="${escapeHTML(u)}" ${u === selected ? "selected" : ""}>${escapeHTML(u)}</option>`).join("");
+}
+
+function saveAllZipCustomOptions() {
+  DataService.set(DataService.KEYS.ALL_ZIP_CUSTOM_OPTIONS, allZipCustomOptions);
+}
+
+// Render options lists in Settings
+function renderOptionsLists() {
+  renderSelectedOptionGroup();
+}
+
+function renderSelectedOptionGroup() {
+  const type = document.getElementById("optionGroupSelector")?.value || "category";
+  const box = document.getElementById("optionsList");
+  if (!box) return;
+  
+  let allOptions, defaults, storageKey;
+  if (type === 'category') {
+    allOptions = getAllCategories();
+    defaults = DEFAULT_CATEGORIES;
+    storageKey = 'categories';
+  } else if (type === 'habitTypes') {
+    allOptions = getHabitTypes();
+    defaults = DEFAULT_HABIT_TYPES;
+    storageKey = 'habitTypes';
+  } else if (type === 'trackerTypes') {
+    allOptions = getTrackerTypes();
+    defaults = DEFAULT_TRACKER_TYPES;
+    storageKey = 'trackerTypes';
+  } else if (type === 'objectiveTypes') {
+    allOptions = getObjectiveTypes();
+    defaults = DEFAULT_OBJECTIVE_TYPES;
+    storageKey = 'objectiveTypes';
+  } else if (type === 'activityTypes') {
+    allOptions = getActivityTypes();
+    defaults = DEFAULT_ACTIVITY_TYPES;
+    storageKey = 'activityTypes';
+  } else if (type === 'socialTypes') {
+    allOptions = getSocialTypes();
+    defaults = DEFAULT_SOCIAL_TYPES;
+    storageKey = 'socialTypes';
+  } else {
+    allOptions = getAllUnits();
+    defaults = DEFAULT_UNITS;
+    storageKey = 'units';
+  }
+  
+  const searchTerm = document.getElementById("optionSearchInput")?.value?.toLowerCase() || "";
+  
+  const filteredOptions = allOptions.filter(opt => 
+    opt.toLowerCase().includes(searchTerm)
+  );
+  
+  box.innerHTML = filteredOptions.map(option => {
+    const isDefault = defaults.includes(option);
+    return `
+      <div class="option-row ${isDefault ? 'is-default' : ''}" data-option="${escapeHTML(option)}">
+        <span class="option-row-name">${escapeHTML(option)}</span>
+        <div class="option-row-actions">
+          <button onclick="startEditOption('${escapeHTML(option)}')">Edit</button>
+          <button class="delete-option-btn" onclick="deleteOptionFromManager('${escapeHTML(option)}')">Delete</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+// Add custom option from manager
+function addCustomOptionFromManager() {
+  const type = document.getElementById("optionGroupSelector")?.value || "category";
+  const input = document.getElementById("newOptionInput");
+  const value = input?.value?.trim();
+  
+  if (!value) {
+    alert("Please enter a value");
+    return;
+  }
+  
+  let arrayName, allOptions;
+  if (type === 'category') {
+    arrayName = 'categories';
+    allOptions = getAllCategories();
+  } else if (type === 'habitTypes') {
+    arrayName = 'habitTypes';
+    allOptions = getHabitTypes();
+  } else if (type === 'trackerTypes') {
+    arrayName = 'trackerTypes';
+    allOptions = getTrackerTypes();
+  } else if (type === 'objectiveTypes') {
+    arrayName = 'objectiveTypes';
+    allOptions = getObjectiveTypes();
+  } else if (type === 'activityTypes') {
+    arrayName = 'activityTypes';
+    allOptions = getActivityTypes();
+  } else if (type === 'socialTypes') {
+    arrayName = 'socialTypes';
+    allOptions = getSocialTypes();
+  } else {
+    arrayName = 'units';
+    allOptions = getAllUnits();
+  }
+  
+  if (allOptions.map(o => o.toLowerCase()).includes(value.toLowerCase())) {
+    alert("This option already exists");
+    return;
+  }
+  
+  if (!allZipCustomOptions[arrayName]) {
+    allZipCustomOptions[arrayName] = [];
+  }
+  
+  allZipCustomOptions[arrayName].push(value);
+  saveAllZipCustomOptions();
+  
+  if (input) input.value = "";
+  renderSelectedOptionGroup();
+}
+
+// Start editing option
+function startEditOption(option) {
+  const type = document.getElementById("optionGroupSelector")?.value || "category";
+  const row = document.querySelector(`.option-row[data-option="${escapeHTML(option)}"]`);
+  if (!row) return;
+  
+  row.innerHTML = `
+    <div class="option-row-edit">
+      <input id="editOptionInput" value="${escapeHTML(option)}" placeholder="New name">
+      <button onclick="saveEditOption('${escapeHTML(option)}')">Save</button>
+      <button class="secondary-btn" onclick="renderSelectedOptionGroup()">Cancel</button>
+    </div>
+  `;
+  
+  const editInput = document.getElementById("editOptionInput");
+  if (editInput) {
+    editInput.focus();
+    editInput.select();
+  }
+}
+
+// Save edited option
+function saveEditOption(oldValue) {
+  const type = document.getElementById("optionGroupSelector")?.value || "category";
+  const input = document.getElementById("editOptionInput");
+  const newValue = input?.value?.trim();
+  
+  if (!newValue || newValue === "") {
+    alert("Please enter a value");
+    return;
+  }
+  
+  if (newValue.toLowerCase() === oldValue.toLowerCase()) {
+    renderSelectedOptionGroup();
+    return;
+  }
+  
+  const arrayName = type === 'category' ? 'categories' : type === 'type' ? 'types' : 'units';
+  const allOptions = type === 'category' ? getAllCategories() : type === 'type' ? getAllTypes() : getAllUnits();
+  
+  if (allOptions.map(o => o.toLowerCase()).includes(newValue.toLowerCase())) {
+    alert("This option already exists");
+    return;
+  }
+  
+  // Update in allZipCustomOptions if it's a custom option
+  if (allZipCustomOptions[arrayName]) {
+    const idx = allZipCustomOptions[arrayName].indexOf(oldValue);
+    if (idx !== -1) {
+      allZipCustomOptions[arrayName][idx] = newValue;
+    }
+  }
+  
+  // Update existing records
+  updateRecordsWithOption(type, oldValue, newValue);
+  
+  saveAllZipCustomOptions();
+  saveSystemsData();
+  saveScheduleData();
+  saveAllZipData();
+  
+  renderSelectedOptionGroup();
+  refreshOpenForms();
+}
+
+// Delete option from manager
+function deleteOptionFromManager(value) {
+  const type = document.getElementById("optionGroupSelector")?.value || "category";
+  
+  // Check if currently editing this specific option
+  const row = document.querySelector(`.option-row[data-option="${escapeHTML(value)}"]`);
+  if (row && row.querySelector('.option-row-edit')) {
+    alert("Please cancel or save the current edit before deleting.");
+    return;
+  }
+  
+  if (!confirm(`Delete "${value}" from dropdown options? Existing records using this option will keep their value.`)) {
+    return;
+  }
+  
+  const arrayName = type === 'category' ? 'categories' : type === 'type' ? 'types' : 'units';
+  const defaults = type === 'category' ? DEFAULT_CATEGORIES : type === 'type' ? DEFAULT_TYPES : DEFAULT_UNITS;
+  
+  // Remove from custom options
+  if (allZipCustomOptions[arrayName]) {
+    const idx = allZipCustomOptions[arrayName].indexOf(value);
+    if (idx !== -1) {
+      allZipCustomOptions[arrayName].splice(idx, 1);
+    }
+  }
+  
+  // If it's a default, track it as removed
+  if (!allZipCustomOptions.removedDefaults) {
+    allZipCustomOptions.removedDefaults = { categories: [], types: [], units: [] };
+  }
+  
+  if (defaults.includes(value)) {
+    const removedArrayName = type === 'category' ? 'categories' : type === 'type' ? 'types' : 'units';
+    if (!allZipCustomOptions.removedDefaults[removedArrayName].includes(value)) {
+      allZipCustomOptions.removedDefaults[removedArrayName].push(value);
+    }
+  }
+  
+  saveAllZipCustomOptions();
+  renderSelectedOptionGroup();
+}
+
+// Reset to defaults from manager
+function resetOptionsToDefaultsFromManager() {
+  const type = document.getElementById("optionGroupSelector")?.value || "category";
+  if (!confirm(`Reset ${type}s to defaults? This will restore all default options and remove all custom ${type}s.`)) {
+    return;
+  }
+  
+  let arrayName, removedArrayName;
+  if (type === 'category') {
+    arrayName = 'categories';
+    removedArrayName = 'categories';
+  } else if (type === 'habitTypes') {
+    arrayName = 'habitTypes';
+    removedArrayName = 'habitTypes';
+  } else if (type === 'trackerTypes') {
+    arrayName = 'trackerTypes';
+    removedArrayName = 'trackerTypes';
+  } else if (type === 'objectiveTypes') {
+    arrayName = 'objectiveTypes';
+    removedArrayName = 'objectiveTypes';
+  } else if (type === 'activityTypes') {
+    arrayName = 'activityTypes';
+    removedArrayName = 'activityTypes';
+  } else if (type === 'socialTypes') {
+    arrayName = 'socialTypes';
+    removedArrayName = 'socialTypes';
+  } else {
+    arrayName = 'units';
+    removedArrayName = 'units';
+  }
+  
+  allZipCustomOptions[arrayName] = [];
+  
+  // Also clear removed defaults to restore them
+  if (!allZipCustomOptions.removedDefaults) {
+    allZipCustomOptions.removedDefaults = { 
+      categories: [], 
+      types: [], 
+      habitTypes: [],
+      trackerTypes: [],
+      objectiveTypes: [],
+      activityTypes: [],
+      socialTypes: [],
+      units: [] 
+    };
+  }
+  allZipCustomOptions.removedDefaults[removedArrayName] = [];
+  
+  saveAllZipCustomOptions();
+  renderSelectedOptionGroup();
+}
+
+// Update records when option is renamed
+function updateRecordsWithOption(type, oldValue, newValue) {
+  if (type === 'category') {
+    // Update planner blocks
+    scheduleData.blocks.forEach(block => {
+      if (block.category === oldValue) block.category = newValue;
+    });
+    
+    // Update habits
+    systemsData.habits.forEach(habit => {
+      if (habit.category === oldValue) habit.category = newValue;
+    });
+    
+    // Update trackers
+    systemsData.trackers.forEach(tracker => {
+      if (tracker.category === oldValue) tracker.category = newValue;
+    });
+    
+    // Update goals
+    systemsData.goals.forEach(goal => {
+      if (goal.category === oldValue) goal.category = newValue;
+    });
+    
+    // Update objectives
+    systemsData.objectives.forEach(objective => {
+      if (objective.category === oldValue) objective.category = newValue;
+    });
+    
+    // Update logs
+    systemsData.logs.forEach(log => {
+      if (log.category === oldValue) log.category = newValue;
+    });
+    
+    // Update allZipData
+    allZipData.forEach(item => {
+      if (item.category === oldValue) item.category = newValue;
+    });
+  } else if (type === 'habitTypes') {
+    // Update habits
+    systemsData.habits.forEach(habit => {
+      if (habit.type === oldValue) habit.type = newValue;
+    });
+  } else if (type === 'trackerTypes') {
+    // Update trackers
+    systemsData.trackers.forEach(tracker => {
+      if (tracker.type === oldValue) tracker.type = newValue;
+    });
+  } else if (type === 'objectiveTypes') {
+    // Update objectives
+    systemsData.objectives.forEach(objective => {
+      if (objective.type === oldValue) objective.type = newValue;
+    });
+  } else if (type === 'activityTypes') {
+    // Update logs
+    systemsData.logs.forEach(log => {
+      if (log.type === oldValue) log.type = newValue;
+    });
+  } else if (type === 'socialTypes') {
+    // Update friends
+    if (socialData && socialData.friends) {
+      socialData.friends.forEach(friend => {
+        if (friend.type === oldValue) friend.type = newValue;
+      });
+    }
+  } else if (type === 'unit') {
+    // Update trackers
+    systemsData.trackers.forEach(tracker => {
+      if (tracker.unit === oldValue) tracker.unit = newValue;
+    });
+    
+    // Update habits
+    systemsData.habits.forEach(habit => {
+      if (habit.unit === oldValue) habit.unit = newValue;
+    });
+    
+    // Update goals
+    systemsData.goals.forEach(goal => {
+      if (goal.unit === oldValue) goal.unit = newValue;
+    });
+    
+    // Update logs
+    systemsData.logs.forEach(log => {
+      if (log.unit === oldValue) log.unit = newValue;
+    });
+    
+    // Update allZipData
+    allZipData.forEach(item => {
+      if (item.unit === oldValue) item.unit = newValue;
+    });
+  }
+}
+
+// Delete option
+function deleteOption(type, value) {
+  if (!confirm(`Delete "${value}" from ${type}s? This will only remove it from the dropdown options. Existing records using this option will keep their value.`)) {
+    return;
+  }
+  
+  const arrayName = type === 'category' ? 'categories' : type === 'type' ? 'types' : 'units';
+  
+  if (allZipCustomOptions[arrayName]) {
+    const idx = allZipCustomOptions[arrayName].indexOf(value);
+    if (idx !== -1) {
+      allZipCustomOptions[arrayName].splice(idx, 1);
+    }
+  }
+  
+  saveAllZipCustomOptions();
+  renderOptionsLists();
+}
+
+// Reset to defaults
+function resetOptionsToDefaults(type) {
+  if (!confirm(`Reset ${type}s to defaults? This will remove all custom ${type}s.`)) {
+    return;
+  }
+  
+  const arrayName = type === 'category' ? 'categories' : type === 'type' ? 'types' : 'units';
+  allZipCustomOptions[arrayName] = [];
+  
+  saveAllZipCustomOptions();
+  renderOptionsLists();
 }
 
 if (typeof scheduleData.bufferMinutes !== "number") {
@@ -307,11 +2584,6 @@ scheduleData.routines.forEach(routine => {
 
 collectExistingUnitsIntoSettings();
 
-function saveScheduleData() {
-  localStorage.setItem("flowScheduleData", JSON.stringify(scheduleData));
-  syncSupabaseData();
-}
-
 let editingPlanIndex = null;
 let editingFriendIndex = null;
 let editingHangoutIndex = null;
@@ -323,6 +2595,20 @@ let editingTrackerIndex = null;
 let editingGoalIndex = null;
 let editingObjectiveIndex = null;
 let openBlockActionMenuIndex = null;
+
+// Computed editing trackers
+const editingTracker = () => {
+  if (editingTrackerIndex === null || editingTrackerIndex < 0) return null;
+  return systemsData.trackers[editingTrackerIndex];
+};
+const editingHabit = () => {
+  if (editingHabitIndex === null || editingHabitIndex < 0) return null;
+  return systemsData.habits[editingHabitIndex];
+};
+const editingObjective = () => {
+  if (editingObjectiveIndex === null || editingObjectiveIndex < 0) return null;
+  return systemsData.objectives[editingObjectiveIndex];
+};
 
 // History section state
 let historyFilter = "All";
@@ -350,21 +2636,149 @@ let plannerWeekStart = getStartOfWeekISO(getTodayISO());
 let plannerWeekEnd = getDateOffset(plannerWeekStart, 6);
 let pendingSocialImport = null;
 let habitCompleteModalIndex = null;
+let manageOptionsOpen = false;
 
-// SAVE
+// SAVE - All save functions now use centralized DataService
 function savePlannerData() {
-  localStorage.setItem("flowPlannerData", JSON.stringify(plannerData));
-  syncSupabaseData();
+  return DataService.savePlannerData(plannerData);
 }
 
 function saveSocialData() {
-  localStorage.setItem("flowSocialData", JSON.stringify(socialData));
-  syncSupabaseData();
+  return DataService.saveSocialData(socialData);
 }
 
 function saveSystemsData() {
-  localStorage.setItem("flowSystemsData", JSON.stringify(systemsData));
-  syncSupabaseData();
+  return DataService.saveSystemsData(systemsData);
+}
+
+function saveScheduleData() {
+  return DataService.saveScheduleData(scheduleData);
+}
+
+// CLEAR - All clear functions now use centralized DataService
+function clearPlanner() {
+  if (confirm("Are you sure you want to clear all Planner data? This cannot be undone.")) {
+    DataService.remove(DataService.KEYS.PLANNER_DATA);
+    plannerData = { plans: [] };
+    location.reload();
+  }
+}
+
+function clearSystems() {
+  if (confirm("Are you sure you want to clear all Systems data? This cannot be undone.")) {
+    DataService.remove(DataService.KEYS.SYSTEMS_DATA);
+    systemsData = {
+      habits: [],
+      logs: [],
+      trackers: [],
+      goals: [],
+      metrics: [],
+      objectives: [],
+      savedTrackerCategories: [],
+      savedTrackerUnits: [],
+      unitSortMode: "defaults"
+    };
+    editingHabitIndex = null;
+    editingTrackerIndex = null;
+    editingGoalIndex = null;
+    editingObjectiveIndex = null;
+    editingMetricIndex = null;
+    editingLogIndex = null;
+    activeSystemsForm = null;
+    systemsAddMenuOpen = false;
+    location.reload();
+  }
+}
+
+function clearSocial() {
+  if (confirm("Are you sure you want to clear all Social data? This cannot be undone.")) {
+    DataService.remove(DataService.KEYS.SOCIAL_DATA);
+    socialData = { friends: [], hangouts: [], ideas: [] };
+    location.reload();
+  }
+}
+
+// SYNC STATUS DISPLAY
+function updateSyncStatusDisplay() {
+  const localStorageStatus = document.getElementById("localStorageStatus");
+  const cloudStatus = document.getElementById("cloudStatus");
+  const lastSyncTime = document.getElementById("lastSyncTime");
+
+  if (localStorageStatus) {
+    localStorageStatus.textContent = "Active ✓";
+  }
+
+  if (cloudStatus) {
+    cloudStatus.textContent = DataService.syncStatus.isCloudConnected ? "Connected ✓" : "Not Connected";
+  }
+
+  if (lastSyncTime) {
+    if (DataService.syncStatus.lastSyncTime) {
+      const syncDate = new Date(DataService.syncStatus.lastSyncTime);
+      lastSyncTime.textContent = syncDate.toLocaleString();
+    } else {
+      lastSyncTime.textContent = "Never";
+    }
+  }
+}
+
+async function forceSyncFromCloud() {
+  const result = await DataService.loadFromSupabase();
+  if (result) {
+    alert("Sync from cloud successful!");
+    updateSyncStatusDisplay();
+    location.reload();
+  } else {
+    alert("Sync from cloud failed or Supabase not configured.");
+  }
+}
+
+async function forceSyncToCloud() {
+  const data = {
+    plannerData,
+    scheduleData,
+    systemsData,
+    socialData,
+    allZipData,
+    allZipCustomOptions
+  };
+  const result = await DataService.saveToSupabase(data);
+  if (result) {
+    alert("Sync to cloud successful!");
+    updateSyncStatusDisplay();
+  } else {
+    alert("Sync to cloud failed or Supabase not configured.");
+  }
+}
+
+// EXPORT/IMPORT FUNCTIONS
+function downloadFullBackup() {
+  const json = DataService.exportAllData();
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `flow-planner-backup-${getTodayISO()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importAllData() {
+  const textarea = document.getElementById("allDataImportJson");
+  const jsonString = textarea.value.trim();
+  if (!jsonString) {
+    alert("Please paste a backup JSON to import.");
+    return;
+  }
+
+  const success = DataService.importAllData(jsonString);
+  if (success) {
+    alert("Import successful! Data has been merged with existing data.");
+    textarea.value = "";
+    location.reload();
+  } else {
+    alert("Import failed. Please check the JSON format.");
+  }
 }
 
 function getPlannerBlockHabitId(block) {
@@ -411,7 +2825,7 @@ function renderConnectionBadges(links = {}) {
 }
 
 function syncSupabaseData() {
-  window.flowSupabaseStorage?.saveAll?.({
+  DataService.saveToSupabase({
     plannerData,
     scheduleData,
     systemsData,
@@ -633,27 +3047,36 @@ const pages = {
       <div>
         <p class="eyebrow">Systems</p>
         <h2>Systems</h2>
-        <p class="muted-text">One place for habits, trackers, logs, milestones, and planner-linked progress.</p>
+        <p class="muted-text">A connected Life OS for habits, trackers, goals, objectives, and activity logs.</p>
+        <div class="systems-architecture-info">
+          <p class="muted-text small"><strong>Habits</strong> → Recurring behaviors with streaks and consistency</p>
+          <p class="muted-text small"><strong>Trackers</strong> → Measure data over time with trends and aggregations</p>
+          <p class="muted-text small"><strong>Goals</strong> → Desired outcomes using trackers/habits to measure progress</p>
+          <p class="muted-text small"><strong>Objectives</strong> → One-time actionable tasks with due dates</p>
+          <p class="muted-text small"><strong>Activity</strong> → Historical entries feeding trackers and analytics</p>
+        </div>
       </div>
       <button onclick="openSystemsAddMenu()">+ Add</button>
     </div>
     ${activeSystemsSection === "Overview" ? `
-      <div class="systems-dashboard-grid">
-        <div class="card wide-card">
-          <h3>Systems Dashboard</h3>
-          <div id="systemsDashboard"></div>
+      <div class="systems-overview-layout">
+        <div class="overview-left-column">
+          <div class="card category-cards-card">
+            <h3>Systems Dashboard</h3>
+            <div id="systemsDashboard"></div>
+          </div>
         </div>
-        <div class="card">
-          <h3>Today Habits</h3>
-          <div id="habitsList"></div>
+        <div class="overview-center-column">
+          <div class="card today-habits-card">
+            <h3>Today Habits</h3>
+            <div id="habitsList"></div>
+          </div>
         </div>
-        <div class="card">
-          <h3>Activity Feed</h3>
-          <div id="activityFeed"></div>
-        </div>
-        <div class="card wide-card">
-          <h3>Tracker Forecasts</h3>
-          <div id="trackersUnifiedList"></div>
+        <div class="overview-right-column">
+          <div class="card activity-feed-card">
+            <h3>Activity Feed</h3>
+            <div id="activityFeed"></div>
+          </div>
         </div>
       </div>
     ` : ""}
@@ -661,7 +3084,7 @@ const pages = {
       <div class="section-toolbar card">
         <div>
           <h3>Habits</h3>
-          <p class="muted-text">Track streaks, completion rate, skips, and category consistency.</p>
+          <p class="muted-text">Recurring behaviors. Track streaks, consistency, and frequency.</p>
         </div>
         <button onclick="openSystemsForm('habit')">Add Habit</button>
       </div>
@@ -670,8 +3093,8 @@ const pages = {
     ${activeSystemsSection === "Trackers" ? `
       <div class="section-toolbar card">
         <div>
-          <h3>Systems</h3>
-          <p class="muted-text">Track goals, counters, tapers, body metrics, habits, and custom progress with one tracker system.</p>
+          <h3>Trackers</h3>
+          <p class="muted-text">Measure all progress: goals, counters, tapers, metrics, and custom tracking.</p>
         </div>
         <div class="button-row">
           <button onclick="openSystemsForm('tracker')">Add Tracker</button>
@@ -685,8 +3108,8 @@ const pages = {
     ${activeSystemsSection === "Objectives" ? `
       <div class="section-toolbar card">
         <div>
-          <h3>Tasks & Objectives</h3>
-          <p class="muted-text">Actionable work that can complete planner blocks, habits, and tracker progress.</p>
+          <h3>Objectives</h3>
+          <p class="muted-text">One-time actionable tasks with due dates and priorities.</p>
         </div>
         <button onclick="openSystemsForm('objective')">Add Objective</button>
       </div>
@@ -697,8 +3120,8 @@ const pages = {
     ${activeSystemsSection === "Activity" ? `
       <div class="section-toolbar card">
         <div>
-          <h3>Activity Feed</h3>
-          <p class="muted-text">Completed habits, planner blocks, tracker logs, objectives, and streak events in one timeline.</p>
+          <h3>Activity Log</h3>
+          <p class="muted-text">Historical entries. What happened, when, and how much. Feeds trackers and analytics.</p>
         </div>
         <button onclick="openSystemsForm('log')">Add Log</button>
       </div>
@@ -722,10 +3145,7 @@ const pages = {
           <input id="friendBirthday" type="date">
           <input id="friendPhoneHandle" placeholder="Phone or social handle">
           <select id="friendRelationshipType">
-            <option>Friend</option>
-            <option>Family</option>
-            <option>Dating</option>
-            <option>Networking</option>
+            ${getSocialTypes().map(t => `<option value="${escapeHTML(t)}">${escapeHTML(t)}</option>`).join("")}
           </select>
           <select id="friendPriority">
             <option>High</option>
@@ -838,6 +3258,14 @@ const pages = {
         <input id="ideaCost" placeholder="Cost">
         <textarea id="ideaNotes" placeholder="Notes"></textarea>
         <label class="inline-check"><input id="ideaFavorite" type="checkbox"> Favorite idea</label>
+        <div class="friend-selector">
+          <label>Link Friends (optional)</label>
+          <input id="ideaFriendSearch" placeholder="Search friends to link" oninput="populateIdeaFriendSelect()">
+          <select id="ideaFriendSelect" onchange="addSelectedFriendToIdea()">
+            <option value="">Select a friend...</option>
+          </select>
+          <div id="selectedIdeaFriends" class="selected-friends-chips"></div>
+        </div>
         <button id="ideaSaveButton" onclick="saveIdea()">Save Idea</button>
         <button class="secondary-btn" onclick="resetIdeaForm()">Clear Idea Form</button>
       </div>
@@ -861,6 +3289,9 @@ const pages = {
           <select id="ideaFavoriteFilter" onchange="renderIdeas()">
             <option value="All">All ideas</option>
             <option value="Favorites">Favorites</option>
+          </select>
+          <select id="ideaFriendFilter" onchange="renderIdeas()">
+            <option value="All">All friends</option>
           </select>
         </div>
         <div id="ideasList"></div>
@@ -901,15 +3332,97 @@ const pages = {
       <button onclick="clearSystems()">Clear Systems</button>
       <button onclick="clearSocial()">Clear Social</button>
     </div>
+    <div class="card collapsible-card">
+      <button type="button" class="collapse-header" onclick="toggleManageOptions()">
+        <span>Manage Options</span>
+        <span>${manageOptionsOpen ? "▲" : "▼"}</span>
+      </button>
+      <p class="muted-text">Manage dropdown options for Categories, Types, and Units used across Planner, Systems, and All Zip Data.</p>
+      <div class="${manageOptionsOpen ? "" : "hidden"} option-manager-content">
+        <div class="option-manager">
+        <div class="option-toolbar">
+          <label class="muted-text small">Option group</label>
+          <select id="optionGroupSelector" onchange="renderSelectedOptionGroup()">
+            <optgroup label="General">
+              <option value="category">Categories</option>
+              <option value="unit">Units</option>
+            </optgroup>
+            <optgroup label="System Types">
+              <option value="habitTypes">Habit Types</option>
+              <option value="trackerTypes">Tracker Types</option>
+              <option value="objectiveTypes">Objective Types</option>
+              <option value="activityTypes">Activity Types</option>
+              <option value="socialTypes">Social Types</option>
+            </optgroup>
+          </select>
+        </div>
+        
+        <div class="option-toolbar">
+          <input id="newOptionInput" placeholder="Add new option">
+          <button onclick="addCustomOptionFromManager()">Add</button>
+          <input id="optionSearchInput" placeholder="Filter options" oninput="renderSelectedOptionGroup()">
+          <button class="secondary-btn" onclick="resetOptionsToDefaultsFromManager()">Reset</button>
+        </div>
+        
+        <div id="optionsList" class="option-list"></div>
+      </div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Data Sync Status</h3>
+      <div id="syncStatusDisplay">
+        <p><strong>Local Storage:</strong> <span id="localStorageStatus">Checking...</span></p>
+        <p><strong>Cloud Connection:</strong> <span id="cloudStatus">Checking...</span></p>
+        <p><strong>Last Sync:</strong> <span id="lastSyncTime">Never</span></p>
+      </div>
+      <button onclick="forceSyncFromCloud()">Sync from Cloud</button>
+      <button onclick="forceSyncToCloud()">Sync to Cloud</button>
+    </div>
     <div class="card backup-restore-card">
       <h3>Backup + Restore</h3>
       <p class="settings-warning">Local data is saved per browser and per URL/port. Switching between localhost, Replit, Netlify, Codex preview, or different ports may show different data unless you import a backup.</p>
-      <p class="muted-text">Backup includes plannerData, scheduleData, systemsData, and socialData. Offline localStorage stays enabled.</p>
+      <p class="muted-text">Backup includes plannerData, scheduleData, systemsData, socialData, and allZipData. Uses safe merge logic to preserve newer data.</p>
       <button onclick="downloadFullBackup()">Download Backup JSON</button>
-      <textarea id="allDataImportJson" placeholder="Paste Flow Planner backup JSON here to restore plannerData, scheduleData, systemsData, and socialData"></textarea>
+      <textarea id="allDataImportJson" placeholder="Paste Flow Planner backup JSON here to restore all data"></textarea>
       <button onclick="importAllData()">Restore From Backup</button>
     </div>
-    <div class="card social-import-card">
+    <div class="card">
+      <h3>All Zip Data Export/Import</h3>
+      <p class="muted-text">Export all data as a unified master log (Google Sheets-style schema) with fields: id, date, source, category, type, name, amount, unit, startTime, endTime, durationMinutes, status, notes, linkedGoalId, linkedHabitId, linkedPlannerBlockId, createdAt, updatedAt.</p>
+      <p class="muted-text">Supports planner blocks, habits, routines, manual metrics, goals, social logs, study hours, body metrics, taper/recovery logs, and course/license hours.</p>
+      <div class="list-controls">
+        <select id="allZipDataCategoryFilter" onchange="filterAllZipData()">
+          <option value="All">All Categories</option>
+        </select>
+        <select id="allZipDataTypeFilter" onchange="filterAllZipData()">
+          <option value="All">All Types</option>
+        </select>
+        <select id="allZipDataUnitFilter" onchange="filterAllZipData()">
+          <option value="All">All Units</option>
+        </select>
+        <select id="allZipDataSourceFilter" onchange="filterAllZipData()">
+          <option value="All">All Sources</option>
+          <option>Planner</option>
+          <option>Systems</option>
+          <option>Social</option>
+          <option>manual</option>
+        </select>
+        <select id="allZipDataGoalFilter" onchange="filterAllZipData()">
+          <option value="All">All Goals</option>
+        </select>
+        <input id="allZipDataStartDate" type="date" onchange="filterAllZipData()" placeholder="Start date">
+        <input id="allZipDataEndDate" type="date" onchange="filterAllZipData()" placeholder="End date">
+      </div>
+      <div class="button-row">
+        <button onclick="exportAllZipDataAsJSON()">Export as JSON</button>
+        <button onclick="exportAllZipDataAsCSV()">Export as CSV</button>
+      </div>
+      <label class="file-upload-box">
+        <span>Import All Zip Data (JSON or CSV)</span>
+        <input id="allZipDataImportFile" type="file" accept=".json,.csv,application/json,text/csv" onchange="handleAllZipDataImport(event)">
+      </label>
+    </div>
+            <div class="card social-import-card">
       <h3>Social Data Import</h3>
       <p class="muted-text">Bring in friends, hangouts, and ideas from a backup file, pasted JSON, or browser localStorage.</p>
       <div class="import-mode-grid">
@@ -1020,6 +3533,7 @@ document.querySelectorAll(".bottom-nav button").forEach(btn => {
     if (tab === "Planner") renderPlanner();
     if (tab === "Systems") renderSystems();
     if (tab === "Social") renderSocial();
+    if (tab === "Settings") renderSettings();
   });
 });
 
@@ -1039,6 +3553,25 @@ function setActiveBottomNav(tab) {
   document.querySelectorAll(".bottom-nav button").forEach(button => {
     button.classList.toggle("active", button.dataset.tab === tab);
   });
+}
+
+function renderSettings() {
+  populateAllZipDataDropdowns();
+  populateGoalProgressDropdown();
+  renderOptionsLists();
+}
+
+function toggleManageOptions() {
+  manageOptionsOpen = !manageOptionsOpen;
+  console.log("toggleManageOptions called, manageOptionsOpen:", manageOptionsOpen);
+  const content = document.querySelector(".option-manager-content");
+  const arrow = document.querySelector(".collapse-header span:last-child");
+  if (content) {
+    content.classList.toggle("hidden", !manageOptionsOpen);
+  }
+  if (arrow) {
+    arrow.textContent = manageOptionsOpen ? "▲" : "▼";
+  }
 }
 
 // ---------------- PLANNER ----------------
@@ -1073,12 +3606,7 @@ function renderPlannerBlockSheet() {
           <input id="blockEnd" type="time">
         </div>
         <select id="blockCategory">
-          <option>School</option>
-          <option>Work</option>
-          <option>Gym</option>
-          <option>Social</option>
-          <option>Personal</option>
-          <option>Errand</option>
+          ${renderCategoryOptions()}
         </select>
         <details class="advanced-options link-options" open>
           <summary>Linked items</summary>
@@ -1570,6 +4098,30 @@ function toggleBlockComplete(index) {
     removePlannerAutoLogsForBlock(block);
   }
   if (block.completed && !wasComplete) autoCompleteObjectivesForPlannerBlock(block);
+
+  // Log to All Zip Data when block is marked complete
+  if (block.completed && !wasComplete) {
+    logToAllZipData({
+      id: block.id,
+      date: block.date || getTodayISO(),
+      source: "Planner",
+      category: block.category || "",
+      type: block.type || "task",
+      name: block.title || "",
+      amount: "",
+      unit: "",
+      startTime: block.startTime || "",
+      endTime: block.endTime || "",
+      durationMinutes: block.durationMinutes || "",
+      status: "completed",
+      notes: block.notes || "",
+      linkedGoalId: block.linkedGoalId || "",
+      linkedHabitId: block.linkedHabitId || "",
+      linkedPlannerBlockId: "",
+      createdAt: block.createdAt || ""
+    });
+  }
+
   saveScheduleData();
   renderPlanner();
 }
@@ -1637,7 +4189,10 @@ function deleteTimeBlock(index) {
   const date = block.date;
   scheduleData.blocks.splice(index, 1);
   if (editingBlockIndex === index) editingBlockIndex = null;
-  addBufferBlocksForDate(date);
+  // Only recreate buffers if the deleted block was not a buffer itself
+  if (!block.isBuffer) {
+    addBufferBlocksForDate(date);
+  }
   saveScheduleData();
   renderHome();
   renderPlanner();
@@ -2382,6 +4937,28 @@ function completeRoutineDay(routineIndex, silent) {
   routine.streak = getRoutineCompletionStreak(routine);
   saveScheduleData();
   renderRoutines();
+
+  // Log to All Zip Data when routine is completed
+  logToAllZipData({
+    id: routine.id + "_" + today,
+    date: today,
+    source: "Planner",
+    category: routine.category || "",
+    type: "routine",
+    name: routine.title || "",
+    amount: "",
+    unit: "",
+    startTime: routine.start || "",
+    endTime: routine.end || "",
+    durationMinutes: routine.durationMinutes || "",
+    status: "completed",
+    notes: routine.notes || "",
+    linkedGoalId: routine.linkedGoalId || "",
+    linkedHabitId: routine.linkedHabitId || "",
+    linkedPlannerBlockId: "",
+    createdAt: routine.createdAt || ""
+  });
+
   if (!silent) {
     alert(`"${routine.name}" marked complete! Streak: ${routine.streak} day${routine.streak === 1 ? "" : "s"} 🔥`);
   }
@@ -4370,22 +6947,15 @@ function renderSystemsSheet() {
 
 function renderHabitFormFields() {
   return `
+    <p class="form-section-label">Core Fields</p>
     <input id="habitName" placeholder="Habit name">
     <select id="habitCategory">
       <option value="">Category</option>
-      <option>Health</option>
-      <option>Fitness</option>
-      <option>Learning</option>
-      <option>Mindfulness</option>
-      <option>Productivity</option>
-      <option>Social</option>
-      <option>Finance</option>
-      <option>Sleep</option>
-      <option>School</option>
-      <option>Work</option>
-      <option>Personal</option>
-      <option>Gym</option>
-      <option>Custom</option>
+      ${renderCategoryOptions()}
+    </select>
+    <select id="habitType">
+      <option value="">Type</option>
+      ${renderHabitTypeOptions()}
     </select>
     <select id="habitFrequency">
       <option>Daily</option>
@@ -4401,7 +6971,7 @@ function renderHabitFormFields() {
       <option value="Custom">Target frequency: Custom</option>
     </select>
     
-    <p style="margin-top:12px;margin-bottom:4px;font-weight:600;font-size:13px">Completion Type</p>
+    <p class="form-section-label">Completion Type</p>
     <div class="completion-type-toggle">
       <label>
         <input type="radio" name="habitCompletionType" value="checkbox" checked onchange="toggleHabitTargetFields()">
@@ -4443,34 +7013,18 @@ function renderHabitFormFields() {
           <option>Custom</option>
         </select>
       </div>
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:4px">
-        <input type="checkbox" id="habitAutoLogToTracker" checked style="width:auto;min-height:unset;margin:0">
-        Auto-log to linked tracker when completing
-      </label>
     </div>
     
     <input id="habitTarget" placeholder="Target description (e.g. 30 min workout)" style="margin-top:10px">
-    <div class="habit-meta-row" id="habitUnitRowOld" style="display:none">
-      <select id="habitUnitOld">
-        <option value="">Unit (legacy)</option>
-      </select>
-    <input id="habitTarget" placeholder="Target (e.g. 30, 8 glasses)">
-    <div class="habit-meta-row">
-      ${renderUnitComboInput("habitUnit")}
+    <textarea id="habitNotes" placeholder="Notes"></textarea>
+    
+    <details class="advanced-options link-options">
+      <summary>Advanced Links & Automation</summary>
+      <label class="muted-text small">Linked goal</label>
       <select id="habitLinkedGoalId">
         <option value="">Link to goal</option>
         ${systemsData.goals.map(g => `<option value="${g.id}">${escapeHTML(g.name)}</option>`).join("")}
       </select>
-    </div>
-    <div class="habit-meta-row">
-      <select id="habitLinkedGoalIdNew">
-        <option value="">Link to goal</option>
-        ${systemsData.goals.map(g => `<option value="${g.id}">${escapeHTML(g.name)}</option>`).join("")}
-      </select>
-    </div>
-    ${renderSharedUnitDatalist()}
-    <details class="advanced-options link-options">
-      <summary>More links</summary>
       <label class="muted-text small">Linked tracker</label>
       <select id="habitLinkedTrackerId">${renderLinkOptions(systemsData.trackers, "", "No linked tracker")}</select>
       <label class="muted-text small">Linked routine</label>
@@ -4479,8 +7033,10 @@ function renderHabitFormFields() {
       <select id="habitLinkedPlannerBlockId">${renderLinkOptions(scheduleData.blocks.filter(b => !b.isBuffer), "", "No linked planner block")}</select>
       <label class="inline-check"><input type="checkbox" id="habitAutoLogTracker"> Update linked tracker when completed</label>
       <input id="habitTrackerLogAmount" type="number" step="any" placeholder="Tracker amount on habit completion">
+      <label class="inline-check"><input type="checkbox" id="habitAutoLogToTracker" checked style="width:auto;min-height:unset;margin:0"> Auto-log to linked tracker when completing</label>
+      ${renderSharedUnitDatalist()}
     </details>
-    <textarea id="habitNotes" placeholder="Notes"></textarea>
+    
     <button id="habitSaveButton" onclick="saveHabit()">${editingHabitIndex === null ? "Save Habit" : "Update Habit"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
   `;
@@ -4501,6 +7057,8 @@ function getRecentPlannerBlocksForLogSelect(limit = 100) {
 
 function renderLogFormFields() {
   return `
+    <p class="form-section-label">Core Fields</p>
+    <label class="muted-text small">Linked tracker (optional)</label>
     <select id="logLinkedItemId" onchange="syncLogFieldsFromTracker()">
       <option value="">Choose tracker</option>
       ${systemsData.trackers.map(t => `<option value="${t.id}">${escapeHTML(t.name)}</option>`).join("")}
@@ -4510,29 +7068,196 @@ function renderLogFormFields() {
       ${renderUnitComboInput("logUnit")}
     </div>
     ${renderSharedUnitDatalist()}
-    <input id="logDate" type="date">
+    <input id="logDate" type="date" placeholder="Date">
+    <textarea id="logNotes" placeholder="Notes"></textarea>
     <input id="logTitle" type="hidden">
     <input id="logType" type="hidden">
-    <div id="logLinkedItemSelectWrap" style="display:none"></div>
-    <label class="muted-text small" style="display:block;margin-top:8px">Optional planner block</label>
-    <select id="logLinkedPlannerBlockId">
-      <option value="">None</option>
-      ${getRecentPlannerBlocksForLogSelect().map(b => `
-        <option value="${escapeHTML(b.id)}">${escapeHTML(b.date || "")} ${escapeHTML(b.start || "")} — ${escapeHTML(b.title || "")}</option>
-      `).join("")}
-    </select>
-    <textarea id="logNotes" placeholder="Notes"></textarea>
+    
+    <details class="advanced-options link-options">
+      <summary>Advanced Links</summary>
+      <div id="logLinkedItemSelectWrap" style="display:none"></div>
+      <label class="muted-text small">Linked planner block</label>
+      <select id="logLinkedPlannerBlockId">
+        <option value="">None</option>
+        ${getRecentPlannerBlocksForLogSelect().map(b => `
+          <option value="${escapeHTML(b.id)}">${escapeHTML(b.date || "")} ${escapeHTML(b.start || "")} — ${escapeHTML(b.title || "")}</option>
+        `).join("")}
+      </select>
+    </details>
+    
     <button onclick="saveSystemLog()">${editingLogIndex === null ? "Save Log" : "Update Log"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
   `;
 }
 
+// Milestone helper functions
+function createMilestone(data = {}) {
+  return {
+    id: data.id || createId("milestone"),
+    name: data.name || "",
+    amount: data.amount || "",
+    targetDate: data.targetDate || "",
+    completed: data.completed || false,
+    completedDate: data.completedDate || "",
+    notes: data.notes || ""
+  };
+}
+
+function normalizeMilestones(milestones) {
+  if (!milestones) return [];
+  if (typeof milestones === "string") {
+    // Convert old text-based milestones to structured objects
+    return milestones.split("\n")
+      .map(line => line.trim())
+      .filter(line => line)
+      .map(line => createMilestone({ name: line }));
+  }
+  if (Array.isArray(milestones)) {
+    return milestones.map(m => createMilestone(m));
+  }
+  return [];
+}
+
+function getNextMilestone(tracker) {
+  const milestones = normalizeMilestones(tracker.milestones || []);
+  const current = Number(tracker.currentValue) || 0;
+  const incomplete = milestones.filter(m => !m.completed && m.amount);
+  return incomplete
+    .filter(m => Number(m.amount) > current)
+    .sort((a, b) => Number(a.amount) - Number(b.amount))[0] || null;
+}
+
+function getMilestoneProgress(tracker) {
+  const milestones = normalizeMilestones(tracker.milestones || []);
+  const completed = milestones.filter(m => m.completed).length;
+  const total = milestones.length;
+  return { completed, total, percent: total > 0 ? (completed / total) * 100 : 0 };
+}
+
+function checkMilestoneCompletion(tracker) {
+  const milestones = normalizeMilestones(tracker.milestones || []);
+  const current = Number(tracker.currentValue) || 0;
+  const today = getTodayISO();
+  let hasNewCompletion = false;
+  
+  milestones.forEach(milestone => {
+    if (!milestone.completed && milestone.amount && Number(milestone.amount) <= current) {
+      milestone.completed = true;
+      milestone.completedDate = today;
+      hasNewCompletion = true;
+      
+      // Add activity log for milestone completion
+      systemsData.logs.push({
+        id: createId("log"),
+        title: `Milestone completed: ${milestone.name}`,
+        type: "Milestone",
+        valueType: "Milestone",
+        value: milestone.amount,
+        unit: tracker.unit || "",
+        date: today,
+        notes: milestone.notes || "",
+        linkedItemType: "tracker",
+        linkedTrackerId: tracker.id,
+        logSource: "milestone-auto",
+        inactive: false
+      });
+    }
+  });
+  
+  if (hasNewCompletion) {
+    tracker.milestones = milestones;
+    saveSystemsData();
+  }
+  
+  return hasNewCompletion;
+}
+
+// Render milestone form fields
+function renderMilestoneFormFields(milestones = []) {
+  const normalized = normalizeMilestones(milestones);
+  return `
+    <div id="milestonesContainer">
+      ${normalized.length === 0 ? '<p class="muted-text small">No milestones yet</p>' : ''}
+      ${normalized.map((m, idx) => `
+        <div class="milestone-row" data-idx="${idx}">
+          <div class="milestone-header">
+            <input type="text" placeholder="Milestone name" value="${escapeHTML(m.name)}" data-field="name">
+            <input type="checkbox" ${m.completed ? "checked" : ""} data-field="completed">
+            <button class="delete-milestone-btn" onclick="deleteMilestone(${idx})">×</button>
+          </div>
+          <div class="milestone-details">
+            <input type="number" step="any" placeholder="Amount" value="${escapeHTML(m.amount)}" data-field="amount">
+            <input type="date" placeholder="Target date" value="${escapeHTML(m.targetDate)}" data-field="targetDate">
+            <input type="text" placeholder="Notes" value="${escapeHTML(m.notes)}" data-field="notes">
+          </div>
+        </div>
+      `).join("")}
+    </div>
+    <button type="button" onclick="addMilestone()">+ Add Milestone</button>
+  `;
+}
+
+function addMilestone() {
+  const container = document.getElementById("milestonesContainer");
+  if (!container) return;
+  const idx = container.querySelectorAll(".milestone-row").length;
+  const milestoneHtml = `
+    <div class="milestone-row" data-idx="${idx}">
+      <div class="milestone-header">
+        <input type="text" placeholder="Milestone name" data-field="name">
+        <input type="checkbox" data-field="completed">
+        <button class="delete-milestone-btn" onclick="deleteMilestone(${idx})">×</button>
+      </div>
+      <div class="milestone-details">
+        <input type="number" step="any" placeholder="Amount" data-field="amount">
+        <input type="date" placeholder="Target date" data-field="targetDate">
+        <input type="text" placeholder="Notes" data-field="notes">
+      </div>
+    </div>
+  `;
+  const emptyMsg = container.querySelector(".muted-text");
+  if (emptyMsg) emptyMsg.remove();
+  container.insertAdjacentHTML("beforeend", milestoneHtml);
+}
+
+function deleteMilestone(idx) {
+  const row = document.querySelector(`.milestone-row[data-idx="${idx}"]`);
+  if (row) row.remove();
+  const container = document.getElementById("milestonesContainer");
+  if (container && container.querySelectorAll(".milestone-row").length === 0) {
+    container.innerHTML = '<p class="muted-text small">No milestones yet</p>';
+  }
+}
+
+function getMilestonesFromForm() {
+  const container = document.getElementById("milestonesContainer");
+  if (!container) return [];
+  const rows = container.querySelectorAll(".milestone-row");
+  return Array.from(rows).map(row => {
+    const name = row.querySelector('[data-field="name"]')?.value || "";
+    const amount = row.querySelector('[data-field="amount"]')?.value || "";
+    const targetDate = row.querySelector('[data-field="targetDate"]')?.value || "";
+    const completed = row.querySelector('[data-field="completed"]')?.checked || false;
+    const notes = row.querySelector('[data-field="notes"]')?.value || "";
+    return createMilestone({ name, amount, targetDate, completed, completedDate: completed ? getTodayISO() : "", notes });
+  }).filter(m => m.name || m.amount);
+}
+
+// Render tracker form fields
 function renderTrackerFormFields() {
   return `
+    <p class="form-section-label">Core Fields</p>
     <input id="trackerName" placeholder="Name">
-    <label class="muted-text small">Category / type (pick or type your own)</label>
-    <input id="trackerCategory" list="trackerCategoryList" autocomplete="off" placeholder="e.g. Counter, MMA…">
-    <datalist id="trackerCategoryList">${buildTrackerCategoryDatalistInnerHtml()}</datalist>
+    <label class="muted-text small">Category</label>
+    <select id="trackerCategory">
+      <option value="">Category</option>
+      ${renderCategoryOptions()}
+    </select>
+    <label class="muted-text small">Type</label>
+    <select id="trackerType">
+      <option value="">Type</option>
+      ${getTrackerTypes().map(t => `<option value="${escapeHTML(t)}" ${t === (editingTracker?.type || "") ? "selected" : ""}>${escapeHTML(t)}</option>`).join("")}
+    </select>
     <label class="muted-text small">Unit</label>
     ${renderUnitComboInput("trackerUnit", "", "e.g. classes, hours...")}
     ${renderSharedUnitDatalist()}
@@ -4547,8 +7272,11 @@ function renderTrackerFormFields() {
         <option value="decrease">Decrease / taper toward target</option>
       </select>
     </div>
+    <textarea id="trackerNotes" placeholder="Notes"></textarea>
+    
     <details class="advanced-options">
-      <summary>Advanced options</summary>
+      <summary>Advanced Options & Links</summary>
+      <p class="form-section-label">Behavior</p>
       <select id="trackerLogValueMode">
         <option value="increment">Log amounts add up</option>
         <option value="absolute">Logs are measurements</option>
@@ -4561,24 +7289,34 @@ function renderTrackerFormFields() {
         <input id="trackerStartDate" type="date" placeholder="Start date">
         <input id="trackerTargetDate" type="date" placeholder="Target / end date">
       </div>
+      
+      <p class="form-section-label">Links</p>
+      <label class="muted-text small">Linked habit</label>
       <select id="trackerLinkedHabit">
         <option value="">No linked habit</option>
         ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
       </select>
-      <label class="muted-text small">Additional links</label>
+      <label class="muted-text small">Linked goal</label>
       <select id="trackerLinkedGoal">${renderLinkOptions(systemsData.goals, "", "No linked goal")}</select>
+      <label class="muted-text small">Linked routine</label>
       <select id="trackerLinkedRoutine">${renderLinkOptions(scheduleData.routines, "", "No linked routine")}</select>
+      <label class="muted-text small">Linked planner block</label>
       <select id="trackerLinkedPlanner">${renderLinkOptions(scheduleData.blocks.filter(b => !b.isBuffer), "", "No linked planner block")}</select>
+      <label class="muted-text small">Linked objective</label>
       <select id="trackerLinkedObjective">${renderLinkOptions(systemsData.objectives, "", "No linked objective")}</select>
-      <label class="inline-check"><input type="checkbox" id="trackerAutoLogPlanner"> Auto-log when linked habit’s planner block is completed</label>
+      
+      <p class="form-section-label">Automation</p>
+      <label class="inline-check"><input type="checkbox" id="trackerAutoLogPlanner"> Auto-log when linked habit's planner block is completed</label>
       <div class="habit-meta-row">
         <input id="trackerAutoLogAmount" type="number" step="any" placeholder="Auto-log amount" value="1">
         ${renderUnitComboInput("trackerAutoLogUnit", "", "Auto-log unit")}
       </div>
       <label class="inline-check"><input type="checkbox" id="trackerPreventDupAuto" checked> Prevent duplicate auto-logs</label>
-      <textarea id="trackerMilestones" placeholder="Milestones, one per line"></textarea>
+      
+      <p class="form-section-label">Milestones</p>
+      ${renderMilestoneFormFields(editingTracker?.milestones || [])}
     </details>
-    <textarea id="trackerNotes" placeholder="Notes"></textarea>
+    
     <button id="trackerSaveButton" onclick="saveUnifiedTrackerFromModal()">${editingTrackerIndex === null ? "Save Tracker" : "Update Tracker"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
   `;
@@ -4674,6 +7412,7 @@ function openTrackerManualLog(trackerId) {
 
 function renderGoalFormFields() {
   return `
+    <p class="form-section-label">Core Fields</p>
     <input id="goalName" placeholder="Goal name">
     <select id="goalType">
       <option>Increase toward target</option>
@@ -4704,26 +7443,34 @@ function renderGoalFormFields() {
       ${renderUnitComboInput("goalUnit")}
     </div>
     ${renderSharedUnitDatalist()}
-    <select id="goalResetCycle">
-      <option value="daily">Reset cycle: daily</option>
-      <option value="weekly">Reset cycle: weekly</option>
-      <option value="monthly">Reset cycle: monthly</option>
-    </select>
-    <input id="goalRecurringTarget" placeholder="Recurring target (optional)">
     <div class="habit-meta-row">
-      <input id="goalStartDate" type="date">
-      <input id="goalDeadline" type="date">
+      <input id="goalStartDate" type="date" placeholder="Start date">
+      <input id="goalDeadline" type="date" placeholder="Deadline">
     </div>
-    <select id="goalLinkedTracker">
-      <option value="">No linked tracker</option>
-      ${systemsData.trackers.map(t => `<option value="${t.id}">${escapeHTML(t.name)}</option>`).join("")}
-    </select>
-    <select id="goalLinkedHabit">
-      <option value="">No linked habit</option>
-      ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
-    </select>
+    <textarea id="goalMilestones" placeholder="Milestones, one per line"></textarea>
+    <textarea id="goalNotes" placeholder="Notes"></textarea>
+    
     <details class="advanced-options link-options">
-      <summary>More links</summary>
+      <summary>Advanced Options & Links</summary>
+      <p class="form-section-label">Behavior</p>
+      <select id="goalResetCycle">
+        <option value="daily">Reset cycle: daily</option>
+        <option value="weekly">Reset cycle: weekly</option>
+        <option value="monthly">Reset cycle: monthly</option>
+      </select>
+      <input id="goalRecurringTarget" placeholder="Recurring target (optional)">
+      
+      <p class="form-section-label">Links</p>
+      <label class="muted-text small">Linked tracker</label>
+      <select id="goalLinkedTracker">
+        <option value="">No linked tracker</option>
+        ${systemsData.trackers.map(t => `<option value="${t.id}">${escapeHTML(t.name)}</option>`).join("")}
+      </select>
+      <label class="muted-text small">Linked habit</label>
+      <select id="goalLinkedHabit">
+        <option value="">No linked habit</option>
+        ${systemsData.habits.map(h => `<option value="${h.id}">${escapeHTML(h.name)}</option>`).join("")}
+      </select>
       <label class="muted-text small">Linked routine</label>
       <select id="goalLinkedRoutine">${renderLinkOptions(scheduleData.routines, "", "No linked routine")}</select>
       <label class="muted-text small">Linked planner block</label>
@@ -4731,8 +7478,7 @@ function renderGoalFormFields() {
       <label class="muted-text small">Linked objective</label>
       <select id="goalLinkedObjective">${renderLinkOptions(systemsData.objectives, "", "No linked objective")}</select>
     </details>
-    <textarea id="goalMilestones" placeholder="Milestones, one per line"></textarea>
-    <textarea id="goalNotes" placeholder="Notes"></textarea>
+    
     <button id="goalSaveButton" onclick="saveGoal()">${editingGoalIndex === null ? "Save Goal" : "Update Goal"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
   `;
@@ -4769,12 +7515,12 @@ function createObjectiveRecord(overrides = {}) {
 
 function renderObjectiveFormFields() {
   return `
+    <p class="form-section-label">Core Fields</p>
     <input id="objectiveTitle" placeholder="Task / objective title">
     <div class="habit-meta-row">
       <select id="objectiveType">
-        <option>Task</option>
-        <option>Objective</option>
-        <option>Quick Win</option>
+        <option value="">Type</option>
+        ${getObjectiveTypes().map(t => `<option value="${escapeHTML(t)}" ${t === (editingObjective?.type || "") ? "selected" : ""}>${escapeHTML(t)}</option>`).join("")}
       </select>
       <select id="objectivePriority">
         <option>Priority</option>
@@ -4784,28 +7530,32 @@ function renderObjectiveFormFields() {
       </select>
     </div>
     <div class="habit-meta-row">
-      <input id="objectiveDueDate" type="date">
-      <input id="objectiveDueTime" type="time">
+      <input id="objectiveDueDate" type="date" placeholder="Due date">
+      <input id="objectiveDueTime" type="time" placeholder="Due time">
     </div>
     <input id="objectiveCategory" placeholder="System/category">
     <input id="objectiveEstimatedMinutes" type="number" min="0" step="5" placeholder="Estimated minutes">
-    <details class="advanced-options link-options" open>
-      <summary>Linked items</summary>
-      <label class="muted-text small">Planner block</label>
+    <textarea id="objectiveNotes" placeholder="Notes"></textarea>
+    
+    <details class="advanced-options link-options">
+      <summary>Advanced Links & Automation</summary>
+      <label class="muted-text small">Linked planner block</label>
       <select id="objectiveLinkedPlanner">${renderLinkOptions(scheduleData.blocks.filter(b => !b.isBuffer), "", "No linked planner block")}</select>
-      <label class="muted-text small">Routine</label>
+      <label class="muted-text small">Linked routine</label>
       <select id="objectiveLinkedRoutine">${renderLinkOptions(scheduleData.routines, "", "No linked routine")}</select>
-      <label class="muted-text small">Habit</label>
+      <label class="muted-text small">Linked habit</label>
       <select id="objectiveLinkedHabit">${renderLinkOptions(systemsData.habits, "", "No linked habit")}</select>
-      <label class="muted-text small">Tracker</label>
+      <label class="muted-text small">Linked tracker</label>
       <select id="objectiveLinkedTracker">${renderLinkOptions(systemsData.trackers, "", "No linked tracker")}</select>
-      <label class="muted-text small">Goal</label>
+      <label class="muted-text small">Linked goal</label>
       <select id="objectiveLinkedGoal">${renderLinkOptions(systemsData.goals, "", "No linked goal")}</select>
+      
+      <p class="form-section-label">Automation</p>
       <input id="objectiveTrackerLogAmount" type="number" step="any" placeholder="Tracker amount on completion">
       <label class="inline-check"><input type="checkbox" id="objectiveAutoPlanner" checked> Complete when planner block is completed</label>
       <label class="inline-check"><input type="checkbox" id="objectiveAutoHabit" checked> Complete when linked habit is completed</label>
     </details>
-    <textarea id="objectiveNotes" placeholder="Notes"></textarea>
+    
     <button id="objectiveSaveButton" onclick="saveObjectiveFromModal()">${editingObjectiveIndex === null ? "Save Objective" : "Update Objective"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
   `;
@@ -4956,11 +7706,36 @@ function renderSystemsAddMenu() {
           <h3>Add to Systems</h3>
           <button class="icon-btn" onclick="closeSystemsAddMenu()">x</button>
         </div>
-        <button onclick="openSystemsForm('tracker')">Add Tracker</button>
-        <button onclick="openSystemsForm('log')">Add Log</button>
-        <button onclick="openSystemsForm('goal')">Add Goal</button>
-        <button onclick="openSystemsForm('habit')">Add Habit</button>
-        <button onclick="openSystemsForm('objective')">Add Objective</button>
+        <div class="add-options-grid">
+          <button class="add-option-card" onclick="openSystemsForm('habit'); closeSystemsAddMenu();">
+            <div class="add-option-icon">✓</div>
+            <div class="add-option-content">
+              <strong>Add Habit</strong>
+              <span class="add-option-desc">Track daily streaks and consistency</span>
+            </div>
+          </button>
+          <button class="add-option-card" onclick="openSystemsForm('tracker'); closeSystemsAddMenu();">
+            <div class="add-option-icon">📊</div>
+            <div class="add-option-content">
+              <strong>Add Tracker</strong>
+              <span class="add-option-desc">Monitor goals, metrics, and progress</span>
+            </div>
+          </button>
+          <button class="add-option-card" onclick="openSystemsForm('objective'); closeSystemsAddMenu();">
+            <div class="add-option-icon">🎯</div>
+            <div class="add-option-content">
+              <strong>Add Objective</strong>
+              <span class="add-option-desc">Actionable tasks with due dates</span>
+            </div>
+          </button>
+          <button class="add-option-card" onclick="openSystemsForm('log'); closeSystemsAddMenu();">
+            <div class="add-option-icon">📝</div>
+            <div class="add-option-content">
+              <strong>Add Log</strong>
+              <span class="add-option-desc">Quick note or manual entry</span>
+            </div>
+          </button>
+        </div>
       </div>
     </div>
   `;
@@ -5000,6 +7775,7 @@ function renderSystems() {
   fillEditingTrackerForm();
   fillEditingGoalForm();
   fillEditingObjectiveForm();
+  renderSystemsSummaryChips();
   renderSystemsDashboard();
   renderSystemsObjectives();
   renderActivityFeed();
@@ -5024,6 +7800,7 @@ function saveHabit() {
     id: editingHabitIndex === null ? createId("habit") : systemsData.habits[editingHabitIndex].id,
     name,
     category: document.getElementById("habitCategory").value,
+    type: document.getElementById("habitType").value || "Daily",
     frequency: document.getElementById("habitFrequency").value,
     targetFrequency: document.getElementById("habitTargetFrequency")?.value || document.getElementById("habitFrequency").value,
     target: document.getElementById("habitTarget").value.trim(),
@@ -5337,7 +8114,28 @@ function saveHabitCompletion() {
     plannerAutoLogKey: "",
     inactive: false
   });
-  
+
+  // Log to All Zip Data when habit is completed
+  logToAllZipData({
+    id: habit.id + "_" + date,
+    date: date,
+    source: "Systems",
+    category: habit.category || "",
+    type: "habit",
+    name: habit.name || "",
+    amount: String(amountNum),
+    unit: unit,
+    startTime: "",
+    endTime: "",
+    durationMinutes: "",
+    status: "completed",
+    notes: notes || "",
+    linkedGoalId: habit.linkedGoalId || "",
+    linkedHabitId: "",
+    linkedPlannerBlockId: habit.linkedPlannerBlockId || "",
+    createdAt: habit.createdAt || ""
+  });
+
   // Update habit completion history
   if (!Array.isArray(habit.completionHistory)) habit.completionHistory = [];
   habit.completionHistory.push({
@@ -5496,6 +8294,27 @@ function saveSystemLog() {
     systemsData.logs.push(log);
   }
 
+  // Log to All Zip Data when manual metric is logged
+  logToAllZipData({
+    id: log.id,
+    date: log.date,
+    source: log.logSource || "manual",
+    category: log.type || "",
+    type: "log",
+    name: log.title || "",
+    amount: log.value || "",
+    unit: log.unit || "",
+    startTime: "",
+    endTime: "",
+    durationMinutes: "",
+    status: "",
+    notes: log.notes || "",
+    linkedGoalId: log.linkedGoalId || "",
+    linkedHabitId: log.linkedHabitId || "",
+    linkedPlannerBlockId: log.linkedPlannerBlockId || "",
+    createdAt: log.createdAt || ""
+  });
+
   syncLinkedItemsFromLog(log);
   recalcAllTrackerCurrentsFromLogs();
   rememberTrackerUnit(unit);
@@ -5590,6 +8409,7 @@ function normalizeUnifiedTrackerRecord(tracker) {
     id: tracker.id || createId("tracker"),
     name: tracker.name || "",
     category,
+    type: tracker.type || "", // System type field for backward compatibility
     unit: tracker.unit || "",
     startValue,
     currentValue: tracker.currentValue ?? "0",
@@ -5880,14 +8700,45 @@ function recalcTrackerCurrentFromLogs(tracker, anchorDate = getTodayISO()) {
     !isNaN(getLogNumber(log)) && logDateInTrackerWindow(tracker, log.date || "", anchorDate)
   );
   const start = Number(tracker.startValue) || 0;
-  if (tracker.logValueMode === "increment") {
+  const target = Number(tracker.targetValue);
+  const direction = tracker.direction || "increase";
+  const logValueMode = tracker.logValueMode || "increment";
+  
+  if (logValueMode === "increment") {
     if (logs.length) {
       const sum = logs.reduce((acc, log) => acc + getLogNumber(log), 0);
       tracker.currentValue = String(start + sum);
+    } else {
+      tracker.currentValue = String(start);
     }
-  } else if (logs.length) {
-    tracker.currentValue = String(getLogNumber(logs[logs.length - 1]));
+  } else {
+    if (logs.length) {
+      tracker.currentValue = String(getLogNumber(logs[logs.length - 1]));
+    } else {
+      tracker.currentValue = String(start);
+    }
   }
+  
+  // Calculate progress percent
+  const current = Number(tracker.currentValue) || 0;
+  if (!isNaN(target) && target !== start) {
+    if (direction === "decrease") {
+      // Taper/decrease: progress = (start - current) / (start - target)
+      const totalToReduce = start - target;
+      const reducedSoFar = start - current;
+      tracker.progressPercent = Math.max(0, Math.min(100, (reducedSoFar / totalToReduce) * 100));
+    } else {
+      // Normal increase: progress = (current - start) / (target - start)
+      const totalToIncrease = target - start;
+      const increasedSoFar = current - start;
+      tracker.progressPercent = Math.max(0, Math.min(100, (increasedSoFar / totalToIncrease) * 100));
+    }
+  } else {
+    tracker.progressPercent = 0;
+  }
+  
+  // Check for milestone completions
+  checkMilestoneCompletion(tracker);
 }
 
 function recalcAllTrackerCurrentsFromLogs() {
@@ -5967,105 +8818,99 @@ function renderSystemsDashboard() {
   const box = document.getElementById("systemsDashboard");
   if (!box) return;
   const today = getTodayISO();
+  const weekDates = getLastNDates(7);
+  
   const activeHabits = systemsData.habits.filter(habit => !habit.paused);
   const completedToday = activeHabits.filter(habit => habit.completions.includes(today)).length;
-  const weekDates = getLastNDates(7);
-  const expectedHabitChecks = activeHabits.reduce((sum, habit) =>
-    sum + getHabitExpectedCount(habit, weekDates), 0);
-  const weeklyHabitHits = activeHabits.reduce((sum, habit) =>
-    sum + weekDates.filter(date => habit.completions.includes(date)).length, 0);
-  const weeklyCompletionPct = expectedHabitChecks ? Math.round((weeklyHabitHits / expectedHabitChecks) * 100) : 0;
-  const bestStreak = activeHabits.reduce((best, habit) =>
-    Math.max(best, getHabitStreak(habit)), 0);
-  const missedHabits = activeHabits.filter(habit =>
-    !habit.completions.includes(today) && !habit.skippedDates.includes(today)
-  );
-  const skippedToday = activeHabits.filter(habit => habit.skippedDates.includes(today));
-  const bestHabit = getBestHabit();
-  const mostSkipped = getMostSkippedHabit();
-
-  const trackerProgresses = systemsData.trackers.map(t => getTrackerProgress(t));
-  const logsThisWeek = systemsData.logs.filter(log => weekDates.includes(log.date)).length;
   const activeTrackers = systemsData.trackers.filter(t => !isTrackerComplete(t)).length;
-  const completedTrackers = systemsData.trackers.filter(t => isTrackerComplete(t)).length;
-  const trackersThisWeek = systemsData.trackers.filter(t =>
-    getSortedLogsForTracker(t.id).some(log => weekDates.includes(log.date))
-  ).length;
-  const streakLinkedTrackers = systemsData.trackers.filter(t => {
-    if (!t.linkedHabitId) return false;
-    const habit = systemsData.habits.find(h => h.id === t.linkedHabitId);
-    return habit && getHabitStreak(habit) > 0;
-  }).length;
-  const insights = getSmartSystemsInsights();
-
-  const recentLogs = [...systemsData.logs]
-    .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
-    .slice(0, 3);
-
+  const overdueObjectives = systemsData.objectives.filter(obj => !isObjectiveDone(obj) && obj.dueDate && obj.dueDate < today).length;
+  const logsThisWeek = systemsData.logs.filter(log => weekDates.includes(log.date)).length;
+  
+  const buckets = getSystemBuckets();
+  
+  if (!buckets.length || (systemsData.habits.length === 0 && systemsData.trackers.length === 0 && systemsData.objectives.length === 0)) {
+    box.innerHTML = `
+      <div class="empty-state">
+        <p>No systems data yet</p>
+        <button onclick="openSystemsForm('habit')">Add first habit</button>
+        <button class="secondary-btn" onclick="openSystemsForm('tracker')">Create tracker</button>
+        <button class="secondary-btn" onclick="openSystemsForm('log')">Log something</button>
+      </div>
+    `;
+    return;
+  }
+  
   box.innerHTML = `
-    <div class="systems-summary-grid">
-      <div><strong>${activeTrackers}</strong><span>Active Trackers</span></div>
-      <div><strong>${completedTrackers}</strong><span>Completed</span></div>
-      <div><strong>${trackersThisWeek || logsThisWeek}</strong><span>This Week</span></div>
-      <div><strong>${streakLinkedTrackers}</strong><span>Streak-linked</span></div>
-    </div>
-    ${renderSystemEcosystemCards()}
-    <div class="systems-highlight-grid">
-      <div class="system-highlight">
-        <span>Best habit</span>
-        <strong>${bestHabit ? escapeHTML(bestHabit.name) : "No habit yet"}</strong>
-        <p>${bestHabit ? `${getHabitCompletionPct(bestHabit, 30)}% over 30 days` : "Add a habit to start tracking."}</p>
-      </div>
-      <div class="system-highlight">
-        <span>Most skipped</span>
-        <strong>${mostSkipped ? escapeHTML(mostSkipped.name) : "None"}</strong>
-        <p>${mostSkipped ? `${getHabitSkippedCount(mostSkipped, 30)} skips in 30 days` : "No skip pattern yet."}</p>
-      </div>
-    </div>
-    <div class="weekly-bars">
-      ${weekDates.slice().reverse().map(date => {
-        const done = activeHabits.filter(habit => habit.completions.includes(date)).length;
-        const pct = activeHabits.length ? Math.round((done / activeHabits.length) * 100) : 0;
+    <div class="category-cards-grid">
+      ${buckets.map(systemName => {
+        const matches = item => `${item.category || ""} ${item.type || ""} ${item.name || ""} ${item.title || ""}`.toLowerCase().includes(systemName.toLowerCase());
+        const habits = systemsData.habits.filter(matches);
+        const trackers = systemsData.trackers.filter(matches);
+        const objectives = systemsData.objectives.filter(matches);
+        const overdue = objectives.filter(obj => !isObjectiveDone(obj) && obj.dueDate && obj.dueDate < today).length;
+        const bestStreak = habits.reduce((best, habit) => Math.max(best, getHabitStreak(habit)), 0);
+        const plannedMinutes = getPlannerMinutesForSystem(systemName);
+        
         return `
-          <div class="weekly-bar">
-            <div class="weekly-bar-fill" style="height:${Math.max(pct, 8)}%"></div>
-            <span>${new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { weekday: "short" }).slice(0, 1)}</span>
+          <div class="category-card">
+            <div class="category-card-header">
+              <span class="category-name">${escapeHTML(systemName)}</span>
+              <span class="category-time">${formatMinutes(plannedMinutes)}</span>
+            </div>
+            <div class="category-card-stats">
+              <div class="category-stat">
+                <span class="stat-value">${habits.length}</span>
+                <span class="stat-label">habits</span>
+              </div>
+              <div class="category-stat">
+                <span class="stat-value">${trackers.length}</span>
+                <span class="stat-label">trackers</span>
+              </div>
+              <div class="category-stat">
+                <span class="stat-value">${objectives.length}</span>
+                <span class="stat-label">objectives</span>
+              </div>
+            </div>
+            <div class="category-card-footer">
+              <span class="category-streak">Best streak: ${bestStreak}</span>
+              <span class="category-overdue ${overdue > 0 ? 'overdue' : ''}">Overdue: ${overdue}</span>
+            </div>
           </div>
         `;
       }).join("")}
     </div>
-    ${insights.length ? `
-      <div class="smart-insight-list">
-        ${insights.map(insight => `<div class="smart-insight ${insight.tone}"><strong>${escapeHTML(insight.title)}</strong><p>${escapeHTML(insight.detail)}</p></div>`).join("")}
-      </div>
-    ` : ""}
-    ${missedHabits.length ? `
-      <p style="margin-top:12px;font-weight:600;font-size:14px;">Missed Habits</p>
-      ${missedHabits.slice(0, 5).map(habit => `
-        <div class="home-list-item">
-          <strong>${escapeHTML(habit.name)}</strong>
-          <p>${escapeHTML(habit.category || "No category")} • ${getHabitStreak(habit)} streak</p>
-        </div>
-      `).join("")}
-    ` : `<p class="empty-state small">All habits are complete today.</p>`}
-    ${systemsData.trackers.length ? `
-      <p style="margin-top:12px;font-weight:600;font-size:14px;">Tracker progress</p>
-      ${systemsData.trackers.slice(0, 4).map(tracker => `
-        <div class="home-list-item">
-          <strong>${escapeHTML(tracker.name)}</strong>
-          <p>${getTrackerProgress(tracker)}% • ${escapeHTML(String(tracker.currentValue || 0))}/${escapeHTML(String(tracker.targetValue || ""))} ${escapeHTML(tracker.unit || "")}</p>
-        </div>
-      `).join("")}
-    ` : ""}
-    ${recentLogs.length ? `
-      <p style="margin-top:12px;font-weight:600;font-size:14px;">Recent Logs</p>
-      ${recentLogs.map(log => `
-        <div class="home-list-item">
-          <strong>${escapeHTML(log.title || log.type)}</strong>
-          <p>${escapeHTML(log.date || "")} • ${escapeHTML(log.value || "")} ${escapeHTML(log.unit || "")}</p>
-        </div>
-      `).join("")}
-    ` : ""}
+  `;
+}
+
+function renderSystemsSummaryChips() {
+  const box = document.getElementById("systemsSummaryChips");
+  if (!box) return;
+  const today = getTodayISO();
+  const weekDates = getLastNDates(7);
+  
+  const activeHabits = systemsData.habits.filter(habit => !habit.paused);
+  const completedToday = activeHabits.filter(habit => habit.completions.includes(today)).length;
+  const activeTrackers = systemsData.trackers.filter(t => !isTrackerComplete(t)).length;
+  const overdueObjectives = systemsData.objectives.filter(obj => !isObjectiveDone(obj) && obj.dueDate && obj.dueDate < today).length;
+  const logsThisWeek = systemsData.logs.filter(log => weekDates.includes(log.date)).length;
+  
+  box.innerHTML = `
+    <div class="summary-chip">
+      <span class="chip-value">${completedToday}</span>
+      <span class="chip-label">Habits done today</span>
+    </div>
+    <div class="summary-chip">
+      <span class="chip-value">${activeTrackers}</span>
+      <span class="chip-label">Active trackers</span>
+    </div>
+    <div class="summary-chip ${overdueObjectives > 0 ? 'chip-warning' : ''}">
+      <span class="chip-value">${overdueObjectives}</span>
+      <span class="chip-label">Objectives overdue</span>
+    </div>
+    <div class="summary-chip">
+      <span class="chip-value">${logsThisWeek}</span>
+      <span class="chip-label">Logs this week</span>
+    </div>
   `;
 }
 
@@ -6194,8 +9039,36 @@ function renderActivityFeed() {
   const box = document.getElementById("activityFeed");
   if (!box) return;
   const events = getUnifiedActivityFeed();
-  box.innerHTML = events.length
-    ? `<div class="activity-feed-list">${events.map(event => `
+  const isOverview = box.closest('.activity-feed-card') !== null;
+  
+  if (!events.length) {
+    box.innerHTML = `<div class="empty-state small"><p>No activity yet.</p><button onclick="openSystemsForm('log')">Add first log</button></div>`;
+    return;
+  }
+  
+  if (isOverview) {
+    // Overview: limit to 8 items with date grouping
+    const limitedEvents = events.slice(0, 8);
+    const groupedEvents = groupEventsByDate(limitedEvents);
+    
+    box.innerHTML = `
+      <div class="activity-feed-list">
+        ${limitedEvents.map(event => `
+          <div class="activity-feed-item">
+            <span class="activity-icon">${getActivityIcon(event.type)}</span>
+            <div class="activity-content">
+              <strong>${escapeHTML(event.title)}</strong>
+              <span class="activity-meta">${escapeHTML(event.type)}${event.detail ? ` • ${escapeHTML(event.detail)}` : ""}</span>
+            </div>
+            <span class="activity-time">${escapeHTML(event.date === getTodayISO() ? "" : event.date + " ")}${escapeHTML(event.time || "")}</span>
+          </div>
+        `).join("")}
+      </div>
+      <button class="secondary-btn" onclick="activeSystemsSection='Activity'; main.innerHTML=getPageHTML('Systems'); renderSystems();" style="width:100%;margin-top:12px">View all activity</button>
+    `;
+  } else {
+    // Activity tab: show all events
+    box.innerHTML = `<div class="activity-feed-list">${events.map(event => `
       <div class="activity-feed-item">
         <span class="activity-dot"></span>
         <div>
@@ -6207,8 +9080,43 @@ function renderActivityFeed() {
           ${renderConnectionBadges(event.links)}
         </div>
       </div>
-    `).join("")}</div>`
-    : `<div class="empty-state small"><p>No activity yet.</p><button onclick="openSystemsForm('log')">Add first log</button></div>`;
+    `).join("")}</div>`;
+  }
+}
+
+function groupEventsByDate(events) {
+  const today = getTodayISO();
+  const yesterday = getDateOffset(today, -1);
+  const groups = {};
+  
+  events.forEach(event => {
+    let dateLabel = event.date;
+    if (event.date === today) {
+      dateLabel = "Today";
+    } else if (event.date === yesterday) {
+      dateLabel = "Yesterday";
+    } else {
+      const date = new Date(`${event.date}T00:00:00`);
+      dateLabel = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+    
+    if (!groups[dateLabel]) groups[dateLabel] = [];
+    groups[dateLabel].push(event);
+  });
+  
+  return groups;
+}
+
+function getActivityIcon(type) {
+  const icons = {
+    'Habit': '✓',
+    'Objective': '🎯',
+    'Tracker': '📊',
+    'Planner': '📅',
+    'Streak': '🔥',
+    'Log': '📝'
+  };
+  return icons[type] || '•';
 }
 
 function getLastNDates(count) {
@@ -6357,11 +9265,69 @@ function average(values) {
 function renderHabitsList() {
   const box = document.getElementById("habitsList");
   if (!box) return;
+  const isOverview = box.closest('.today-habits-card') !== null;
+  const today = getTodayISO();
 
-  box.innerHTML = systemsData.habits.length
-    ? `<div class="systems-card-grid">${systemsData.habits.map((habit, index) => {
-      const doneToday = habit.completions.includes(getTodayISO());
-      const skippedToday = (habit.skippedDates || []).includes(getTodayISO());
+  if (!systemsData.habits.length) {
+    box.innerHTML = `<div class="empty-state"><p>No habits saved yet.</p><button onclick="openSystemsForm('habit')">Add first habit</button></div>`;
+    return;
+  }
+
+  if (isOverview) {
+    // Overview: compact habit cards with key metrics
+    box.innerHTML = `<div class="habits-overview-list">${systemsData.habits.map((habit, index) => {
+      const doneToday = habit.completions.includes(today);
+      const skippedToday = (habit.skippedDates || []).includes(today);
+      const pct = getHabitCompletionPct(habit, 30);
+      const weekly = getHabitWeeklyConsistency(habit);
+      const streak = getHabitStreak(habit);
+      const skipCount = getHabitSkippedCount(habit, 30);
+      const isAmountBased = habit.completionType === "amount";
+      const todayProgress = getHabitTodayProgress(habit);
+      const dailyTarget = Number(habit.dailyTargetAmount) || 0;
+      const hasMetDailyTarget = dailyTarget > 0 && todayProgress >= dailyTarget;
+      
+      const buttonLabel = isAmountBased 
+        ? (hasMetDailyTarget ? "Done" : "Log") 
+        : (doneToday ? "Done" : "Complete");
+      const buttonAction = isAmountBased 
+        ? `openHabitCompleteModal(${index})` 
+        : `completeHabitToday(${index})`;
+      const buttonDisabled = habit.paused || (!isAmountBased && doneToday);
+      
+      return `
+        <div class="habit-compact-card ${doneToday ? 'completed' : ''} ${habit.paused ? 'paused' : ''}">
+          <div class="habit-compact-header">
+            <span class="habit-category-pill">${escapeHTML(habit.category || "General")}</span>
+            <span class="habit-frequency-pill">${escapeHTML(habit.frequency)}</span>
+            ${streak > 0 ? `<span class="habit-streak-badge">🔥 ${streak}</span>` : ""}
+          </div>
+          <div class="habit-compact-title">
+            <strong>${escapeHTML(habit.name)}</strong>
+            ${isAmountBased && dailyTarget > 0 ? `<span class="habit-progress">${todayProgress}/${dailyTarget} ${escapeHTML(habit.unit || "")}</span>` : ""}
+          </div>
+          <div class="habit-compact-stats">
+            <span class="habit-stat">${pct}% 30d</span>
+            <span class="habit-stat">${weekly}% week</span>
+            <span class="habit-stat">${skipCount} skips</span>
+          </div>
+          ${renderHabitMiniHeatmap(habit)}
+          <div class="habit-compact-actions habit-action-grid">
+            <button class="habit-action-btn primary" onclick="${buttonAction}" ${buttonDisabled ? "disabled" : ""}>${buttonLabel}</button>
+            <button class="habit-action-btn" onclick="skipHabitToday(${index})" ${habit.paused || skippedToday ? "disabled" : ""}>Skip</button>
+            <button class="habit-action-btn" onclick="scheduleHabitInPlanner(${index})">Plan</button>
+            <button class="habit-action-btn" onclick="toggleHabitPaused(${index})">${habit.paused ? "Resume" : "Pause"}</button>
+            <button class="habit-action-btn" onclick="editHabit(${index})">Edit</button>
+            <button class="habit-action-btn danger" onclick="deleteHabit(${index})">Delete</button>
+          </div>
+        </div>
+      `;
+    }).join("")}</div>`;
+  } else {
+    // Habits tab: full cards with details
+    box.innerHTML = `<div class="systems-card-grid">${systemsData.habits.map((habit, index) => {
+      const doneToday = habit.completions.includes(today);
+      const skippedToday = (habit.skippedDates || []).includes(today);
       const pct = getHabitCompletionPct(habit, 30);
       const weekly = getHabitWeeklyConsistency(habit);
       const isAmountBased = habit.completionType === "amount";
@@ -6369,7 +9335,6 @@ function renderHabitsList() {
       const dailyTarget = Number(habit.dailyTargetAmount) || 0;
       const hasMetDailyTarget = dailyTarget > 0 && todayProgress >= dailyTarget;
       
-      // Determine button label and action
       const buttonLabel = isAmountBased 
         ? (hasMetDailyTarget ? "Done" : "Log Progress") 
         : (doneToday ? "Done" : "Complete");
@@ -6386,6 +9351,7 @@ function renderHabitsList() {
           </div>
           <div class="habit-pill-row">
             <span class="metric-type-pill metric-type-progress">${escapeHTML(habit.category || "No category")}</span>
+            <span class="metric-type-pill metric-type-milestone">${escapeHTML(habit.type || "Daily")}</span>
             <span class="metric-type-pill">${escapeHTML(habit.targetFrequency || habit.frequency)}</span>
             ${isAmountBased ? `<span class="metric-type-pill">Amount</span>` : ""}
             ${habit.paused ? `<span class="metric-type-pill metric-type-milestone">Paused</span>` : ""}
@@ -6424,8 +9390,32 @@ function renderHabitsList() {
           </div>
         </div>
       `;
-    }).join("")}</div>`
-    : `<div class="empty-state"><p>No habits saved yet.</p><button onclick="openSystemsForm('habit')">Add first habit</button></div>`;
+    }).join("")}</div>`;
+  }
+}
+
+function renderHabitMiniHeatmap(habit) {
+  const days = 14;
+  const today = getTodayISO();
+  let html = '<div class="habit-mini-heatmap">';
+  
+  for (let i = days - 1; i >= 0; i--) {
+    const date = getDateOffset(today, -i);
+    const completed = habit.completions.includes(date);
+    const skipped = habit.skippedDates.includes(date);
+    const isToday = i === 0;
+    
+    let dotClass = 'heatmap-dot';
+    if (completed) dotClass += ' completed';
+    else if (skipped) dotClass += ' skipped';
+    else dotClass += ' empty';
+    if (isToday) dotClass += ' today';
+    
+    html += `<span class="${dotClass}"></span>`;
+  }
+  
+  html += '</div>';
+  return html;
 }
 
 function getHabitTodayProgress(habit) {
@@ -7067,8 +10057,7 @@ function getCustomUnitValues() {
 }
 
 function getAllUnitOptions() {
-  const custom = getCustomUnitValues();
-  const units = [...DEFAULT_TRACKER_UNITS, ...custom];
+  const units = getAllUnits();
   const seen = new Set();
   const unique = units.filter(unit => {
     const key = unit.toLowerCase();
@@ -7221,7 +10210,7 @@ function collectExistingUnitsIntoSettings() {
 }
 
 function buildTrackerCategoryDatalistInnerHtml() {
-  const opts = [...TRACKER_CATEGORIES, ...(systemsData.savedTrackerCategories || [])];
+  const opts = getAllCategories();
   const seen = new Set();
   return opts
     .filter(c => {
@@ -7249,12 +10238,12 @@ function getTrackerFilterCategoryValues() {
 function populateTrackerCategoryFilterMount() {
   const box = document.getElementById("trackerCategoryFilterMount");
   if (!box) return;
-  const cats = getTrackerFilterCategoryValues();
+  const types = getTrackerTypes();
   box.innerHTML = `
     <label class="inline-check" style="margin:0">
       <span style="margin-right:8px;font-weight:600">Type</span>
       <select id="trackerCategoryFilter" onchange="setTrackerCategoryFilter(this.value)">
-        ${cats.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join("")}
+        ${types.map(t => `<option value="${escapeHTML(t)}">${escapeHTML(t)}</option>`).join("")}
       </select>
     </label>
   `;
@@ -7498,7 +10487,14 @@ function renderSingleTrackerCard(tracker) {
       ` : `<p class="muted-text small">Current value: <strong>${currentLabel}</strong></p>`}
       ${mini.length ? renderMiniBars(mini) : ""}
       ${tracker.startDate || tracker.targetDate ? `<p class="muted-text">${escapeHTML(tracker.startDate || "—")} → ${escapeHTML(tracker.targetDate || "—")}</p>` : ""}
-      ${milestones.length ? `<p class="muted-text">Milestones: ${milestones.slice(0, 3).map(m => escapeHTML(m.title)).join(" • ")}${milestones.length > 3 ? " • …" : ""}</p>` : ""}
+      ${milestones.length ? `
+        <div class="milestone-progress">
+          <p class="muted-text small">Milestones: ${progress.completed}/${progress.total}</p>
+          ${nextMilestone ? `<p class="muted-text small">Next: ${escapeHTML(nextMilestone.name)} at ${escapeHTML(nextMilestone.amount)}${tracker.unit ? " " + escapeHTML(tracker.unit) : ""}</p>` : ""}
+          ${overdue.length ? `<p class="muted-text small" style="color:var(--danger)">${overdue.length} overdue</p>` : ""}
+          ${upcoming && !nextMilestone ? `<p class="muted-text small">Upcoming: ${escapeHTML(upcoming.targetDate)}</p>` : ""}
+        </div>
+      ` : ""}
       ${tracker.resetCustomNote ? `<p class="muted-text">${escapeHTML(tracker.resetCustomNote)}</p>` : ""}
       ${tracker.notes ? `<p>${escapeHTML(tracker.notes)}</p>` : ""}
       <div class="button-row tracker-footer-actions">
@@ -7533,9 +10529,31 @@ function renderTrackersUnifiedList() {
 }
 
 function getTrackersFilteredForList() {
-  return systemsData.trackers.filter(t =>
-    trackerCategoryFilter === "All" || t.category === trackerCategoryFilter
+  const trackers = systemsData.trackers.filter(t =>
+    trackerCategoryFilter === "All" || t.type === trackerCategoryFilter
   );
+  
+  // Include goals as trackers for display
+  const goalsAsTrackers = systemsData.goals
+    .filter(g => trackerCategoryFilter === "All" || g.type === trackerCategoryFilter || (trackerCategoryFilter === "Goal" && g.type === "Goal"))
+    .map(g => ({
+      id: g.id,
+      name: g.name,
+      category: g.category || "Goal",
+      unit: g.unit || "",
+      startValue: g.startValue || 0,
+      currentValue: g.currentValue || 0,
+      targetValue: g.targetValue || 0,
+      direction: g.type === "Decrease toward target" || g.type === "Do not exceed limit" ? "decrease" : "increase",
+      notes: g.notes || "",
+      isGoal: true,
+      linkedHabitId: g.linkedHabitId || "",
+      linkedTrackerId: g.linkedTrackerId || "",
+      deadline: g.deadline || "",
+      milestones: g.milestones || ""
+    }));
+  
+  return [...trackers, ...goalsAsTrackers];
 }
 
 function saveUnifiedTrackerFromModal() {
@@ -7546,12 +10564,14 @@ function saveUnifiedTrackerFromModal() {
   }
   const prev = editingTrackerIndex !== null ? systemsData.trackers[editingTrackerIndex] : null;
   const category = document.getElementById("trackerCategory").value.trim();
+  const type = document.getElementById("trackerType").value.trim();
   const unit = document.getElementById("trackerUnit").value.trim();
   const autoLogUnit = document.getElementById("trackerAutoLogUnit")?.value.trim() ?? "";
   const trackerRaw = {
     id: editingTrackerIndex === null ? createId("tracker") : systemsData.trackers[editingTrackerIndex].id,
     name,
     category,
+    type,
     unit,
     startValue: document.getElementById("trackerStartValue").value,
     currentValue: document.getElementById("trackerCurrentValue").value,
@@ -7567,21 +10587,13 @@ function saveUnifiedTrackerFromModal() {
     linkedRoutineId: document.getElementById("trackerLinkedRoutine")?.value || "",
     linkedPlannerBlockId: document.getElementById("trackerLinkedPlanner")?.value || "",
     linkedObjectiveId: document.getElementById("trackerLinkedObjective")?.value || "",
-    notes: document.getElementById("trackerNotes").value.trim(),
+    milestones: getMilestonesFromForm(),
     legacyMetricType: prev?.legacyMetricType || "",
     autoLogOnPlannerComplete: Boolean(document.getElementById("trackerAutoLogPlanner")?.checked),
     autoLogAmount: document.getElementById("trackerAutoLogAmount")?.value ?? "1",
     autoLogUnit,
     preventDuplicateAutoLogs: document.getElementById("trackerPreventDupAuto")?.checked !== false,
-    milestones: (document.getElementById("trackerMilestones")?.value || "")
-      .split("\n")
-      .map(item => item.trim())
-      .filter(Boolean)
-      .map((title, index) => ({
-        id: prev?.milestones?.[index]?.id || createId("milestone"),
-        title,
-        completed: Boolean(prev?.milestones?.[index]?.completed)
-      }))
+    notes: document.getElementById("trackerNotes").value.trim()
   };
   const tracker = normalizeUnifiedTrackerRecord(trackerRaw);
   rememberTrackerCategory(tracker.category);
@@ -8000,6 +11012,9 @@ function renderSocial() {
   fillEditingSocialForms();
   populateHangoutPeopleSelect();
   renderSelectedHangoutPeopleChips();
+  populateIdeaFriendSelect();
+  populateIdeaFriendFilter();
+  renderSelectedIdeaFriends();
   renderFriendSuggestions();
   renderNeglectedFriends();
   renderMostSeenMonth();
@@ -8121,6 +11136,10 @@ function renderFriendDetail(friend) {
     .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
     .slice(0, 5);
 
+  const linkedIdeas = socialData.ideas
+    .filter(idea => idea.linkedFriendIds && idea.linkedFriendIds.includes(friend.name))
+    .slice(0, 5);
+
   return `
     <div class="detail-panel">
       <p><strong>Birthday:</strong> ${escapeHTML(friend.birthday || "None added")}</p>
@@ -8135,6 +11154,12 @@ function renderFriendDetail(friend) {
         relatedHangouts.length
           ? relatedHangouts.map(h => `<p>${escapeHTML(h.date || "No date")} - ${escapeHTML(h.activity)}</p>`).join("")
           : "<p>No related hangouts yet.</p>"
+      }
+      <p><strong>Linked Ideas:</strong></p>
+      ${
+        linkedIdeas.length
+          ? linkedIdeas.map(idea => `<p>${escapeHTML(idea.favorite ? "* " + idea.title : idea.title)} (${escapeHTML(idea.category)})</p>`).join("")
+          : "<p>No linked ideas yet.</p>"
       }
     </div>
   `;
@@ -8496,6 +11521,77 @@ function deleteHangout(i) {
 }
 
 // IDEAS
+let selectedIdeaFriendIds = [];
+
+function populateIdeaFriendSelect() {
+  const search = document.getElementById("ideaFriendSearch")?.value.trim().toLowerCase() || "";
+  const select = document.getElementById("ideaFriendSelect");
+  if (!select) return;
+
+  const friends = socialData.friends.filter(friend =>
+    friend.name.toLowerCase().includes(search)
+  );
+
+  select.innerHTML = friends.length
+    ? `<option value="">Select a friend...</option>` +
+      friends.map(friend => `<option value="${friend.name}">${escapeHTML(friend.name)}</option>`).join("")
+    : `<option disabled>${socialData.friends.length ? "No friends match search" : "No friends saved yet"}</option>`;
+}
+
+function addSelectedFriendToIdea() {
+  const select = document.getElementById("ideaFriendSelect");
+  if (!select) return;
+
+  const friendName = select.value;
+  if (!friendName) return;
+
+  const friend = socialData.friends.find(f => f.name === friendName);
+  if (!friend) return;
+
+  if (!selectedIdeaFriendIds.includes(friendName)) {
+    selectedIdeaFriendIds.push(friendName);
+    renderSelectedIdeaFriends();
+  }
+
+  select.value = "";
+  document.getElementById("ideaFriendSearch").value = "";
+  populateIdeaFriendSelect();
+}
+
+function removeSelectedIdeaFriend(friendName) {
+  selectedIdeaFriendIds = selectedIdeaFriendIds.filter(id => id !== friendName);
+  renderSelectedIdeaFriends();
+}
+
+function renderSelectedIdeaFriends() {
+  const container = document.getElementById("selectedIdeaFriends");
+  if (!container) return;
+
+  if (selectedIdeaFriendIds.length === 0) {
+    container.innerHTML = "";
+    return;
+  }
+
+  container.innerHTML = selectedIdeaFriendIds.map(friendName => {
+    const friend = socialData.friends.find(f => f.name === friendName);
+    const displayName = friend ? friend.name : friendName;
+    return `<span class="friend-chip">${escapeHTML(displayName)} <button onclick="removeSelectedIdeaFriend('${escapeHTML(friendName)}')" class="chip-remove">×</button></span>`;
+  }).join("");
+}
+
+function populateIdeaFriendFilter() {
+  const select = document.getElementById("ideaFriendFilter");
+  if (!select) return;
+
+  const currentValue = select.value;
+  select.innerHTML = `<option value="All">All friends</option>` +
+    socialData.friends.map(friend => `<option value="${friend.name}">${escapeHTML(friend.name)}</option>`).join("");
+  
+  if (currentValue && socialData.friends.find(f => f.name === currentValue)) {
+    select.value = currentValue;
+  }
+}
+
 function saveIdea() {
   const title = document.getElementById("ideaTitle").value.trim();
   const category = document.getElementById("ideaCategory").value;
@@ -8510,7 +11606,8 @@ function saveIdea() {
     category,
     cost,
     notes,
-    favorite
+    favorite,
+    linkedFriendIds: [...selectedIdeaFriendIds]
   };
 
   if (editingIdeaIndex === null) {
@@ -8520,6 +11617,7 @@ function saveIdea() {
   }
 
   editingIdeaIndex = null;
+  selectedIdeaFriendIds = [];
   saveSocialData();
   activeSocialSection = "Ideas";
   main.innerHTML = getPageHTML("Social");
@@ -8533,16 +11631,32 @@ function renderIdeas() {
   const search = document.getElementById("ideaSearch")?.value.trim().toLowerCase() || "";
   const categoryFilter = document.getElementById("ideaCategoryFilter")?.value || "All";
   const favoriteFilter = document.getElementById("ideaFavoriteFilter")?.value || "All";
+  const friendFilter = document.getElementById("ideaFriendFilter")?.value || "All";
+
   const ideas = socialData.ideas
     .map((idea, index) => ({ idea, index }))
-    .filter(({ idea }) =>
-      (!search || [idea.title, idea.category, idea.cost, idea.notes].join(" ").toLowerCase().includes(search)) &&
-      (categoryFilter === "All" || idea.category === categoryFilter) &&
-      (favoriteFilter !== "Favorites" || idea.favorite)
-    );
+    .filter(({ idea }) => {
+      const linkedFriendNames = (idea.linkedFriendIds || []).map(id => {
+        const friend = socialData.friends.find(f => f.name === id);
+        return friend ? friend.name : id;
+      }).join(" ");
+
+      return (
+        (!search || [idea.title, idea.category, idea.cost, idea.notes, linkedFriendNames].join(" ").toLowerCase().includes(search)) &&
+        (categoryFilter === "All" || idea.category === categoryFilter) &&
+        (favoriteFilter !== "Favorites" || idea.favorite) &&
+        (friendFilter === "All" || (idea.linkedFriendIds && idea.linkedFriendIds.includes(friendFilter)))
+      );
+    });
 
   box.innerHTML = ideas.length
-    ? ideas.map(({ idea, index: i }) => `
+    ? ideas.map(({ idea, index: i }) => {
+      const linkedFriendNames = (idea.linkedFriendIds || []).map(id => {
+        const friend = socialData.friends.find(f => f.name === id);
+        return friend ? friend.name : id;
+      }).filter(name => name);
+
+      return `
     <div class="social-item">
       <div class="item-title">
         <strong>${escapeHTML(idea.favorite ? `* ${idea.title}` : idea.title)}</strong>
@@ -8550,6 +11664,7 @@ function renderIdeas() {
       </div>
       <p>${escapeHTML(idea.cost || "")}</p>
       <p>${escapeHTML(idea.notes || "")}</p>
+      ${linkedFriendNames.length ? `<p class="linked-friends"><strong>Linked friends:</strong> ${escapeHTML(linkedFriendNames.join(", "))}</p>` : ""}
       <div class="button-row">
         <button onclick="useIdea(${i})">Turn into Hangout</button>
         <button onclick="toggleIdeaFavorite(${i})">${idea.favorite ? "Unfavorite" : "Favorite"}</button>
@@ -8559,7 +11674,7 @@ function renderIdeas() {
         <button class="danger-btn" onclick="deleteIdea(${i})">Delete</button>
       </div>
     </div>
-  `).join("")
+  `}).join("")
     : "<p>No ideas match those filters.</p>";
 }
 
@@ -8582,6 +11697,7 @@ function editIdea(i) {
 
 function resetIdeaForm() {
   editingIdeaIndex = null;
+  selectedIdeaFriendIds = [];
   activeSocialSection = "Ideas";
   main.innerHTML = getPageHTML("Social");
   renderSocial();
@@ -8645,6 +11761,7 @@ function fillEditingSocialForms() {
     document.getElementById("ideaCost").value = idea.cost || "";
     document.getElementById("ideaNotes").value = idea.notes || "";
     document.getElementById("ideaFavorite").checked = idea.favorite;
+    selectedIdeaFriendIds = Array.isArray(idea.linkedFriendIds) ? [...idea.linkedFriendIds] : [];
     document.getElementById("ideaSaveButton").textContent = "Update Idea";
   }
 }
@@ -8826,737 +11943,41 @@ function getDaysSince(dateString) {
   const [year, month, day] = dateString.split("-").map(Number);
   const seenDate = new Date(year, month - 1, day);
   const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  seenDate.setHours(0, 0, 0, 0);
-  return Math.max(Math.floor((today - seenDate) / 86400000), 0);
+  const diffTime = today - seenDate;
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  return diffDays;
 }
 
-function getHangoutFrequencyText() {
-  const completed = socialData.hangouts.filter(hangout => hangout.completed && hangout.date);
-  if (!completed.length) return "No completed hangouts logged yet.";
-
-  const sortedDates = completed
-    .map(hangout => hangout.date)
-    .sort();
-  const firstDate = sortedDates[0];
-  const daysSinceFirst = Math.max(getDaysSince(firstDate), 1);
-  const perWeek = Math.round((completed.length / Math.max(daysSinceFirst / 7, 1)) * 10) / 10;
-
-  return `${perWeek} completed hangout${perWeek === 1 ? "" : "s"} per week`;
+function computeFriendScore(friend) {
+  const priorityPoints = { High: 60, Medium: 35, Low: 15 }[friend.priority] || 25;
+  const daysSince = getDaysSince(friend.lastSeen);
+  const recencyPoints = daysSince === null ? 90 : Math.min(daysSince, 90);
+  const score = priorityPoints + recencyPoints;
+  const reasonDays = daysSince === null
+    ? "never seen"
+    : `${daysSince}d ago`;
+  return { score, priorityPoints, recencyPoints, daysSince, reasonDays };
 }
 
-function getAverageHangoutSpend() {
-  const costs = socialData.hangouts
-    .map(hangout => Number(String(hangout.cost || "").replace(/[^0-9.]/g, "")))
-    .filter(cost => Number.isFinite(cost) && cost > 0);
-  if (!costs.length) return 0;
-  return Math.round(costs.reduce((sum, cost) => sum + cost, 0) / costs.length);
-}
-
-function getSmartSocialSuggestions() {
-  const suggestions = [];
-  const topFriend = getFriendSuggestions()[0]?.friend;
-  const cheapIdea = socialData.ideas.find(idea => idea.favorite && idea.category === "Cheap") ||
-    socialData.ideas.find(idea => idea.category === "Cheap");
-  const favoriteIdea = socialData.ideas.find(idea => idea.favorite);
-  const friday = getNextWeekdayISO(5);
-  const fridayFree = getFreeSlots(friday, 60)[0];
-
-  if (topFriend) {
-    const daysContacted = getDaysSince(topFriend.lastContacted);
-    const daysSeen = getDaysSince(topFriend.lastSeen);
-    if (daysContacted === null || daysContacted >= 7) suggestions.push(`Text ${topFriend.name} today`);
-    if (daysSeen === null || daysSeen >= 21) suggestions.push(`You haven't seen ${topFriend.name} in ${daysSeen === null ? "a while" : `${daysSeen} days`}`);
-    if (favoriteIdea) suggestions.push(`Use "${favoriteIdea.title}" with ${topFriend.name}`);
-  }
-
-  if (cheapIdea) suggestions.push(`Plan a cheap hangout this weekend: ${cheapIdea.title}`);
-  if (fridayFree) suggestions.push(`You have free time Friday night: ${fridayFree.start}-${fridayFree.end}`);
-
-  return suggestions.slice(0, 5);
-}
-
-function getNextWeekdayISO(targetDay) {
-  const date = new Date();
-  const diff = (targetDay + 7 - date.getDay()) % 7 || 7;
-  date.setDate(date.getDate() + diff);
-  return date.toISOString().split("T")[0];
-}
-
-function showSocialImportMode(mode) {
-  document.getElementById("socialImportFileMode")?.classList.toggle("hidden", mode !== "file");
-  document.getElementById("socialImportPasteMode")?.classList.toggle("hidden", mode !== "paste");
-  pendingSocialImport = null;
-  renderSocialImportPreview(null);
-}
-
-function handleSocialImportFile(event) {
-  const file = event.target.files && event.target.files[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-  reader.onload = () => previewSocialImport(String(reader.result || ""), file.name);
-  reader.onerror = () => {
-    pendingSocialImport = null;
-    renderSocialImportPreview(null);
-    showToast("Could not read that file.", "error");
-  };
-  reader.readAsText(file);
-}
-
-function previewSocialImportFromTextarea() {
-  const raw = document.getElementById("hangoutPlannerImportJson")?.value.trim();
-  if (!raw) {
-    pendingSocialImport = null;
-    renderSocialImportPreview(null);
-    showToast("Paste JSON first.", "error");
-    return;
-  }
-  previewSocialImport(raw, "Pasted JSON");
-}
-
-function previewSocialImportFromLocalStorage() {
-  const savedJSON = localStorage.getItem("hangout-planner-v1") || localStorage.getItem("flowSocialData");
-  if (!savedJSON) {
-    pendingSocialImport = null;
-    renderSocialImportPreview(null);
-    showToast("No social import data found in this browser localStorage.", "error");
-    return;
-  }
-  previewSocialImport(savedJSON, localStorage.getItem("hangout-planner-v1") ? "hangout-planner-v1 localStorage" : "flowSocialData localStorage");
-}
-
-function previewSocialImport(rawJSON, sourceLabel) {
-  try {
-    const parsed = parseSocialImportJSON(rawJSON);
-    const normalized = normalizeSocialImportPayload(parsed);
-    pendingSocialImport = {
-      ...normalized,
-      sourceLabel
-    };
-    renderSocialImportPreview(pendingSocialImport);
-    showToast(`Preview ready: ${normalized.friends.length} friends, ${normalized.hangouts.length} hangouts, ${normalized.ideas.length} ideas.`);
-  } catch (error) {
-    pendingSocialImport = null;
-    renderSocialImportPreview(null, error.message);
-    showToast(error.message || "Invalid JSON.", "error");
-  }
-}
-
-function parseSocialImportJSON(sourceJSON) {
-  let raw = String(sourceJSON || "").trim();
-
-  if (!raw) {
-    throw new Error("No JSON found.");
-  }
-
-  if (raw.startsWith("`") && raw.endsWith("`")) {
-    raw = raw.slice(1, -1).trim();
-  }
-
-  const firstBrace = raw.indexOf("{");
-  const lastBrace = raw.lastIndexOf("}");
-
-  if (firstBrace !== -1 && lastBrace !== -1) {
-    raw = raw.slice(firstBrace, lastBrace + 1);
-  }
-
-  try {
-    return JSON.parse(raw);
-  } catch (error) {
-    throw new Error("Invalid JSON. Check for missing commas, extra text, or an incomplete file.");
-  }
-}
-
-function normalizeSocialImportPayload(data) {
-  const source = data && data.socialData && typeof data.socialData === "object"
-    ? data.socialData
-    : data;
-
-  if (!source || typeof source !== "object") {
-    throw new Error("Import must be a JSON object.");
-  }
-
-  const oldFriends = Array.isArray(source.friends) ? source.friends : [];
-  const oldHangouts = Array.isArray(source.hangouts) ? source.hangouts : [];
-  const oldIdeas = Array.isArray(source.ideas) ? source.ideas : [];
-
-  if (!oldFriends.length && !oldHangouts.length && !oldIdeas.length) {
-    throw new Error("No friends, hangouts, or ideas were found in that JSON.");
-  }
-
-  const looksLikeFlowSocial = oldFriends.some(friend => "lastSeen" in friend || "favoriteActivities" in friend || "contactNotes" in friend) ||
-    oldHangouts.some(hangout => "activity" in hangout && "people" in hangout) ||
-    oldIdeas.some(idea => "favorite" in idea);
-
-  if (looksLikeFlowSocial) {
-    const normalized = normalizeSocialBackupData({
-      friends: oldFriends,
-      hangouts: oldHangouts,
-      ideas: oldIdeas
-    });
-
-    return {
-      friends: normalized.friends.filter(friend => friend.name),
-      hangouts: normalized.hangouts.filter(hangout => hangout.activity),
-      ideas: normalized.ideas.filter(idea => idea.title)
-    };
-  }
-
-  const oldFriendNamesById = oldFriends.reduce((map, friend) => {
-    if (friend.id && friend.name) map[String(friend.id)] = friend.name;
-    return map;
-  }, {});
-
-  return {
-    friends: oldFriends.map(convertHangoutFriend).filter(friend => friend.name),
-    hangouts: oldHangouts.map(hangout => convertHangoutEvent(hangout, oldFriendNamesById)).filter(hangout => hangout.activity),
-    ideas: oldIdeas.map(convertHangoutIdea).filter(idea => idea.title)
-  };
-}
-
-function renderSocialImportPreview(importData, errorMessage = "") {
-  const box = document.getElementById("socialImportPreview");
-  const button = document.getElementById("socialImportConfirmButton");
-  if (!box) return;
-
-  if (button) button.disabled = !importData;
-
-  if (!importData) {
-    box.innerHTML = errorMessage
-      ? `<p class="import-error">${escapeHTML(errorMessage)}</p>`
-      : "<p>No import preview yet.</p>";
-    return;
-  }
-
-  box.innerHTML = `
-    <p class="muted-text">Preview from ${escapeHTML(importData.sourceLabel || "JSON")}</p>
-    <div class="summary-grid import-count-grid">
-      <div><strong>${importData.friends.length}</strong><span>Friends</span></div>
-      <div><strong>${importData.hangouts.length}</strong><span>Hangouts</span></div>
-      <div><strong>${importData.ideas.length}</strong><span>Ideas</span></div>
-    </div>
-    <p class="muted-text">Nothing is imported until you press Import Previewed Data.</p>
-  `;
-}
-
-function importHangoutPlannerData() {
-  const raw = document.getElementById("hangoutPlannerImportJson")?.value.trim() || localStorage.getItem("hangout-planner-v1") || "";
-  previewSocialImport(raw, "Legacy import");
-  confirmSocialImport();
-}
-
-function confirmSocialImport() {
-  if (!pendingSocialImport) {
-    showToast("Preview a JSON file, pasted JSON, or browser localStorage before importing.", "error");
-    return;
-  }
-
-  const importedFriends = pendingSocialImport.friends;
-  const importedHangouts = pendingSocialImport.hangouts;
-  const importedIdeas = pendingSocialImport.ideas;
-  const existingFriendNames = new Set(socialData.friends.map(friend =>
-    normalizeDuplicateKey(friend.name)
-  ));
-  let addedFriends = 0;
-  let addedHangouts = 0;
-  let addedIdeas = 0;
-  let skippedFriends = 0;
-  let skippedHangouts = 0;
-  let skippedIdeas = 0;
-
-  importedFriends.forEach(friend => {
-    const key = normalizeDuplicateKey(friend.name);
-    if (!existingFriendNames.has(key)) {
-      socialData.friends.push(friend);
-      existingFriendNames.add(key);
-      addedFriends++;
-    } else {
-      skippedFriends++;
-    }
-  });
-
-  const existingHangouts = new Set(socialData.hangouts.map(getHangoutDuplicateKey));
-  importedHangouts.forEach(hangout => {
-    const key = getHangoutDuplicateKey(hangout);
-    if (!existingHangouts.has(key)) {
-      socialData.hangouts.push(hangout);
-      existingHangouts.add(key);
-      addedHangouts++;
-    } else {
-      skippedHangouts++;
-    }
-  });
-
-  const existingIdeas = new Set(socialData.ideas.map(idea =>
-    normalizeDuplicateKey(idea.title)
-  ));
-  importedIdeas.forEach(idea => {
-    const key = normalizeDuplicateKey(idea.title);
-    if (!existingIdeas.has(key)) {
-      socialData.ideas.push(idea);
-      existingIdeas.add(key);
-      addedIdeas++;
-    } else {
-      skippedIdeas++;
-    }
-  });
-
-  saveSocialData();
-  pendingSocialImport = null;
-  renderSocialImportPreview(null);
-  const fileInput = document.getElementById("socialImportFile");
-  const textInput = document.getElementById("hangoutPlannerImportJson");
-  if (fileInput) fileInput.value = "";
-  if (textInput) textInput.value = "";
-  showToast(`Imported ${addedFriends} friends, ${addedHangouts} hangouts, and ${addedIdeas} ideas. Skipped ${skippedFriends + skippedHangouts + skippedIdeas} duplicates.`);
-}
-
-function convertHangoutFriend(friend) {
-  return {
-    name: friend.name || "",
-    priority: normalizePriority(friend.priority),
-    interests: joinValue(friend.interests),
-    details: [
-      friend.birthday ? `Birthday: ${friend.birthday}` : "",
-      friend.favorite_food_drinks ? `Favorite food/drinks: ${joinValue(friend.favorite_food_drinks)}` : "",
-      friend.budget_level ? `Budget: ${friend.budget_level}` : "",
-      friend.availability ? `Availability: ${friend.availability}` : "",
-      friend.dislikes ? `Dislikes: ${joinValue(friend.dislikes)}` : "",
-      friend.gift_ideas ? `Gift ideas: ${joinValue(friend.gift_ideas)}` : "",
-      friend.memories ? `Memories: ${joinValue(friend.memories)}` : ""
-    ].filter(Boolean).join("\n"),
-    notes: friend.notes || friend.next_idea || "",
-    favoriteActivities: joinValue(friend.favorites || friend.favorite_food_drinks),
-    contactNotes: friend.contact_info || "",
-    lastSeen: friend.last_hangout || ""
-  };
-}
-
-function convertHangoutEvent(hangout, friendNamesById) {
-  const people = Array.isArray(hangout.friendIds)
-    ? hangout.friendIds.map(id => friendNamesById[String(id)]).filter(Boolean)
-    : [];
-  const checklist = Array.isArray(hangout.shared_checklist)
-    ? hangout.shared_checklist.map(item => typeof item === "string" ? item : item.text || item.title || "").filter(Boolean).join(", ")
-    : joinValue(hangout.shared_checklist);
-
-  return {
-    activity: hangout.activity || "",
-    date: hangout.date || "",
-    time: hangout.time || "",
-    location: hangout.location || "",
-    people,
-    cost: hangout.actual_cost || hangout.estimated_cost || "",
-    notes: [
-      hangout.notes || "",
-      hangout.mood ? `Mood: ${hangout.mood}` : "",
-      checklist ? `Checklist: ${checklist}` : ""
-    ].filter(Boolean).join("\n"),
-    completed: hangout.status === "Completed"
-  };
-}
-
-function convertHangoutIdea(idea) {
-  return {
-    title: idea.title || "",
-    category: idea.category || "Cheap",
-    cost: idea.estimated_cost || "",
-    notes: [
-      idea.notes || "",
-      idea.timing ? `Timing: ${idea.timing}` : "",
-      idea.friend_connections ? `Friends: ${joinValue(idea.friend_connections)}` : ""
-    ].filter(Boolean).join("\n"),
-    favorite: false
-  };
-}
-
-function exportCurrentSocialData() {
-  const json = JSON.stringify(socialData, null, 2);
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(json).catch(() => {});
-  }
-
-  const blob = new Blob([json], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "flow-social-data.json";
-  link.click();
-  URL.revokeObjectURL(url);
-  showToast("Social data exported.");
-}
-
-function showToast(message, type = "success") {
-  let container = document.getElementById("toastContainer");
-  if (!container) {
-    container = document.createElement("div");
-    container.id = "toastContainer";
-    container.className = "toast-container";
-    document.body.appendChild(container);
-  }
-
-  const toast = document.createElement("div");
-  toast.className = `toast toast-${type}`;
-  toast.textContent = message;
-  container.appendChild(toast);
-
-  setTimeout(() => {
-    toast.classList.add("toast-hide");
-    setTimeout(() => toast.remove(), 220);
-  }, 3200);
-}
-
-function getHangoutDuplicateKey(hangout) {
-  return [
-    hangout.date || "",
-    normalizeDuplicateKey(hangout.activity),
-    [...hangout.people].sort().map(normalizeDuplicateKey).join("|")
-  ].join("::");
-}
-
-function normalizeDuplicateKey(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function normalizePriority(priority) {
-  const value = String(priority || "").trim().toLowerCase();
-  if (value === "high") return "High";
-  if (value === "low") return "Low";
-  return "Medium";
-}
-
-function joinValue(value) {
-  if (Array.isArray(value)) return value.filter(Boolean).join(", ");
-  if (value && typeof value === "object") return Object.values(value).filter(Boolean).join(", ");
-  return value || "";
-}
-
-function getFullDataBackup() {
-  return {
-    exportedAt: new Date().toISOString(),
-    version: 1,
-    plannerData,
-    scheduleData,
-    systemsData,
-    socialData
-  };
-}
-
-function downloadJSON(filename, data) {
-  const json = JSON.stringify(data, null, 2);
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(json).catch(() => {});
-  }
-  const blob = new Blob([json], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-function downloadFullBackup() {
-  downloadJSON(`flow-planner-backup-${getTodayISO()}.json`, getFullDataBackup());
-  alert("Flow Planner backup downloaded.");
-}
-
-function exportAllData() {
-  downloadFullBackup();
-}
-
-function importAllData() {
-  const textarea = document.getElementById("allDataImportJson");
-  const raw = textarea ? textarea.value.trim() : "";
-  if (!raw) {
-    alert("Paste a Flow Planner backup JSON first.");
-    return;
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    const backup = normalizeFullBackup(parsed);
-    plannerData = backup.plannerData;
-    scheduleData = backup.scheduleData;
-    systemsData = backup.systemsData;
-    socialData = backup.socialData;
-    collectExistingUnitsIntoSettings();
-    saveScheduleData();
-    saveSystemsData();
-    saveSocialData();
-    savePlannerData();
-    selectedPlannerDate = getTodayISO();
-    visiblePlannerMonth = selectedPlannerDate.slice(0, 7);
-    editingPlanIndex = null;
-    editingRoutineIndex = null;
-    editingBlockIndex = null;
-    editingHabitIndex = null;
-    editingTrackerIndex = null;
-    editingGoalIndex = null;
-    editingMetricIndex = null;
-    alert("Flow Planner backup restored.");
-    main.innerHTML = getPageHTML("Settings");
-  } catch (error) {
-    alert(error.message || "Could not import that JSON backup.");
-  }
-}
-
-function normalizeFullBackup(parsed) {
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("Backup must be a JSON object.");
-  }
-
-  const hasAllSections = ["plannerData", "scheduleData", "systemsData", "socialData"]
-    .every(key => parsed[key] && typeof parsed[key] === "object");
-
-  if (!hasAllSections) {
-    throw new Error("Backup must include plannerData, scheduleData, systemsData, and socialData.");
-  }
-
-  return {
-    plannerData: normalizePlannerBackupData(parsed.plannerData),
-    scheduleData: normalizeScheduleBackupData(parsed.scheduleData),
-    systemsData: normalizeSystemsBackupData(parsed.systemsData),
-    socialData: normalizeSocialBackupData(parsed.socialData)
-  };
-}
-
-function normalizePlannerBackupData(data) {
-  return {
-    plans: Array.isArray(data.plans)
-      ? data.plans.map(plan => ({
-          title: plan.title || "",
-          date: plan.date || "",
-          time: plan.time || "",
-          category: plan.category || "Personal",
-          notes: plan.notes || ""
-        }))
-      : []
-  };
-}
-
-function normalizeScheduleBackupData(data) {
-  const blocks = Array.isArray(data.blocks) ? data.blocks : [];
-  const routines = Array.isArray(data.routines) ? data.routines : [];
-
-  return {
-    ...data,
-    blocks: blocks.map(block => ({
-      ...block,
-      id: block.id || createId("block"),
-      title: block.title || "",
-      date: block.date || "",
-      start: block.start || "",
-      end: block.end || "",
-      category: block.category || "Personal",
-      notes: block.notes || "",
-      type: block.type || (block.routineId ? "routine" : "task"),
-      completed: Boolean(block.completed),
-      tasks: Array.isArray(block.tasks) ? block.tasks.map(normalizeTask) : [],
-      isBuffer: Boolean(block.isBuffer)
-    })),
-    routines: routines.map(routine => {
-      const normalizedRoutine = {
-        ...routine,
-        id: routine.id || createId("routine"),
-        name: routine.name || "",
-        type: routine.type || "Custom",
-        start: routine.start || "",
-        end: routine.end || "",
-        repeatDays: Array.isArray(routine.repeatDays) ? routine.repeatDays.map(Number).filter(day => day >= 0 && day <= 6) : [],
-        dayTimes: routine.dayTimes && typeof routine.dayTimes === "object" ? routine.dayTimes : {},
-        tasks: Array.isArray(routine.tasks) ? routine.tasks : [],
-        notes: routine.notes || "",
-        autoAdd: Boolean(routine.autoAdd),
-        completions: routine.completions && typeof routine.completions === "object" ? routine.completions : {},
-        completedDates: Array.isArray(routine.completedDates) ? routine.completedDates : [],
-        streak: typeof routine.streak === "number" ? routine.streak : 0
-      };
-      normalizedRoutine.dayTimes = normalizeRoutineDayTimes(normalizedRoutine);
-      return normalizedRoutine;
-    }),
-    bufferMinutes: typeof data.bufferMinutes === "number" ? data.bufferMinutes : 15
-  };
-}
-
-function normalizeSystemsBackupData(data) {
-  const raw = data && typeof data === "object" ? data : {};
-  return {
-    savedTrackerCategories: Array.isArray(raw.savedTrackerCategories) ? raw.savedTrackerCategories : [],
-    savedTrackerUnits: Array.isArray(raw.savedTrackerUnits) ? raw.savedTrackerUnits : [],
-    unitSortMode: raw.unitSortMode === "alpha" ? "alpha" : "defaults",
-    _trackersUnifiedV1: raw._trackersUnifiedV1 !== undefined ? Boolean(raw._trackersUnifiedV1) : true,
-    habits: Array.isArray(raw.habits) ? raw.habits.map(habit => ({
-      ...habit,
-      id: habit.id || createId("habit"),
-      name: habit.name || "",
-      category: habit.category || "",
-      frequency: habit.frequency || "Daily",
-      targetFrequency: habit.targetFrequency || habit.frequency || "Daily",
-      target: habit.target || "",
-      unit: habit.unit || "",
-      linkedGoalId: habit.linkedGoalId || "",
-      linkedTrackerId: habit.linkedTrackerId || "",
-      linkedRoutineId: habit.linkedRoutineId || "",
-      linkedPlannerBlockId: habit.linkedPlannerBlockId || "",
-      autoLogTrackerOnComplete: Boolean(habit.autoLogTrackerOnComplete),
-      trackerLogAmount: habit.trackerLogAmount !== undefined && habit.trackerLogAmount !== null ? String(habit.trackerLogAmount) : "",
-      paused: Boolean(habit.paused),
-      skippedDates: Array.isArray(habit.skippedDates) ? habit.skippedDates : [],
-      completionHistory: Array.isArray(habit.completionHistory) ? habit.completionHistory : [],
-      notes: habit.notes || "",
-      completions: Array.isArray(habit.completions) ? habit.completions : []
-    })) : [],
-    logs: Array.isArray(raw.logs) ? raw.logs.map(log => {
-      const linkedTrackerId = log.linkedTrackerId || log.trackerId || "";
-      const linkedItemType = log.linkedItemType || (log.linkedMetricId ? "metric" : log.linkedGoalId ? "goal" : linkedTrackerId ? "tracker" : log.linkedHabitId ? "habit" : "");
-      const merged = {
-        ...log,
-        id: log.id || createId("log"),
-        title: log.title || "",
-        type: log.type || "Custom",
-        valueType: log.valueType || log.type || "Custom",
-        value: log.value || "",
-        unit: log.unit || "",
-        date: log.date || "",
-        notes: log.notes || "",
-        linkedHabitId: log.linkedHabitId || "",
-        linkedMetricId: log.linkedMetricId || "",
-        linkedTrackerId,
-        linkedGoalId: log.linkedGoalId || "",
-        linkedPlannerBlockId: log.linkedPlannerBlockId || "",
-        linkedRoutineId: log.linkedRoutineId || "",
-        linkedObjectiveId: log.linkedObjectiveId || "",
-        linkedItemType
-      };
+function getFriendSuggestions() {
+  return socialData.friends
+    .map(friend => {
+      const { score, reasonDays } = computeFriendScore(friend);
       return {
-        ...merged,
-        logSource: merged.logSource || inferLegacyLogSource(merged),
-        plannerAutoLogKey: merged.plannerAutoLogKey || "",
-        inactive: Boolean(merged.inactive)
+        friend,
+        score,
+        reason: `${friend.priority} priority · ${reasonDays}`
       };
-    }) : [],
-    trackers: Array.isArray(raw.trackers) ? raw.trackers.map(tracker =>
-      normalizeUnifiedTrackerRecord({
-        ...tracker,
-        id: tracker.id || createId("tracker"),
-        name: tracker.name || "",
-        category: tracker.category || tracker.type || "Custom",
-        unit: tracker.unit || "",
-        notes: tracker.notes || ""
-      })
-    ) : [],
-    goals: Array.isArray(raw.goals) ? raw.goals.map(goal => ({
-      ...goal,
-      id: goal.id || createId("goal"),
-      name: goal.name || "",
-      category: goal.category || "Custom",
-      unit: goal.unit || "",
-      linkedPlannerBlockId: goal.linkedPlannerBlockId || "",
-      linkedRoutineId: goal.linkedRoutineId || "",
-      linkedObjectiveId: goal.linkedObjectiveId || "",
-      milestones: Array.isArray(goal.milestones) ? goal.milestones : [],
-      recurringTarget: goal.recurringTarget || "",
-      notes: goal.notes || ""
-    })) : [],
-    metrics: Array.isArray(raw.metrics) ? raw.metrics.map(metric => ({
-      ...metric,
-      id: metric.id || createId("metric"),
-      name: metric.name || "",
-      type: metric.type || "Counter",
-      unit: metric.unit || "",
-      recurringTarget: metric.recurringTarget || "",
-      notes: metric.notes || "",
-      entries: Array.isArray(metric.entries) ? metric.entries : []
-    })) : [],
-    objectives: Array.isArray(raw.objectives) ? raw.objectives.map(objective => ({
-      ...objective,
-      id: objective.id || createId("objective"),
-      title: objective.title || "",
-      type: objective.type || "Task",
-      status: objective.status || "Not started",
-      priority: objective.priority || "Medium",
-      dueDate: objective.dueDate || "",
-      dueTime: objective.dueTime || "",
-      estimatedMinutes: objective.estimatedMinutes || "",
-      category: objective.category || "",
-      tags: objective.tags || "",
-      notes: objective.notes || "",
-      linkedPlannerBlockId: objective.linkedPlannerBlockId || "",
-      linkedRoutineId: objective.linkedRoutineId || "",
-      linkedHabitId: objective.linkedHabitId || "",
-      linkedTrackerId: objective.linkedTrackerId || "",
-      linkedGoalId: objective.linkedGoalId || "",
-      trackerLogAmount: objective.trackerLogAmount || "",
-      completedDate: objective.completedDate || "",
-      completedAt: objective.completedAt || "",
-      autoCompleteFromPlanner: objective.autoCompleteFromPlanner !== false,
-      autoCompleteFromHabit: objective.autoCompleteFromHabit !== false,
-      focus: Boolean(objective.focus),
-      recurring: objective.recurring || "",
-      subtasks: Array.isArray(objective.subtasks) ? objective.subtasks : []
-    })) : []
-  };
+    })
+    .sort((a, b) => b.score - a.score);
 }
 
-function normalizeSocialBackupData(data) {
-  return {
-    friends: Array.isArray(data.friends) ? data.friends.map(friend => ({
-      name: friend.name || "",
-      priority: friend.priority || "Medium",
-      interests: friend.interests || "",
-      details: friend.details || "",
-      notes: friend.notes || "",
-      favoriteActivities: friend.favoriteActivities || "",
-      contactNotes: friend.contactNotes || "",
-      lastSeen: friend.lastSeen || friend.lastHangout || ""
-    })) : [],
-    hangouts: Array.isArray(data.hangouts) ? data.hangouts.map(hangout => ({
-      activity: hangout.activity || hangout.title || "",
-      date: hangout.date || "",
-      time: hangout.time || "",
-      location: hangout.location || hangout.place || "",
-      people: Array.isArray(hangout.people) ? hangout.people : (hangout.friend ? [hangout.friend] : []),
-      cost: hangout.cost || "",
-      notes: hangout.notes || "",
-      completed: Boolean(hangout.completed)
-    })) : [],
-    ideas: Array.isArray(data.ideas) ? data.ideas.map(idea => ({
-      title: idea.title || "",
-      category: idea.category || "Cheap",
-      cost: idea.cost || "",
-      notes: idea.notes || "",
-      favorite: Boolean(idea.favorite)
-    })) : []
-  };
-}
-
-// SETTINGS
-function clearPlanner() {
-  plannerData = { plans: [] };
-  savePlannerData();
-  alert("Planner cleared");
-}
-
-function clearSocial() {
-  socialData = { friends: [], hangouts: [], ideas: [] };
-  saveSocialData();
-  alert("Social cleared");
-}
-
-function clearSystems() {
-  systemsData = {
-    habits: [],
-    logs: [],
-    trackers: [],
-    goals: [],
-    metrics: [],
-    savedTrackerCategories: [],
-    savedTrackerUnits: [],
-    unitSortMode: "defaults",
-    _trackersUnifiedV1: true
-  };
-  saveSystemsData();
-  alert("Systems cleared");
+function getDaysSince(dateString) {
+  if (!dateString) return null;
+  const [year, month, day] = dateString.split("-").map(Number);
+  const seenDate = new Date(year, month - 1, day);
+  const today = new Date();
+  const diffTime = today - seenDate;
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  return diffDays;
 }

@@ -702,9 +702,21 @@ textarea:focus {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 0;
+  width: 100%;
+  padding: 8px 12px;
+  margin: 0;
   background: var(--surface);
   color: var(--text);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.collapse-header:hover {
+  background: var(--border);
 }
 
 .collapsible-card {
@@ -755,6 +767,61 @@ textarea:focus {
   color: var(--card);
   font-size: 12px;
   font-weight: 600;
+}
+
+.friend-selector {
+  margin-top: 12px;
+}
+
+.friend-selector label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.selected-friends-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  min-height: 24px;
+}
+
+.friend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--card);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chip-remove {
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--card);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  margin: 0;
+  min-height: auto;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.chip-remove:hover {
+  opacity: 1;
+}
+
+.linked-friends {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
 .muted-text {
@@ -2738,7 +2805,6 @@ button:disabled {
   color: var(--muted);
 }
 
-< HEAD
 /* Habit Completion Modal */
 .habit-complete-modal {
   width: 100%;
@@ -3170,7 +3236,8 @@ button:disabled {
   font-size: 12px;
   color: var(--text-muted);
   margin-top: 4px;
-=======
+}
+
 .link-options {
   margin: 10px 0;
 }
@@ -3191,10 +3258,83 @@ button:disabled {
 
 .unit-settings-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 1fr auto;
   gap: 8px;
-  align-items: end;
-  margin-top: 12px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Milestone form styles */
+#milestonesContainer {
+  margin: 10px 0;
+}
+
+.milestone-row {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+
+.milestone-header {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.milestone-header input[type="text"] {
+  flex: 1;
+}
+
+.milestone-header input[type="checkbox"] {
+  width: auto;
+  min-height: unset;
+  margin: 0;
+}
+
+.delete-milestone-btn {
+  background: var(--danger);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.delete-milestone-btn:hover {
+  opacity: 0.8;
+}
+
+.milestone-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.milestone-details input {
+  font-size: 12px;
+}
+
+/* Milestone progress on tracker card */
+.milestone-progress {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  margin: 8px 0;
+}
+
+.milestone-progress p {
+  margin: 2px 0;
 }
 
 .unit-settings-row button {
@@ -3343,6 +3483,568 @@ button:disabled {
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
+/* Systems Overview - Summary Chips */
+.systems-summary-chips {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.summary-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px;
+  background: var(--card);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+.chip-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.chip-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.chip-warning {
+  border-color: var(--danger);
+}
+
+.chip-warning .chip-value {
+  color: var(--danger);
+}
+
+/* Systems Overview - Layout */
+.systems-overview-layout {
+  display: grid;
+  gap: 16px;
+}
+
+@media (min-width: 1024px) {
+  .systems-overview-layout {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+}
+
+/* Category Cards Grid */
+.category-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.category-card {
+  padding: 12px;
+  background: var(--surface);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+.category-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.category-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.category-time {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.category-card-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.category-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.stat-value {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.category-card-footer {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.category-overdue.overdue {
+  color: var(--danger);
+}
+
+/* Activity Feed Compact */
+.activity-feed-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.activity-date-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.activity-date-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.activity-feed-compact-item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  background: var(--surface);
+  border-radius: 8px;
+}
+
+.activity-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  font-size: 14px;
+}
+
+.activity-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.activity-content strong {
+  font-size: 13px;
+}
+
+.activity-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.activity-time {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Habit Compact Cards */
+.habits-overview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.habit-compact-card {
+  padding: 12px;
+  background: var(--surface);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+.habit-compact-card.completed {
+  opacity: 0.7;
+}
+
+.habit-compact-card.paused {
+  opacity: 0.6;
+}
+
+.habit-compact-header {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.habit-category-pill,
+.habit-frequency-pill {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.habit-streak-badge {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 10px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+
+.habit-compact-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.habit-compact-title strong {
+  font-size: 15px;
+}
+
+.habit-progress {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.habit-compact-stats {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.habit-stat {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.habit-mini-heatmap {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 10px;
+}
+
+.heatmap-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.heatmap-dot.completed {
+  background: var(--accent);
+}
+
+.heatmap-dot.skipped {
+  background: var(--text-muted);
+  opacity: 0.5;
+}
+
+.heatmap-dot.today {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.habit-compact-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.habit-action-btn {
+  padding: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--card);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.habit-action-btn:hover {
+  background: var(--surface);
+}
+
+.habit-action-btn.primary {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+.habit-action-btn.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+}
+
+.habit-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Add Options Grid */
+.add-options-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+@media (min-width: 480px) {
+  .add-options-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.add-option-card {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.add-option-card:hover {
+  background: var(--surface-2);
+}
+
+.add-option-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  font-size: 18px;
+}
+
+.add-option-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.add-option-content strong {
+  font-size: 14px;
+}
+
+.add-option-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Form Section Labels */
+.form-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin: 16px 0 8px 0;
+}
+
+.form-section-label:first-child {
+  margin-top: 0;
+}
+
+/* Systems Architecture Info */
+.systems-architecture-info {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.systems-architecture-info p {
+  margin-bottom: 4px;
+}
+
+/* Systems Overview Layout */
+.systems-overview-layout {
+  display: grid;
+  gap: 16px;
+}
+
+@media (min-width: 900px) {
+  .systems-overview-layout {
+    grid-template-columns: 1fr 1.2fr 1fr;
+    align-items: start;
+  }
+}
+
+/* Systems Category Grid */
+.category-cards-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.category-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+/* Habit Cards */
+.habit-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.habit-action-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.habit-action-grid button {
+  margin-top: 0;
+  padding: 8px;
+  min-height: 36px;
+  font-size: 12px;
+}
+
+@media (max-width: 600px) {
+  .habit-action-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Activity Feed */
+.activity-feed-list {
+  display: grid;
+  gap: 8px;
+}
+
+.activity-feed-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Options Management */
+.option-manager {
+  display: grid;
+  gap: 16px;
+}
+
+.option-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.option-toolbar label {
+  margin: 0;
+  min-width: 80px;
+}
+
+.option-toolbar input,
+.option-toolbar select {
+  flex: 1;
+  min-width: 120px;
+}
+
+.option-toolbar button {
+  min-width: 80px;
+}
+
+.option-list {
+  display: grid;
+  gap: 8px;
+}
+
+.option-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.option-row.is-default {
+  border-color: var(--border);
+}
+
+.option-row-name {
+  font-weight: 500;
+}
+
+.option-row.is-default .option-row-name {
+  color: var(--text-muted);
+}
+
+.option-row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.option-row-actions button {
+  width: auto;
+  min-width: 64px;
+  margin-top: 0;
+  padding: 8px 10px;
+  min-height: 34px;
+  font-size: 12px;
+}
+
+.delete-option-btn {
+  background: var(--danger);
+  color: white;
+}
+
+.option-row-edit {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.option-row-edit input {
+  flex: 1;
+}
+
+@media (max-width: 560px) {
+  .option-row {
+    grid-template-columns: 1fr;
+  }
+  
+  .option-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .option-toolbar label {
+    min-width: auto;
+  }
+}
+
 .objective-system-card .objective-card {
   border: none;
   padding: 0;
@@ -3363,5 +4065,4 @@ button:disabled {
     flex-direction: column;
     gap: 2px;
   }
->>>>>>> 406e2f6 (codex)
 }
