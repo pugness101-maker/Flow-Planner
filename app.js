@@ -559,16 +559,15 @@ socialData.friends = socialData.friends.map(friend => ({
 socialData.hangouts = socialData.hangouts.map(hangout => ({
   activity: hangout.activity || hangout.title || "",
   date: hangout.date || "",
-  time: hangout.time || "",
+  startTime: hangout.startTime || hangout.time || "",
+  endTime: hangout.endTime || "",
+  durationMinutes: hangout.durationMinutes || (hangout.startTime && hangout.endTime ? calculateDurationMinutes(hangout.startTime, hangout.endTime) : 0),
   location: hangout.location || hangout.place || "",
   people: Array.isArray(hangout.people)
     ? hangout.people
     : (hangout.friend ? [hangout.friend] : []),
   cost: hangout.cost || "",
   checklist: hangout.checklist || "",
-  moodAfter: hangout.moodAfter || "",
-  rating: hangout.rating || "",
-  memories: hangout.memories || "",
   followUpReminder: hangout.followUpReminder || "",
   notes: hangout.notes || "",
   completed: Boolean(hangout.completed)
@@ -951,9 +950,9 @@ function convertToAllZipData() {
       name: hangout.activity || "",
       amount: hangout.cost || "",
       unit: "",
-      startTime: hangout.time || "",
-      endTime: "",
-      durationMinutes: "",
+      startTime: hangout.startTime || hangout.time || "",
+      endTime: hangout.endTime || "",
+      durationMinutes: hangout.durationMinutes || (hangout.startTime && hangout.endTime ? calculateDurationMinutes(hangout.startTime, hangout.endTime) : 0),
       status: hangout.completed ? "completed" : "planned",
       notes: hangout.notes || "",
       linkedGoalId: "",
@@ -1055,12 +1054,62 @@ function exportAllZipDataAsCSV() {
 
 function importAllZipDataJSON(jsonString) {
   try {
-    const importedRows = JSON.parse(jsonString);
-    if (!Array.isArray(importedRows)) {
-      alert("Invalid JSON format: Expected an array of rows.");
+    const importedData = JSON.parse(jsonString);
+    let rows = [];
+    let plannerBlocks = [];
+    let trackers = [];
+
+    // Handle different format schemas
+    if (Array.isArray(importedData)) {
+      // Old array format: [{ row }, { row }]
+      rows = importedData;
+    } else if (typeof importedData === 'object' && importedData !== null) {
+      // Wrapped formats
+      if (Array.isArray(importedData.entries)) {
+        rows = importedData.entries;
+      } else if (Array.isArray(importedData.allZipData)) {
+        rows = importedData.allZipData;
+      } else if (Array.isArray(importedData.rows)) {
+        rows = importedData.rows;
+      } else {
+        alert("Invalid JSON format: Expected an array of rows or an object with entries, allZipData, or rows property.");
+        return;
+      }
+
+      // Handle optional sections
+      if (Array.isArray(importedData.plannerBlocks)) {
+        plannerBlocks = importedData.plannerBlocks;
+      }
+      if (Array.isArray(importedData.trackers)) {
+        trackers = importedData.trackers;
+      }
+    } else {
+      alert("Invalid JSON format: Expected an array of rows or an object with entries, allZipData, or rows property.");
       return;
     }
-    mergeAllZipData(importedRows);
+
+    if (rows.length === 0 && plannerBlocks.length === 0 && trackers.length === 0) {
+      alert("No data found in the import file.");
+      return;
+    }
+
+    // Import rows
+    if (rows.length > 0) {
+      mergeAllZipData(rows);
+    }
+
+    // Import planner blocks
+    if (plannerBlocks.length > 0) {
+      scheduleData.blocks = [...scheduleData.blocks, ...plannerBlocks];
+      saveScheduleData();
+    }
+
+    // Import trackers
+    if (trackers.length > 0) {
+      systemsData.trackers = [...systemsData.trackers, ...trackers];
+      saveSystemsData();
+    }
+
     alert("Import successful!");
   } catch (e) {
     alert("Invalid JSON file: " + e.message);
@@ -1387,6 +1436,8 @@ function mergeAllZipData(importedRows) {
   saveAllZipData();
 }
 
+let pendingAllZipImport = null;
+
 function handleAllZipDataImport(event) {
   const file = event.target.files[0];
   if (!file) return;
@@ -1397,13 +1448,207 @@ function handleAllZipDataImport(event) {
     const fileExtension = file.name.split('.').pop().toLowerCase();
 
     if (fileExtension === 'json') {
-      importAllZipDataJSON(content);
+      previewAllZipDataJSON(content);
     } else if (fileExtension === 'csv') {
-      importAllZipDataCSV(content);
+      previewAllZipDataCSV(content);
     } else {
       alert("Unsupported file type. Please upload a JSON or CSV file.");
     }
 
+    event.target.value = "";
+  };
+  reader.onerror = () => {
+    alert("Error reading file.");
+  };
+  reader.readAsText(file);
+}
+
+function previewAllZipDataJSON(jsonString) {
+  try {
+    const importedData = JSON.parse(jsonString);
+    let rows = [];
+    let plannerBlocks = [];
+    let trackers = [];
+
+    // Handle different format schemas
+    if (Array.isArray(importedData)) {
+      rows = importedData;
+    } else if (typeof importedData === 'object' && importedData !== null) {
+      if (Array.isArray(importedData.entries)) {
+        rows = importedData.entries;
+      } else if (Array.isArray(importedData.allZipData)) {
+        rows = importedData.allZipData;
+      } else if (Array.isArray(importedData.rows)) {
+        rows = importedData.rows;
+      } else {
+        alert("This file is not in the right format for this import. Try Full Backup Import or Social Import.");
+        return;
+      }
+
+      if (Array.isArray(importedData.plannerBlocks)) {
+        plannerBlocks = importedData.plannerBlocks;
+      }
+      if (Array.isArray(importedData.trackers)) {
+        trackers = importedData.trackers;
+      }
+    } else {
+      alert("This file is not in the right format for this import. Try Full Backup Import or Social Import.");
+      return;
+    }
+
+    if (rows.length === 0 && plannerBlocks.length === 0 && trackers.length === 0) {
+      alert("No data found in the import file.");
+      return;
+    }
+
+    pendingAllZipImport = { rows, plannerBlocks, trackers };
+    renderAllZipImportPreview();
+  } catch (e) {
+    alert("Invalid JSON file: " + e.message);
+  }
+}
+
+function previewAllZipDataCSV(csvString) {
+  try {
+    const lines = csvString.trim().split("\n");
+    if (lines.length < 2) {
+      alert("CSV file is empty or has no data rows.");
+      return;
+    }
+
+    const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+    const importedRows = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const values = parseCSVLine(lines[i]);
+      const row = {};
+      headers.forEach((header, index) => {
+        row[header] = values[index] || "";
+      });
+      importedRows.push(row);
+    }
+
+    if (importedRows.length === 0) {
+      alert("No data found in the CSV file.");
+      return;
+    }
+
+    pendingAllZipImport = { rows: importedRows, plannerBlocks: [], trackers: [] };
+    renderAllZipImportPreview();
+  } catch (e) {
+    alert("Invalid CSV file: " + e.message);
+  }
+}
+
+function renderAllZipImportPreview() {
+  const box = document.getElementById("allZipImportPreview");
+  const btn = document.getElementById("allZipImportConfirmButton");
+  if (!box || !btn) return;
+
+  if (!pendingAllZipImport) {
+    box.innerHTML = "<p>No import preview yet.</p>";
+    btn.disabled = true;
+    return;
+  }
+
+  const { rows, plannerBlocks, trackers } = pendingAllZipImport;
+  
+  // Calculate statistics
+  const categories = new Set();
+  const types = new Set();
+  const units = new Set();
+  const sources = new Set();
+  let minDate = null;
+  let maxDate = null;
+
+  rows.forEach(row => {
+    if (row.category) categories.add(row.category);
+    if (row.type) types.add(row.type);
+    if (row.unit) units.add(row.unit);
+    if (row.source) sources.add(row.source);
+    if (row.date) {
+      if (!minDate || row.date < minDate) minDate = row.date;
+      if (!maxDate || row.date > maxDate) maxDate = row.date;
+    }
+  });
+
+  const dateRange = minDate && maxDate ? `${minDate} to ${maxDate}` : 'N/A';
+
+  box.innerHTML = `
+    <div class="summary-grid import-count-grid four-col">
+      <div><strong>${rows.length}</strong><span>Rows</span></div>
+      <div><strong>${plannerBlocks.length}</strong><span>Planner Blocks</span></div>
+      <div><strong>${trackers.length}</strong><span>Trackers</span></div>
+      <div><strong>${categories.size}</strong><span>Categories</span></div>
+    </div>
+    <div class="import-details">
+      <p><strong>Date Range:</strong> ${dateRange}</p>
+      <p><strong>Types:</strong> ${Array.from(types).slice(0, 5).join(', ')}${types.size > 5 ? '...' : ''}</p>
+      <p><strong>Units:</strong> ${Array.from(units).slice(0, 5).join(', ')}${units.size > 5 ? '...' : ''}</p>
+      <p><strong>Sources:</strong> ${Array.from(sources).slice(0, 5).join(', ')}${sources.size > 5 ? '...' : ''}</p>
+    </div>
+  `;
+  btn.disabled = false;
+}
+
+function confirmAllZipImport() {
+  if (!pendingAllZipImport) {
+    alert("No data to import.");
+    return;
+  }
+
+  const { rows, plannerBlocks, trackers } = pendingAllZipImport;
+
+  if (rows.length > 0) {
+    mergeAllZipData(rows);
+  }
+
+  if (plannerBlocks.length > 0) {
+    scheduleData.blocks = [...scheduleData.blocks, ...plannerBlocks];
+    saveScheduleData();
+  }
+
+  if (trackers.length > 0) {
+    systemsData.trackers = [...systemsData.trackers, ...trackers];
+    saveSystemsData();
+  }
+
+  pendingAllZipImport = null;
+  document.getElementById("allZipImportPreview").innerHTML = "<p>No import preview yet.</p>";
+  document.getElementById("allZipImportConfirmButton").disabled = true;
+  alert("Import successful!");
+}
+
+function handleFullBackupImport(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const content = e.target.result;
+    document.getElementById("allDataImportJson").value = content;
+    importAllData();
+    event.target.value = "";
+  };
+  reader.onerror = () => {
+    alert("Error reading file.");
+  };
+  reader.readAsText(file);
+}
+
+function handleSocialDataFileImport(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const content = e.target.result;
+    try {
+      const parsed = JSON.parse(content);
+      previewSocialImport(parsed);
+    } catch (error) {
+      alert("Invalid JSON file: " + error.message);
+    }
     event.target.value = "";
   };
   reader.onerror = () => {
@@ -1455,20 +1700,98 @@ function handleSocialImportFile(event) {
 function previewSocialImport(data) {
   const social = data.socialData || data;
 
-  const normalized = {
-    friends: Array.isArray(social.friends) ? social.friends : [],
-    hangouts: Array.isArray(social.hangouts) ? social.hangouts : [],
-    ideas: Array.isArray(social.ideas) ? social.ideas : []
-  };
-
-  if (!normalized.friends.length && !normalized.hangouts.length && !normalized.ideas.length) {
-    alert("No friends, hangouts, or ideas found in this JSON.");
-    pendingSocialImport = null;
+  // Check if this is the unified Flow Planner schema (entries array)
+  if (Array.isArray(social.entries) || (Array.isArray(social) && social.length > 0)) {
+    const entries = Array.isArray(social.entries) ? social.entries : social;
+    const converted = convertEntriesToSocialData(entries);
+    
+    if (converted.friends.length === 0 && converted.hangouts.length === 0 && converted.ideas.length === 0) {
+      alert("No friends, hangouts, or ideas found in this JSON.");
+      pendingSocialImport = null;
+    } else {
+      pendingSocialImport = { ...converted, eventsProcessed: entries.length };
+    }
   } else {
-    pendingSocialImport = normalized;
+    // Existing social schema
+    const normalized = {
+      friends: Array.isArray(social.friends) ? social.friends : [],
+      hangouts: Array.isArray(social.hangouts) ? social.hangouts : [],
+      ideas: Array.isArray(social.ideas) ? social.ideas : []
+    };
+
+    if (!normalized.friends.length && !normalized.hangouts.length && !normalized.ideas.length) {
+      alert("No friends, hangouts, or ideas found in this JSON.");
+      pendingSocialImport = null;
+    } else {
+      pendingSocialImport = normalized;
+    }
   }
 
   renderSocialImportPreview();
+}
+
+function convertEntriesToSocialData(entries) {
+  const friends = new Map();
+  const hangouts = [];
+  const ideas = [];
+
+  entries.forEach(entry => {
+    // Only process social category events
+    if (entry.category === 'social' && entry.type === 'hangout') {
+      const hangout = {
+        activity: entry.name || 'Hangout',
+        date: entry.date || '',
+        startTime: entry.startTime ? entry.startTime.slice(11, 16) : '',
+        endTime: entry.endTime ? entry.endTime.slice(11, 16) : '',
+        durationMinutes: entry.durationMinutes || 0,
+        location: entry.location || '',
+        people: [],
+        cost: entry.amount ? String(entry.amount) : '',
+        checklist: '',
+        followUpReminder: '',
+        notes: entry.notes || ''
+      };
+
+      // Extract friend names from event title
+      const title = entry.name || '';
+      const friendMatch = title.match(/(?:hang|with|w\/)\s+(.+)/i);
+      if (friendMatch) {
+        const friendName = friendMatch[1].trim();
+        hangout.people.push(friendName);
+        
+        // Create friend record if not exists
+        if (!friends.has(friendName)) {
+          friends.set(friendName, {
+            name: friendName,
+            birthday: '',
+            phoneHandle: '',
+            favoriteFood: '',
+            giftIdeas: '',
+            importantNotes: '',
+            relationshipType: 'Friend',
+            priority: 'Medium',
+            lastContacted: '',
+            lastSeen: entry.date || '',
+            favoriteActivities: '',
+            preferredHangoutStyle: '',
+            dateMet: '',
+            interests: '',
+            details: '',
+            contactNotes: '',
+            notes: ''
+          });
+        }
+      }
+
+      hangouts.push(hangout);
+    }
+  });
+
+  return {
+    friends: Array.from(friends.values()),
+    hangouts,
+    ideas
+  };
 }
 
 function renderSocialImportPreview() {
@@ -1482,11 +1805,15 @@ function renderSocialImportPreview() {
     return;
   }
 
+  const eventsProcessed = pendingSocialImport.eventsProcessed || 0;
+  const gridClass = eventsProcessed > 0 ? "summary-grid import-count-grid four-col" : "summary-grid import-count-grid";
+
   box.innerHTML = `
-    <div class="summary-grid import-count-grid">
+    <div class="${gridClass}">
       <div><strong>${pendingSocialImport.friends.length}</strong><span>Friends</span></div>
       <div><strong>${pendingSocialImport.hangouts.length}</strong><span>Hangouts</span></div>
       <div><strong>${pendingSocialImport.ideas.length}</strong><span>Ideas</span></div>
+      ${eventsProcessed > 0 ? `<div><strong>${eventsProcessed}</strong><span>Events Processed</span></div>` : ''}
     </div>
   `;
   btn.disabled = false;
@@ -1507,6 +1834,55 @@ function confirmSocialImport() {
   pendingSocialImport = null;
   renderSettings();
   alert("Social data imported successfully.");
+}
+
+function showSocialImportMode(mode) {
+  const fileMode = document.getElementById("socialImportFileMode");
+  const pasteMode = document.getElementById("socialImportPasteMode");
+  if (!fileMode || !pasteMode) return;
+
+  if (mode === "file") {
+    fileMode.classList.remove("hidden");
+    pasteMode.classList.add("hidden");
+  } else if (mode === "paste") {
+    fileMode.classList.add("hidden");
+    pasteMode.classList.remove("hidden");
+  }
+}
+
+function parseJsonTextarea() {
+  const textarea = document.getElementById("hangoutPlannerImportJson");
+  const errorDiv = document.getElementById("jsonParseError");
+  const previewButton = document.getElementById("previewJsonButton");
+  if (!textarea || !errorDiv || !previewButton) return;
+
+  const jsonText = textarea.value.trim();
+  if (!jsonText) {
+    errorDiv.textContent = "";
+    previewButton.disabled = true;
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(jsonText);
+    errorDiv.textContent = "";
+    errorDiv.className = "json-parse-error";
+    previewButton.disabled = false;
+
+    // Show live preview summary
+    const social = parsed.socialData || parsed;
+    const normalized = {
+      friends: Array.isArray(social.friends) ? social.friends : [],
+      hangouts: Array.isArray(social.hangouts) ? social.hangouts : [],
+      ideas: Array.isArray(social.ideas) ? social.ideas : []
+    };
+
+    errorDiv.innerHTML = `<span class="json-success">✓ Valid JSON: ${normalized.friends.length} friends, ${normalized.hangouts.length} hangouts, ${normalized.ideas.length} ideas</span>`;
+  } catch (error) {
+    errorDiv.textContent = "Invalid JSON: " + error.message;
+    errorDiv.className = "json-parse-error json-error";
+    previewButton.disabled = true;
+  }
 }
 
 function previewSocialImportFromLocalStorage() {
@@ -3497,25 +3873,35 @@ const pages = {
           <span>Add Friend</span>
           <span>${friendFormOpen ? "^" : "v"}</span>
         </button>
-        <div class="${friendFormOpen ? "" : "hidden"}">
+        <div class="${friendFormOpen ? "" : "hidden"} form-compact">
+          <label>Name</label>
           <input id="friendName" placeholder="Name">
-          <input id="friendBirthday" type="date">
+          <label>Birthday</label>
+          <input id="friendBirthday" type="date" placeholder="Birthday">
+          <label>Phone or social handle</label>
           <input id="friendPhoneHandle" placeholder="Phone or social handle">
+          <label>Relationship type</label>
           <select id="friendRelationshipType">
             ${getSocialTypes().map(t => `<option value="${escapeHTML(t)}">${escapeHTML(t)}</option>`).join("")}
           </select>
+          <label>Priority/Closeness</label>
           <select id="friendPriority">
             <option>High</option>
             <option>Medium</option>
             <option>Low</option>
           </select>
-          <input id="friendLastContacted" type="date">
-          <input id="friendLastSeen" type="date">
+          <label>Date Met</label>
+          <input id="friendDateMet" type="date" placeholder="Date Met">
+          <label>Last Hangout Date</label>
+          <input id="friendLastSeen" type="date" placeholder="Last Hangout Date">
+          <label>Favorite food</label>
           <input id="friendFavoriteFood" placeholder="Favorite food">
+          <label>Favorite activities</label>
           <textarea id="friendFavoriteActivities" placeholder="Favorite activities"></textarea>
+          <label>Gift ideas</label>
           <textarea id="friendGiftIdeas" placeholder="Gift ideas"></textarea>
+          <label>Important notes</label>
           <textarea id="friendImportantNotes" placeholder="Important notes"></textarea>
-          <textarea id="friendPreferredHangoutStyle" placeholder="Preferred hangout style"></textarea>
           <button id="friendSaveButton" onclick="saveFriend()">Save Friend</button>
           <button class="secondary-btn" onclick="resetFriendForm()">Clear Friend Form</button>
         </div>
@@ -3552,29 +3938,54 @@ const pages = {
           <span>Create Hangout</span>
           <span>${hangoutFormOpen ? "^" : "v"}</span>
         </button>
-        <div class="${hangoutFormOpen ? "" : "hidden"}">
-          <input id="hangoutActivity" placeholder="Activity">
-          <input id="hangoutDate" type="date" onchange="renderHangoutFreeSlots()">
+        <div class="${hangoutFormOpen ? "" : "hidden"} hangout-form">
+          <div class="form-group">
+            <label>Activity</label>
+            <input id="hangoutActivity" placeholder="Dinner, Movie, Study Session">
+          </div>
+          <div class="form-group">
+            <label>Date</label>
+            <input id="hangoutDate" type="date" onchange="renderHangoutFreeSlots()">
+          </div>
           <div id="hangoutFreeSlots"></div>
-          <input id="hangoutTime" type="time">
-          <input id="hangoutLocation" placeholder="Place/location">
-          <input id="hangoutFriendSearch" placeholder="Search friends to pick" oninput="populateHangoutPeopleSelect()">
-          <select id="hangoutPeopleSelect" multiple onchange="renderSelectedHangoutPeopleChips()"></select>
-          <div id="selectedHangoutPeopleChips" class="chip-row"></div>
-          <input id="hangoutCost" placeholder="Cost">
-          <textarea id="hangoutChecklist" placeholder="Checklist, one item per line"></textarea>
-          <input id="hangoutFollowUpReminder" type="date">
-          <select id="hangoutRating">
-            <option value="">Rating after</option>
-            <option>5</option>
-            <option>4</option>
-            <option>3</option>
-            <option>2</option>
-            <option>1</option>
-          </select>
-          <input id="hangoutMoodAfter" placeholder="Mood after">
-          <textarea id="hangoutMemories" placeholder="Photos/memories notes"></textarea>
-          <textarea id="hangoutNotes" placeholder="Notes"></textarea>
+          <div class="form-group">
+            <label>Start Time</label>
+            <input id="hangoutStartTime" type="time" onchange="calculateHangoutDuration()">
+          </div>
+          <div class="form-group">
+            <label>End Time</label>
+            <input id="hangoutEndTime" type="time" onchange="calculateHangoutDuration()">
+          </div>
+          <div class="form-group">
+            <label>Duration</label>
+            <input id="hangoutDuration" type="text" placeholder="Auto-calculated" readonly>
+          </div>
+          <div class="form-group">
+            <label>Place/Location</label>
+            <input id="hangoutLocation" placeholder="Restaurant, House, Park">
+          </div>
+          <div class="form-group">
+            <label>Friends</label>
+            <input id="hangoutFriendSearch" placeholder="Search friends..." oninput="populateHangoutPeopleSelect()">
+            <div id="hangoutPeopleSelect" class="friend-checkbox-list"></div>
+            <div id="selectedHangoutPeopleChips" class="chip-row"></div>
+          </div>
+          <div class="form-group">
+            <label>Cost</label>
+            <input id="hangoutCost" placeholder="Cost">
+          </div>
+          <div class="form-group">
+            <label>Checklist</label>
+            <textarea id="hangoutChecklist" placeholder="Checklist, one item per line"></textarea>
+          </div>
+          <div class="form-group">
+            <label>Next Hangout Date</label>
+            <input id="hangoutFollowUpReminder" type="date" placeholder="Next hangout date">
+          </div>
+          <div class="form-group">
+            <label>Notes</label>
+            <textarea id="hangoutNotes" placeholder="What happened / memories / follow-up"></textarea>
+          </div>
           <button id="hangoutSaveButton" onclick="saveHangout()">Save Hangout</button>
           <button class="secondary-btn" onclick="resetHangoutForm()">Clear Hangout Form</button>
         </div>
@@ -3751,40 +4162,84 @@ const pages = {
       <button onclick="importAllData()">Restore From Backup</button>
     </div>
     <div class="card">
-      <h3>All Zip Data Export/Import</h3>
-      <p class="muted-text">Export all data as a unified master log (Google Sheets-style schema) with fields: id, date, source, category, type, name, amount, unit, startTime, endTime, durationMinutes, status, notes, linkedGoalId, linkedHabitId, linkedPlannerBlockId, createdAt, updatedAt.</p>
-      <p class="muted-text">Supports planner blocks, habits, routines, manual metrics, goals, social logs, study hours, body metrics, taper/recovery logs, and course/license hours.</p>
-      <div class="list-controls">
-        <select id="allZipDataCategoryFilter" onchange="filterAllZipData()">
-          <option value="All">All Categories</option>
-        </select>
-        <select id="allZipDataTypeFilter" onchange="filterAllZipData()">
-          <option value="All">All Types</option>
-        </select>
-        <select id="allZipDataUnitFilter" onchange="filterAllZipData()">
-          <option value="All">All Units</option>
-        </select>
-        <select id="allZipDataSourceFilter" onchange="filterAllZipData()">
-          <option value="All">All Sources</option>
-          <option>Planner</option>
-          <option>Systems</option>
-          <option>Social</option>
-          <option>manual</option>
-        </select>
-        <select id="allZipDataGoalFilter" onchange="filterAllZipData()">
-          <option value="All">All Goals</option>
-        </select>
-        <input id="allZipDataStartDate" type="date" onchange="filterAllZipData()" placeholder="Start date">
-        <input id="allZipDataEndDate" type="date" onchange="filterAllZipData()" placeholder="End date">
+      <h3>Import / Export Flow Planner Data</h3>
+      
+      <!-- Export Section -->
+      <div class="import-export-section">
+        <h4>Export Data</h4>
+        <p class="muted-text">Export all data as a unified master log (Google Sheets-style schema) with fields: id, date, source, category, type, name, amount, unit, startTime, endTime, durationMinutes, status, notes, linkedGoalId, linkedHabitId, linkedPlannerBlockId, createdAt, updatedAt.</p>
+        <p class="muted-text">Supports planner blocks, habits, routines, manual metrics, goals, social logs, study hours, body metrics, taper/recovery logs, and course/license hours.</p>
+        <div class="list-controls">
+          <select id="allZipDataCategoryFilter" onchange="filterAllZipData()">
+            <option value="All">All Categories</option>
+          </select>
+          <select id="allZipDataTypeFilter" onchange="filterAllZipData()">
+            <option value="All">All Types</option>
+          </select>
+          <select id="allZipDataUnitFilter" onchange="filterAllZipData()">
+            <option value="All">All Units</option>
+          </select>
+          <select id="allZipDataSourceFilter" onchange="filterAllZipData()">
+            <option value="All">All Sources</option>
+            <option>Planner</option>
+            <option>Systems</option>
+            <option>Social</option>
+            <option>manual</option>
+          </select>
+          <select id="allZipDataGoalFilter" onchange="filterAllZipData()">
+            <option value="All">All Goals</option>
+          </select>
+          <input id="allZipDataStartDate" type="date" onchange="filterAllZipData()" placeholder="Start Date">
+          <input id="allZipDataEndDate" type="date" onchange="filterAllZipData()" placeholder="End Date">
+        </div>
+        <div class="button-row">
+          <button onclick="exportAllZipDataAsJSON()">Export as JSON</button>
+          <button onclick="exportAllZipDataAsCSV()">Export as CSV</button>
+        </div>
+      </div>
+
+      <!-- Import Section -->
+      <div class="import-export-section">
+        <h4>Import Data</h4>
+        
+        <!-- Import Logs -->
+        <div class="import-box">
+          <h5>Import Calendar / Session Logs</h5>
+          <p class="muted-text">JSON or CSV with date, name, startTime, endTime, durationMinutes, category, type, amount, unit</p>
+          <label class="file-upload-box">
+            <span>Choose Log/Calendar File</span>
+            <input id="allZipDataImportFile" type="file" accept=".json,.csv,application/json,text/csv" onchange="handleAllZipDataImport(event)">
+          </label>
+        </div>
+
+        <!-- Import Full Backup -->
+        <div class="import-box">
+          <h5>Import Full Backup</h5>
+          <p class="muted-text">Full Flow Planner backup with plannerData, scheduleData, systemsData, socialData</p>
+          <label class="file-upload-box">
+            <span>Choose Backup File</span>
+            <input id="fullBackupImportFile" type="file" accept=".json,application/json" onchange="handleFullBackupImport(event)">
+          </label>
+        </div>
+
+        <!-- Import Social Data -->
+        <div class="import-box">
+          <h5>Import Social Data</h5>
+          <p class="muted-text">Friends, hangouts, and ideas JSON</p>
+          <label class="file-upload-box">
+            <span>Choose Social File</span>
+            <input id="socialDataImportFile" type="file" accept=".json,application/json" onchange="handleSocialDataFileImport(event)">
+          </label>
+        </div>
+      </div>
+
+      <!-- Import Preview -->
+      <div id="allZipImportPreview" class="import-preview empty-state small">
+        <p>No import preview yet.</p>
       </div>
       <div class="button-row">
-        <button onclick="exportAllZipDataAsJSON()">Export as JSON</button>
-        <button onclick="exportAllZipDataAsCSV()">Export as CSV</button>
+        <button id="allZipImportConfirmButton" onclick="confirmAllZipImport()" disabled>Import Previewed Data</button>
       </div>
-      <label class="file-upload-box">
-        <span>Import All Zip Data (JSON or CSV)</span>
-        <input id="allZipDataImportFile" type="file" accept=".json,.csv,application/json,text/csv" onchange="handleAllZipDataImport(event)">
-      </label>
     </div>
             <div class="card social-import-card">
       <h3>Social Data Import</h3>
@@ -3801,8 +4256,9 @@ const pages = {
         </label>
       </div>
       <div id="socialImportPasteMode" class="social-import-mode hidden">
-        <textarea id="hangoutPlannerImportJson" placeholder="Paste social JSON here"></textarea>
-        <button onclick="previewSocialImportFromTextarea()">Preview pasted JSON</button>
+        <textarea id="hangoutPlannerImportJson" class="json-import-textarea" placeholder="Paste Flow Planner JSON here..." oninput="parseJsonTextarea()"></textarea>
+        <div id="jsonParseError" class="json-parse-error"></div>
+        <button id="previewJsonButton" onclick="previewSocialImportFromTextarea()" disabled>Preview pasted JSON</button>
       </div>
       <div id="socialImportPreview" class="import-preview empty-state small">
         <p>No import preview yet.</p>
@@ -4649,6 +5105,45 @@ function formatHourLabel(hour) {
   if (hour < 12) return `${hour} AM`;
   if (hour === 12) return "12 PM";
   return `${hour - 12} PM`;
+}
+
+function calculateDurationMinutes(startTime, endTime) {
+  if (!startTime || !endTime) return 0;
+  const startMinutes = timeToMinutes(startTime);
+  const endMinutes = timeToMinutes(endTime);
+  if (endMinutes >= startMinutes) {
+    return endMinutes - startMinutes;
+  } else {
+    return (24 * 60 - startMinutes) + endMinutes;
+  }
+}
+
+function formatDuration(minutes) {
+  if (!minutes || minutes <= 0) return "";
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours > 0 && mins > 0) {
+    return `${hours}h ${mins}m`;
+  } else if (hours > 0) {
+    return `${hours}h`;
+  } else if (mins > 0) {
+    return `${mins}m`;
+  }
+  return "";
+}
+
+function calculateHangoutDuration() {
+  const startTime = document.getElementById("hangoutStartTime")?.value;
+  const endTime = document.getElementById("hangoutEndTime")?.value;
+  const durationField = document.getElementById("hangoutDuration");
+  if (!durationField) return;
+  
+  if (startTime && endTime) {
+    const minutes = calculateDurationMinutes(startTime, endTime);
+    durationField.value = formatDuration(minutes);
+  } else {
+    durationField.value = "";
+  }
 }
 
 function getCategoryClass(category) {
@@ -11607,7 +12102,8 @@ function deleteFriend(i) {
 function getSelectedHangoutPeople() {
   const select = document.getElementById("hangoutPeopleSelect");
   if (!select) return [];
-  return [...select.selectedOptions].map(option => option.value);
+  const checkboxes = select.querySelectorAll('input[type="checkbox"]:checked');
+  return Array.from(checkboxes).map(cb => cb.value);
 }
 
 function populateHangoutPeopleSelect(selectedPeople = getSelectedHangoutPeople()) {
@@ -11621,9 +12117,12 @@ function populateHangoutPeopleSelect(selectedPeople = getSelectedHangoutPeople()
 
   select.innerHTML = friends.length
     ? friends.map(friend => `
-      <option value="${escapeHTML(friend.name)}" ${selectedSet.has(friend.name) ? "selected" : ""}>${escapeHTML(friend.name)}</option>
+      <label class="friend-checkbox-item">
+        <input type="checkbox" value="${escapeHTML(friend.name)}" ${selectedSet.has(friend.name) ? "checked" : ""} onchange="renderSelectedHangoutPeopleChips()">
+        <span>${escapeHTML(friend.name)}</span>
+      </label>
     `).join("")
-    : `<option disabled>No friends match</option>`;
+    : `<div class="muted-text">No friends match</div>`;
 
   renderSelectedHangoutPeopleChips();
 }
@@ -11640,31 +12139,30 @@ function renderSelectedHangoutPeopleChips() {
 function saveHangout() {
   const activity = document.getElementById("hangoutActivity").value.trim();
   const date = document.getElementById("hangoutDate").value;
-  const time = document.getElementById("hangoutTime").value;
+  const startTime = document.getElementById("hangoutStartTime").value;
+  const endTime = document.getElementById("hangoutEndTime").value;
   const location = document.getElementById("hangoutLocation").value.trim();
   const people = getSelectedHangoutPeople();
   const cost = document.getElementById("hangoutCost").value.trim();
   const checklist = document.getElementById("hangoutChecklist").value.trim();
   const followUpReminder = document.getElementById("hangoutFollowUpReminder").value;
-  const rating = document.getElementById("hangoutRating").value;
-  const moodAfter = document.getElementById("hangoutMoodAfter").value.trim();
-  const memories = document.getElementById("hangoutMemories").value.trim();
   const notes = document.getElementById("hangoutNotes").value.trim();
 
   if (!activity || !people.length) return;
 
+  const durationMinutes = calculateDurationMinutes(startTime, endTime);
+
   const hangout = {
     activity,
     date,
-    time,
+    startTime,
+    endTime,
+    durationMinutes,
     location,
     people,
     cost,
     checklist,
     followUpReminder,
-    rating,
-    moodAfter,
-    memories,
     notes,
     completed: editingHangoutIndex === null ? false : socialData.hangouts[editingHangoutIndex].completed
   };
@@ -11675,10 +12173,9 @@ function saveHangout() {
     socialData.hangouts[editingHangoutIndex] = hangout;
   }
 
-  if (date && time && editingHangoutIndex === null) {
-    const endTime = minutesToTime(timeToMinutes(time) + 60);
+  if (date && startTime && endTime && editingHangoutIndex === null) {
     const overlaps = getBlocksOnDate(date).filter(b =>
-      !b.isBuffer && blocksOverlap(b.start, b.end, time, endTime)
+      !b.isBuffer && blocksOverlap(b.start, b.end, startTime, endTime)
     );
     const alreadySynced = scheduleData.blocks.some(b =>
       b.date === date && b.type === "social" && b.title === activity
@@ -11691,7 +12188,7 @@ function saveHangout() {
         id: createId("block"),
         title: activity,
         date,
-        start: time,
+        start: startTime,
         end: endTime,
         category: "Social",
         notes: `With: ${people.join(", ")}${location ? " at " + location : ""}`,
@@ -11765,8 +12262,11 @@ function renderHangoutFreeSlots() {
 }
 
 function applyFreeSlot(start, end) {
-  const timeInput = document.getElementById("hangoutTime");
-  if (timeInput) timeInput.value = start;
+  const startTimeInput = document.getElementById("hangoutStartTime");
+  const endTimeInput = document.getElementById("hangoutEndTime");
+  if (startTimeInput) startTimeInput.value = start;
+  if (endTimeInput) endTimeInput.value = end;
+  calculateHangoutDuration();
 }
 
 function renderHangouts() {
@@ -11783,7 +12283,8 @@ function renderHangouts() {
       const searchable = [
         hangout.activity,
         hangout.date,
-        hangout.time,
+        hangout.startTime || hangout.time,
+        hangout.endTime,
         hangout.location,
         hangout.cost,
         hangout.notes,
@@ -11794,22 +12295,32 @@ function renderHangouts() {
         (statusFilter === "All" || statusFilter === status);
     })
     .sort((a, b) => {
-      const aDate = `${a.hangout.date || ""} ${a.hangout.time || ""}`;
-      const bDate = `${b.hangout.date || ""} ${b.hangout.time || ""}`;
+      const aTime = a.hangout.startTime || a.hangout.time || "";
+      const bTime = b.hangout.startTime || b.hangout.time || "";
+      const aDate = `${a.hangout.date || ""} ${aTime}`;
+      const bDate = `${b.hangout.date || ""} ${bTime}`;
       return sort === "oldest" ? aDate.localeCompare(bDate) : bDate.localeCompare(aDate);
     });
 
   box.innerHTML = hangouts.length
-    ? hangouts.map(({ hangout: h, index: i }) => `
+    ? hangouts.map(({ hangout: h, index: i }) => {
+      const startTime = h.startTime || h.time || "";
+      const endTime = h.endTime || "";
+      const duration = h.durationMinutes ? formatDuration(h.durationMinutes) : (startTime && endTime ? formatDuration(calculateDurationMinutes(startTime, endTime)) : "");
+      const timeDisplay = startTime ? (endTime ? `${startTime} – ${endTime}` : startTime) : "";
+      
+      return `
     <div class="social-item">
       <div class="item-title">
         <strong>${escapeHTML(h.activity)}</strong>
         <span>${h.completed ? "Logged" : "Planned"}</span>
       </div>
-      <p>${h.date || "No date"} ${h.time || ""}</p>
+      <p>${h.date || "No date"}</p>
+      ${timeDisplay ? `<p>${escapeHTML(timeDisplay)}</p>` : ""}
+      ${duration ? `<p>${escapeHTML(duration)}</p>` : ""}
       <p>${escapeHTML(h.location || "")}</p>
       <p>${h.people.map(escapeHTML).join(", ")}</p>
-      <p>${escapeHTML(h.cost || "")}</p>
+      ${h.notes ? `<p>${escapeHTML(h.notes)}</p>` : ""}
       <div class="button-row">
         <button onclick="toggleHangoutDetail(${i})">View/Edit</button>
         <button onclick="logHangout(${i})">${h.completed ? "Update Log" : "Log Completed"}</button>
@@ -11818,20 +12329,26 @@ function renderHangouts() {
       <button class="danger-btn" onclick="deleteHangout(${i})">Delete</button>
       ${viewingHangoutIndex === i ? renderHangoutDetail(h, i) : ""}
     </div>
-  `).join("")
+  `;
+    }).join("")
     : "<p>No hangouts match those filters.</p>";
 }
 
 function renderHangoutDetail(hangout, index) {
+  const startTime = hangout.startTime || hangout.time || "";
+  const endTime = hangout.endTime || "";
+  const duration = hangout.durationMinutes ? formatDuration(hangout.durationMinutes) : (startTime && endTime ? formatDuration(calculateDurationMinutes(startTime, endTime)) : "");
+  
   return `
     <div class="detail-panel">
-      <p><strong>People:</strong> ${hangout.people.map(escapeHTML).join(", ") || "None"}</p>
+      <p><strong>Date:</strong> ${escapeHTML(hangout.date || "None added")}</p>
+      <p><strong>Start time:</strong> ${escapeHTML(startTime || "None added")}</p>
+      <p><strong>End time:</strong> ${escapeHTML(endTime || "None added")}</p>
+      <p><strong>Duration:</strong> ${escapeHTML(duration || "None added")}</p>
       <p><strong>Location:</strong> ${escapeHTML(hangout.location || "None added")}</p>
+      <p><strong>People:</strong> ${hangout.people.map(escapeHTML).join(", ") || "None"}</p>
       <p><strong>Cost:</strong> ${escapeHTML(hangout.cost || "None added")}</p>
       <p><strong>Checklist:</strong> ${escapeHTML(hangout.checklist || "None added")}</p>
-      <p><strong>Mood after:</strong> ${escapeHTML(hangout.moodAfter || "None added")}</p>
-      <p><strong>Rating:</strong> ${escapeHTML(hangout.rating || "None added")}</p>
-      <p><strong>Memories:</strong> ${escapeHTML(hangout.memories || "None added")}</p>
       <p><strong>Follow-up:</strong> ${escapeHTML(hangout.followUpReminder || "None added")}</p>
       <p><strong>Notes:</strong> ${escapeHTML(hangout.notes || "None added")}</p>
       <button onclick="editHangout(${index})">Edit Hangout</button>
@@ -11847,8 +12364,8 @@ function toggleHangoutDetail(index) {
 function scheduleHangoutInPlanner(index) {
   const hangout = socialData.hangouts[index];
   const date = hangout.date || getTodayISO();
-  const start = hangout.time || "18:00";
-  const end = hangout.time ? minutesToTime(timeToMinutes(hangout.time) + 60) : "19:00";
+  const start = hangout.startTime || hangout.time || "18:00";
+  const end = hangout.endTime || (hangout.time ? minutesToTime(timeToMinutes(hangout.time) + 60) : "19:00");
   const notes = [
     hangout.people.length ? `People: ${hangout.people.join(", ")}` : "",
     hangout.location ? `Location: ${hangout.location}` : "",
@@ -12119,13 +12636,18 @@ function fillEditingSocialForms() {
     document.getElementById("friendPhoneHandle").value = friend.phoneHandle || friend.contactNotes || "";
     document.getElementById("friendRelationshipType").value = friend.relationshipType || "Friend";
     document.getElementById("friendPriority").value = friend.priority;
-    document.getElementById("friendLastContacted").value = friend.lastContacted || "";
+    if (document.getElementById("friendLastContacted")) {
+      document.getElementById("friendLastContacted").value = friend.lastContacted || "";
+    }
     document.getElementById("friendLastSeen").value = friend.lastSeen || "";
     document.getElementById("friendFavoriteFood").value = friend.favoriteFood || "";
     document.getElementById("friendFavoriteActivities").value = friend.favoriteActivities || "";
     document.getElementById("friendGiftIdeas").value = friend.giftIdeas || "";
     document.getElementById("friendImportantNotes").value = friend.importantNotes || friend.notes || "";
-    document.getElementById("friendPreferredHangoutStyle").value = friend.preferredHangoutStyle || "";
+    if (document.getElementById("friendPreferredHangoutStyle")) {
+      document.getElementById("friendPreferredHangoutStyle").value = friend.preferredHangoutStyle || "";
+    }
+    document.getElementById("friendDateMet").value = friend.dateMet || "";
     document.getElementById("friendSaveButton").textContent = "Update Friend";
   }
 
@@ -12134,14 +12656,13 @@ function fillEditingSocialForms() {
     const hangout = socialData.hangouts[editingHangoutIndex];
     document.getElementById("hangoutActivity").value = hangout.activity;
     document.getElementById("hangoutDate").value = hangout.date || "";
-    document.getElementById("hangoutTime").value = hangout.time || "";
+    document.getElementById("hangoutStartTime").value = hangout.startTime || hangout.time || "";
+    document.getElementById("hangoutEndTime").value = hangout.endTime || "";
+    document.getElementById("hangoutDuration").value = hangout.durationMinutes ? formatDuration(hangout.durationMinutes) : "";
     document.getElementById("hangoutLocation").value = hangout.location || "";
     document.getElementById("hangoutCost").value = hangout.cost || "";
     document.getElementById("hangoutChecklist").value = hangout.checklist || "";
     document.getElementById("hangoutFollowUpReminder").value = hangout.followUpReminder || "";
-    document.getElementById("hangoutRating").value = hangout.rating || "";
-    document.getElementById("hangoutMoodAfter").value = hangout.moodAfter || "";
-    document.getElementById("hangoutMemories").value = hangout.memories || "";
     document.getElementById("hangoutNotes").value = hangout.notes || "";
     populateHangoutPeopleSelect(hangout.people);
     renderSelectedHangoutPeopleChips();
