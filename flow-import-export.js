@@ -537,7 +537,6 @@ console.log("Flow Import/Export Module Loaded");
   function addSettingsUI() {
     const settingsContent = document.querySelector('.settings-content');
     if (!settingsContent) {
-      console.log("[IMPORT/EXPORT] Settings page not ready, will retry");
       return false;
     }
 
@@ -647,14 +646,9 @@ console.log("Flow Import/Export Module Loaded");
   function init() {
     console.log("[IMPORT/EXPORT] Initializing");
 
-    // Try to add UI to Settings
+    // Try to add UI to Settings (no retry - local-first)
     const addUI = () => {
-      if (addSettingsUI()) {
-        console.log("[IMPORT/EXPORT] UI added successfully");
-      } else {
-        console.log("[IMPORT/EXPORT] Settings not ready, retrying...");
-        setTimeout(addUI, 500);
-      }
+      addSettingsUI();
     };
 
     // Wait for DOM to be ready

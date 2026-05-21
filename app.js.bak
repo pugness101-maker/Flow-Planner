@@ -556,36 +556,23 @@ socialData.friends = socialData.friends.map(friend => ({
   preferredHangoutStyle: friend.preferredHangoutStyle || ""
 }));
 
-socialData.hangouts = socialData.hangouts.map(hangout => {
-  const result = {
-    activity: hangout.activity || hangout.title || "",
-    date: hangout.date || "",
-    time: hangout.time || "",
-    location: hangout.location || hangout.place || "",
-    people: Array.isArray(hangout.people)
-      ? hangout.people
-      : (hangout.friend ? [hangout.friend] : []),
-    cost: hangout.cost || "",
-    checklist: hangout.checklist || "",
-    followUpReminder: hangout.followUpReminder || "",
-    notes: hangout.notes || "",
-    completed: Boolean(hangout.completed)
-  };
-  
-  // Migrate friendId to friendIds array
-  if (hangout.friendId && !hangout.friendIds) {
-    result.friendIds = [hangout.friendId];
-  } else if (Array.isArray(hangout.friendIds)) {
-    result.friendIds = hangout.friendIds;
-  }
-  
-  // Preserve id, timestamps if present
-  if (hangout.id) result.id = hangout.id;
-  if (hangout.createdAt) result.createdAt = hangout.createdAt;
-  if (hangout.updatedAt) result.updatedAt = hangout.updatedAt;
-  
-  return result;
-});
+socialData.hangouts = socialData.hangouts.map(hangout => ({
+  activity: hangout.activity || hangout.title || "",
+  date: hangout.date || "",
+  time: hangout.time || "",
+  location: hangout.location || hangout.place || "",
+  people: Array.isArray(hangout.people)
+    ? hangout.people
+    : (hangout.friend ? [hangout.friend] : []),
+  cost: hangout.cost || "",
+  checklist: hangout.checklist || "",
+  moodAfter: hangout.moodAfter || "",
+  rating: hangout.rating || "",
+  memories: hangout.memories || "",
+  followUpReminder: hangout.followUpReminder || "",
+  notes: hangout.notes || "",
+  completed: Boolean(hangout.completed)
+}));
 
 socialData.ideas = socialData.ideas.map(idea => ({
   title: idea.title || "",
@@ -618,6 +605,9 @@ if (!Array.isArray(systemsData.dailyMetrics)) systemsData.dailyMetrics = [];
 if (!Array.isArray(systemsData.savedTrackerCategories)) systemsData.savedTrackerCategories = [];
 if (!Array.isArray(systemsData.savedTrackerUnits)) systemsData.savedTrackerUnits = [];
 if (!systemsData.unitSortMode) systemsData.unitSortMode = "defaults";
+
+// Load auto-link settings
+loadAutoLinkSettings();
 
 const TRACKER_CATEGORIES = ["Goal", "Counter", "Taper", "Habit-linked", "Milestone", "Body Metric", "Finance", "Custom"];
 const DEFAULT_TRACKER_UNITS = [
@@ -1342,6 +1332,9 @@ function mergeAllZipData(importedRows) {
             people: [],
             cost: row.amount,
             checklist: "",
+            moodAfter: "",
+            rating: "",
+            memories: "",
             followUpReminder: "",
             notes: row.notes,
             completed: row.status === "completed",
@@ -2771,218 +2764,6 @@ function saveAllZipCustomOptions() {
 }
 
 // Social Data Import Functions
-// Helper functions for duplicate detection
-function normalizeText(value) {
-  if (!value) return '';
-  return String(value).trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-function getFriendDuplicateKey(friend) {
-  if (!friend) return '';
-  const keys = [];
-  if (friend.id) keys.push(`id:${friend.id}`);
-  if (friend.name) keys.push(`name:${normalizeText(friend.name)}`);
-  if (friend.phone) keys.push(`phone:${normalizeText(friend.phone)}`);
-  if (friend.email) keys.push(`email:${normalizeText(friend.email)}`);
-  return keys.join('|');
-}
-
-function getHangoutDuplicateKey(hangout) {
-  if (!hangout) return '';
-  const keys = [];
-  if (hangout.id) keys.push(`id:${hangout.id}`);
-  
-  // Use friendIds array if available, otherwise fallback to old friendId
-  const friendIds = Array.isArray(hangout.friendIds) ? hangout.friendIds : (hangout.friendId ? [hangout.friendId] : []);
-  const sortedFriendIds = [...friendIds].sort().join(',');
-  const activity = hangout.activity || hangout.title || '';
-  
-  if (sortedFriendIds && hangout.date && activity) {
-    keys.push(`fids:${sortedFriendIds}|date:${hangout.date}|act:${normalizeText(activity)}`);
-  }
-  if (hangout.date && activity && hangout.location) {
-    keys.push(`date:${hangout.date}|act:${normalizeText(activity)}|loc:${normalizeText(hangout.location)}|fids:${sortedFriendIds}`);
-  }
-  if (hangout.date && hangout.people && hangout.location) {
-    const normalizedPeople = Array.isArray(hangout.people) 
-      ? hangout.people.map(p => normalizeText(p)).sort().join(',')
-      : normalizeText(hangout.people);
-    keys.push(`date:${hangout.date}|people:${normalizedPeople}|loc:${normalizeText(hangout.location)}`);
-  }
-  return keys.join('|');
-}
-
-function getIdeaDuplicateKey(idea) {
-  if (!idea) return '';
-  const keys = [];
-  if (idea.id) keys.push(`id:${idea.id}`);
-  if (idea.title || idea.name) keys.push(`title:${normalizeText(idea.title || idea.name)}`);
-  if (idea.category && (idea.title || idea.name)) {
-    keys.push(`cat:${normalizeText(idea.category)}|title:${normalizeText(idea.title || idea.name)}`);
-  }
-  return keys.join('|');
-}
-
-function mergeUniqueSocialData(existingSocialData, importedSocialData) {
-  const result = {
-    friends: [...(existingSocialData.friends || [])],
-    hangouts: [...(existingSocialData.hangouts || [])],
-    ideas: [...(existingSocialData.ideas || [])],
-    summary: {
-      friends: { imported: 0, skipped: 0, updated: 0 },
-      hangouts: { imported: 0, skipped: 0, updated: 0 },
-      ideas: { imported: 0, skipped: 0, updated: 0 }
-    }
-  };
-
-  const friendKeys = new Set(result.friends.map(f => getFriendDuplicateKey(f)));
-  const hangoutKeys = new Set(result.hangouts.map(h => getHangoutDuplicateKey(h)));
-  const ideaKeys = new Set(result.ideas.map(i => getIdeaDuplicateKey(i)));
-
-  // Merge friends
-  (importedSocialData.friends || []).forEach(importedFriend => {
-    const key = getFriendDuplicateKey(importedFriend);
-    const existingIndex = result.friends.findIndex(f => getFriendDuplicateKey(f) === key);
-    
-    if (existingIndex >= 0) {
-      result.summary.friends.skipped++;
-      const existing = result.friends[existingIndex];
-      let updated = false;
-      // Merge missing fields
-      Object.keys(importedFriend).forEach(field => {
-        if (existing[field] === undefined || existing[field] === '') {
-          existing[field] = importedFriend[field];
-          updated = true;
-        }
-      });
-      if (updated) result.summary.friends.updated++;
-    } else {
-      result.friends.push(importedFriend);
-      result.summary.friends.imported++;
-    }
-  });
-
-  // Merge hangouts
-  (importedSocialData.hangouts || []).forEach(importedHangout => {
-    const key = getHangoutDuplicateKey(importedHangout);
-    const existingIndex = result.hangouts.findIndex(h => getHangoutDuplicateKey(h) === key);
-    
-    if (existingIndex >= 0) {
-      result.summary.hangouts.skipped++;
-      const existing = result.hangouts[existingIndex];
-      let updated = false;
-      Object.keys(importedHangout).forEach(field => {
-        if (existing[field] === undefined || existing[field] === '') {
-          existing[field] = importedHangout[field];
-          updated = true;
-        }
-      });
-      if (updated) result.summary.hangouts.updated++;
-    } else {
-      result.hangouts.push(importedHangout);
-      result.summary.hangouts.imported++;
-    }
-  });
-
-  // Merge ideas
-  (importedSocialData.ideas || []).forEach(importedIdea => {
-    const key = getIdeaDuplicateKey(importedIdea);
-    const existingIndex = result.ideas.findIndex(i => getIdeaDuplicateKey(i) === key);
-    
-    if (existingIndex >= 0) {
-      result.summary.ideas.skipped++;
-      const existing = result.ideas[existingIndex];
-      let updated = false;
-      Object.keys(importedIdea).forEach(field => {
-        if (existing[field] === undefined || existing[field] === '') {
-          existing[field] = importedIdea[field];
-          updated = true;
-        }
-      });
-      if (updated) result.summary.ideas.updated++;
-    } else {
-      result.ideas.push(importedIdea);
-      result.summary.ideas.imported++;
-    }
-  });
-
-  return result;
-}
-
-function removeDuplicateSocialData() {
-  if (!confirm('This will remove duplicate social data. A backup will be created first. Continue?')) {
-    return;
-  }
-
-  // Create backup
-  const backup = {
-    friends: [...(socialData.friends || [])],
-    hangouts: [...(socialData.hangouts || [])],
-    ideas: [...(socialData.ideas || [])],
-    backupDate: new Date().toISOString()
-  };
-  localStorage.setItem('flow-planner-social-backup', JSON.stringify(backup));
-
-  const result = {
-    friends: { removed: 0, kept: 0 },
-    hangouts: { removed: 0, kept: 0 },
-    ideas: { removed: 0, kept: 0 }
-  };
-
-  // Remove duplicate friends
-  const uniqueFriends = [];
-  const seenFriendKeys = new Set();
-  (socialData.friends || []).forEach(friend => {
-    const key = getFriendDuplicateKey(friend);
-    if (seenFriendKeys.has(key)) {
-      result.friends.removed++;
-    } else {
-      seenFriendKeys.add(key);
-      uniqueFriends.push(friend);
-      result.friends.kept++;
-    }
-  });
-  socialData.friends = uniqueFriends;
-
-  // Remove duplicate hangouts
-  const uniqueHangouts = [];
-  const seenHangoutKeys = new Set();
-  (socialData.hangouts || []).forEach(hangout => {
-    const key = getHangoutDuplicateKey(hangout);
-    if (seenHangoutKeys.has(key)) {
-      result.hangouts.removed++;
-    } else {
-      seenHangoutKeys.add(key);
-      uniqueHangouts.push(hangout);
-      result.hangouts.kept++;
-    }
-  });
-  socialData.hangouts = uniqueHangouts;
-
-  // Remove duplicate ideas
-  const uniqueIdeas = [];
-  const seenIdeaKeys = new Set();
-  (socialData.ideas || []).forEach(idea => {
-    const key = getIdeaDuplicateKey(idea);
-    if (seenIdeaKeys.has(key)) {
-      result.ideas.removed++;
-    } else {
-      seenIdeaKeys.add(key);
-      uniqueIdeas.push(idea);
-      result.ideas.kept++;
-    }
-  });
-  socialData.ideas = uniqueIdeas;
-
-  saveSocialData();
-  saveSocialDataToState();
-  renderSettings();
-  populateDataHealthCenter();
-  renderSocial();
-  
-  alert(`Removed ${result.friends.removed} duplicate friends, ${result.hangouts.removed} duplicate hangouts, ${result.ideas.removed} duplicate ideas.\nKept ${result.friends.kept} friends, ${result.hangouts.kept} hangouts, ${result.ideas.kept} ideas.`);
-}
-
 function handleSocialImportFile(event) {
   const file = event.target.files?.[0];
   if (!file) return;
@@ -2990,33 +2771,15 @@ function handleSocialImportFile(event) {
   const reader = new FileReader();
 
   reader.onload = () => {
-    const content = reader.result;
-    const importType = document.getElementById("socialImportType")?.value || "full";
-    
-    // Check if it's CSV (for hangouts or friends)
-    if (file.name.endsWith('.csv') || importType === 'hangouts' || importType === 'friends') {
-      try {
-        const parsed = parseSocialCSV(content, importType);
-        console.log("Social import CSV parsed:", parsed);
-        previewSocialImport(parsed);
-      } catch (error) {
-        console.error("Social import CSV parse error:", error);
-        alert("Invalid CSV file: " + error.message);
-        pendingSocialImport = null;
-        renderSocialImportPreview();
-      }
-    } else {
-      // JSON import
-      try {
-        const parsed = JSON.parse(content);
-        console.log("Social import file parsed:", parsed);
-        previewSocialImport(parsed);
-      } catch (error) {
-        console.error("Social import JSON parse error:", error);
-        alert("Invalid JSON file: " + error.message);
-        pendingSocialImport = null;
-        renderSocialImportPreview();
-      }
+    try {
+      const parsed = JSON.parse(reader.result);
+      console.log("Social import file parsed:", parsed);
+      previewSocialImport(parsed);
+    } catch (error) {
+      console.error("Social import JSON parse error:", error);
+      alert("Invalid JSON file: " + error.message);
+      pendingSocialImport = null;
+      renderSocialImportPreview();
     }
   };
 
@@ -3026,690 +2789,6 @@ function handleSocialImportFile(event) {
   };
 
   reader.readAsText(file);
-}
-
-function handleSocialImportFiles(event) {
-  const files = Array.from(event.target.files || []);
-  if (files.length === 0) return;
-
-  files.forEach(file => {
-    const fileData = {
-      file: file,
-      name: file.name,
-      type: file.name.endsWith('.csv') ? 'csv' : 'json',
-      size: formatFileSize(file.size),
-      status: 'queued'
-    };
-    queuedSocialFiles.push(fileData);
-  });
-
-  renderSocialFileQueue();
-  
-  // Clear the input to allow selecting the same files again
-  event.target.value = '';
-}
-
-function formatFileSize(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-}
-
-function renderSocialFileQueue() {
-  const queueContainer = document.getElementById('socialFileQueue');
-  const queueList = document.getElementById('socialFileQueueList');
-  
-  if (!queueContainer || !queueList) return;
-
-  if (queuedSocialFiles.length === 0) {
-    queueContainer.classList.add('hidden');
-    return;
-  }
-
-  queueContainer.classList.remove('hidden');
-  queueList.innerHTML = queuedSocialFiles.map((file, idx) => `
-    <div class="file-queue-item">
-      <div class="file-info">
-        <span class="file-name">${file.name}</span>
-        <span class="file-meta">${file.type.toUpperCase()} · ${file.size}</span>
-      </div>
-      <button class="remove-file-btn" onclick="removeQueuedSocialFile(${idx})">×</button>
-    </div>
-  `).join('');
-}
-
-function removeQueuedSocialFile(idx) {
-  queuedSocialFiles.splice(idx, 1);
-  renderSocialFileQueue();
-}
-
-function clearSocialFileQueue() {
-  queuedSocialFiles = [];
-  mergedSocialImportData = { friends: [], hangouts: [], ideas: [] };
-  renderSocialFileQueue();
-  document.getElementById('socialImportPreview').innerHTML = '<p>No import preview yet.</p>';
-  document.getElementById('socialImportPreview').classList.add('empty-state');
-  document.getElementById('socialImportSummary').classList.add('hidden');
-  document.getElementById('socialImportConfirmButton').disabled = true;
-}
-
-function addMoreSocialFiles() {
-  document.getElementById('socialImportFile').click();
-}
-
-function parseSocialFile(file, fileData) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    
-    reader.onload = () => {
-      const content = reader.result;
-      
-      try {
-        let parsed;
-        if (file.type === 'csv' || file.name.endsWith('.csv')) {
-          // Detect CSV type based on content
-          parsed = detectAndParseSocialCSV(content);
-        } else {
-          // JSON import
-          const json = JSON.parse(content);
-          parsed = normalizeSocialImportData(json);
-        }
-        
-        parsed.fileIndex = fileData.index;
-        parsed.fileName = file.name;
-        resolve(parsed);
-      } catch (error) {
-        reject(new Error(`Error parsing ${file.name}: ${error.message}`));
-      }
-    };
-
-    reader.onerror = () => {
-      reject(new Error(`Could not read ${file.name}`));
-    };
-
-    reader.readAsText(file);
-  });
-}
-
-function detectAndParseSocialCSV(content) {
-  const lines = content.trim().split('\n');
-  if (lines.length < 2) throw new Error('CSV must have at least header and one data row');
-  
-  const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-  
-  // Detect CSV type based on headers
-  const hasActivity = headers.some(h => h.includes('activity'));
-  const hasName = headers.some(h => h.includes('name'));
-  const hasFriend = headers.some(h => h.includes('friend'));
-  
-  if (hasActivity) {
-    return parseSocialCSV(content, 'hangouts');
-  } else if (hasName && !hasFriend) {
-    return parseSocialCSV(content, 'friends');
-  } else if (hasName || hasFriend) {
-    return parseSocialCSV(content, 'ideas');
-  } else {
-    throw new Error('Could not detect CSV type from headers');
-  }
-}
-
-function normalizeSocialImportData(data) {
-  const normalized = { friends: [], hangouts: [], ideas: [] };
-  
-  if (data.friends && Array.isArray(data.friends)) {
-    normalized.friends = data.friends;
-  }
-  if (data.hangouts && Array.isArray(data.hangouts)) {
-    normalized.hangouts = data.hangouts;
-  }
-  if (data.ideas && Array.isArray(data.ideas)) {
-    normalized.ideas = data.ideas;
-  }
-  
-  // Handle combined calendar import format
-  if (Array.isArray(data)) {
-    data.forEach(item => {
-      if (item.activity) {
-        normalized.hangouts.push(item);
-      } else if (item.name && !item.activity) {
-        // Check if it's a friend or idea based on other fields
-        if (item.phoneHandle || item.birthday) {
-          normalized.friends.push(item);
-        } else {
-          normalized.ideas.push(item);
-        }
-      }
-    });
-  }
-  
-  return normalized;
-}
-
-function previewSocialImportFiles() {
-  if (queuedSocialFiles.length === 0) {
-    alert('No files queued for import.');
-    return;
-  }
-
-  // Reset merged data
-  mergedSocialImportData = { friends: [], hangouts: [], ideas: [] };
-  const errors = [];
-
-  // Parse all files
-  const parsePromises = queuedSocialFiles.map((fileData, idx) => {
-    fileData.index = idx;
-    return parseSocialFile(fileData.file, fileData);
-  });
-
-  Promise.allSettled(parsePromises).then(results => {
-    results.forEach((result, idx) => {
-      if (result.status === 'fulfilled') {
-        const parsed = result.value;
-        mergedSocialImportData.friends.push(...(parsed.friends || []));
-        mergedSocialImportData.hangouts.push(...(parsed.hangouts || []));
-        mergedSocialImportData.ideas.push(...(parsed.ideas || []));
-        queuedSocialFiles[idx].status = 'parsed';
-      } else {
-        errors.push({ file: queuedSocialFiles[idx].name, error: result.reason.message });
-        queuedSocialFiles[idx].status = 'error';
-      }
-    });
-
-    renderSocialFileQueue();
-    
-    if (errors.length > 0) {
-      alert(`Some files failed to parse:\n${errors.map(e => `- ${e.file}: ${e.error}`).join('\n')}`);
-    }
-
-    // Analyze duplicates and new records
-    const analysis = analyzeSocialImportData(mergedSocialImportData);
-    
-    // Show preview
-    showSocialImportPreview(analysis);
-    
-    // Show summary
-    showSocialImportSummary(analysis);
-  });
-}
-
-function analyzeSocialImportData(data) {
-  const importMode = document.getElementById('socialImportMode').value;
-  const analysis = {
-    newFriends: [],
-    duplicateFriends: [],
-    newHangouts: [],
-    duplicateHangouts: [],
-    newIdeas: [],
-    duplicateIdeas: [],
-    invalidRows: [],
-    skippedRows: [],
-    totalFriends: data.friends.length,
-    totalHangouts: data.hangouts.length,
-    totalIdeas: data.ideas.length
-  };
-
-  // Check friends for duplicates (name + phone/social)
-  const existingFriendKeys = new Set(socialData.friends.map(f => getFriendKey(f)));
-  
-  data.friends.forEach(friend => {
-    if (!friend.name || friend.name.trim() === '') {
-      analysis.invalidRows.push({ type: 'friend', data: friend, reason: 'Missing name' });
-      return;
-    }
-    
-    const key = getFriendKey(friend);
-    if (existingFriendKeys.has(key)) {
-      analysis.duplicateFriends.push(friend);
-      if (importMode === 'new') {
-        analysis.skippedRows.push({ type: 'friend', data: friend, reason: 'Duplicate' });
-      }
-    } else {
-      analysis.newFriends.push(friend);
-    }
-  });
-
-  // Check hangouts for duplicates (date + activity + time + friends)
-  const existingHangoutKeys = new Set(socialData.hangouts.map(h => getHangoutKey(h)));
-  
-  data.hangouts.forEach(hangout => {
-    if (!hangout.activity || !hangout.date) {
-      analysis.invalidRows.push({ type: 'hangout', data: hangout, reason: 'Missing activity or date' });
-      return;
-    }
-    
-    const key = getHangoutKey(hangout);
-    if (existingHangoutKeys.has(key)) {
-      analysis.duplicateHangouts.push(hangout);
-      if (importMode === 'new') {
-        analysis.skippedRows.push({ type: 'hangout', data: hangout, reason: 'Duplicate' });
-      }
-    } else {
-      analysis.newHangouts.push(hangout);
-    }
-  });
-
-  // Check ideas for duplicates (title/name)
-  const existingIdeaKeys = new Set(socialData.ideas.map(i => (i.title || i.name || '').toLowerCase().trim()));
-  
-  data.ideas.forEach(idea => {
-    const title = idea.title || idea.name || '';
-    if (!title || title.trim() === '') {
-      analysis.invalidRows.push({ type: 'idea', data: idea, reason: 'Missing title' });
-      return;
-    }
-    
-    const key = title.toLowerCase().trim();
-    if (existingIdeaKeys.has(key)) {
-      analysis.duplicateIdeas.push(idea);
-      if (importMode === 'new') {
-        analysis.skippedRows.push({ type: 'idea', data: idea, reason: 'Duplicate' });
-      }
-    } else {
-      analysis.newIdeas.push(idea);
-    }
-  });
-
-  return analysis;
-}
-
-function getFriendKey(friend) {
-  const name = (friend.name || '').toLowerCase().trim();
-  const phone = (friend.phoneHandle || '').toLowerCase().trim();
-  return `${name}|${phone}`;
-}
-
-function getHangoutKey(hangout) {
-  const date = hangout.date || '';
-  const activity = (hangout.activity || '').toLowerCase().trim();
-  const time = hangout.time || '';
-  const friends = Array.isArray(hangout.friendIds) ? hangout.friendIds.sort().join(',') : '';
-  return `${date}|${activity}|${time}|${friends}`;
-}
-
-function showSocialImportPreview(analysis) {
-  const previewContainer = document.getElementById('socialImportPreview');
-  if (!previewContainer) return;
-
-  const importMode = document.getElementById('socialImportMode').value;
-  
-  previewContainer.classList.remove('empty-state');
-  previewContainer.innerHTML = `
-    <h4>Import Preview</h4>
-    <div class="preview-tabs">
-      <button class="preview-tab active" onclick="showPreviewTab('new')">New (${analysis.newFriends.length + analysis.newHangouts.length + analysis.newIdeas.length})</button>
-      <button class="preview-tab" onclick="showPreviewTab('duplicates')">Duplicates (${analysis.duplicateFriends.length + analysis.duplicateHangouts.length + analysis.duplicateIdeas.length})</button>
-      <button class="preview-tab" onclick="showPreviewTab('skipped')">Skipped (${analysis.skippedRows.length})</button>
-      <button class="preview-tab" onclick="showPreviewTab('invalid')">Invalid (${analysis.invalidRows.length})</button>
-    </div>
-    <div id="previewContent" class="preview-content">
-      ${renderPreviewNew(analysis)}
-    </div>
-  `;
-
-  // Enable confirm button if there are new records or in replace mode
-  const hasNewRecords = analysis.newFriends.length > 0 || analysis.newHangouts.length > 0 || analysis.newIdeas.length > 0;
-  const canImport = importMode === 'replace' || hasNewRecords || importMode === 'merge';
-  document.getElementById('socialImportConfirmButton').disabled = !canImport;
-  
-  // Store analysis for confirm
-  pendingSocialImport = analysis;
-}
-
-function showPreviewTab(tab) {
-  const analysis = pendingSocialImport;
-  if (!analysis) return;
-
-  const content = document.getElementById('previewContent');
-  const tabs = document.querySelectorAll('.preview-tab');
-  
-  tabs.forEach(t => t.classList.remove('active'));
-  event.target.classList.add('active');
-
-  switch (tab) {
-    case 'new':
-      content.innerHTML = renderPreviewNew(analysis);
-      break;
-    case 'duplicates':
-      content.innerHTML = renderPreviewDuplicates(analysis);
-      break;
-    case 'skipped':
-      content.innerHTML = renderPreviewSkipped(analysis);
-      break;
-    case 'invalid':
-      content.innerHTML = renderPreviewInvalid(analysis);
-      break;
-  }
-}
-
-function renderPreviewNew(analysis) {
-  let html = '';
-  
-  if (analysis.newFriends.length > 0) {
-    html += '<h5>New Friends</h5>';
-    html += '<ul>' + analysis.newFriends.slice(0, 10).map(f => `<li>${f.name}${f.phoneHandle ? ` (${f.phoneHandle})` : ''}</li>`).join('');
-    if (analysis.newFriends.length > 10) html += `<li>...and ${analysis.newFriends.length - 10} more</li>`;
-    html += '</ul>';
-  }
-  
-  if (analysis.newHangouts.length > 0) {
-    html += '<h5>New Hangouts</h5>';
-    html += '<ul>' + analysis.newHangouts.slice(0, 10).map(h => `<li>${h.activity} on ${h.date}${h.time ? ` at ${h.time}` : ''}</li>`).join('');
-    if (analysis.newHangouts.length > 10) html += `<li>...and ${analysis.newHangouts.length - 10} more</li>`;
-    html += '</ul>';
-  }
-  
-  if (analysis.newIdeas.length > 0) {
-    html += '<h5>New Ideas</h5>';
-    html += '<ul>' + analysis.newIdeas.slice(0, 10).map(i => `<li>${i.title || i.name}</li>`).join('');
-    if (analysis.newIdeas.length > 10) html += `<li>...and ${analysis.newIdeas.length - 10} more</li>`;
-    html += '</ul>';
-  }
-  
-  if (html === '') html = '<p class="muted-text">No new records to import.</p>';
-  
-  return html;
-}
-
-function renderPreviewDuplicates(analysis) {
-  let html = '';
-  
-  if (analysis.duplicateFriends.length > 0) {
-    html += '<h5>Duplicate Friends</h5>';
-    html += '<ul>' + analysis.duplicateFriends.slice(0, 10).map(f => `<li>${f.name}${f.phoneHandle ? ` (${f.phoneHandle})` : ''}</li>`).join('');
-    if (analysis.duplicateFriends.length > 10) html += `<li>...and ${analysis.duplicateFriends.length - 10} more</li>`;
-    html += '</ul>';
-  }
-  
-  if (analysis.duplicateHangouts.length > 0) {
-    html += '<h5>Duplicate Hangouts</h5>';
-    html += '<ul>' + analysis.duplicateHangouts.slice(0, 10).map(h => `<li>${h.activity} on ${h.date}</li>`).join('');
-    if (analysis.duplicateHangouts.length > 10) html += `<li>...and ${analysis.duplicateHangouts.length - 10} more</li>`;
-    html += '</ul>';
-  }
-  
-  if (analysis.duplicateIdeas.length > 0) {
-    html += '<h5>Duplicate Ideas</h5>';
-    html += '<ul>' + analysis.duplicateIdeas.slice(0, 10).map(i => `<li>${i.title || i.name}</li>`).join('');
-    if (analysis.duplicateIdeas.length > 10) html += `<li>...and ${analysis.duplicateIdeas.length - 10} more</li>`;
-    html += '</ul>';
-  }
-  
-  if (html === '') html = '<p class="muted-text">No duplicates found.</p>';
-  
-  return html;
-}
-
-function renderPreviewSkipped(analysis) {
-  let html = '';
-  
-  if (analysis.skippedRows.length > 0) {
-    html = '<ul>' + analysis.skippedRows.slice(0, 20).map(r => `<li>[${r.type}] ${r.reason}: ${JSON.stringify(r.data).substring(0, 50)}...</li>`).join('');
-    if (analysis.skippedRows.length > 20) html += `<li>...and ${analysis.skippedRows.length - 20} more</li>`;
-    html += '</ul>';
-  } else {
-    html = '<p class="muted-text">No rows skipped.</p>';
-  }
-  
-  return html;
-}
-
-function renderPreviewInvalid(analysis) {
-  let html = '';
-  
-  if (analysis.invalidRows.length > 0) {
-    html = '<ul>' + analysis.invalidRows.map(r => `<li>[${r.type}] ${r.reason}: ${JSON.stringify(r.data).substring(0, 50)}...</li>`).join('');
-    html += '</ul>';
-  } else {
-    html = '<p class="muted-text">No invalid rows.</p>';
-  }
-  
-  return html;
-}
-
-function showSocialImportSummary(analysis) {
-  const summaryContainer = document.getElementById('socialImportSummary');
-  if (!summaryContainer) return;
-
-  summaryContainer.classList.remove('hidden');
-  summaryContainer.innerHTML = `
-    <h4>Import Summary</h4>
-    <div class="summary-stats">
-      <div class="stat-item">
-        <span class="stat-label">Files:</span>
-        <span class="stat-value">${queuedSocialFiles.length}</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">New Friends:</span>
-        <span class="stat-value">${analysis.newFriends.length}</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">New Hangouts:</span>
-        <span class="stat-value">${analysis.newHangouts.length}</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">New Ideas:</span>
-        <span class="stat-value">${analysis.newIdeas.length}</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">Duplicates:</span>
-        <span class="stat-value warning">${analysis.duplicateFriends.length + analysis.duplicateHangouts.length + analysis.duplicateIdeas.length}</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">Skipped:</span>
-        <span class="stat-value">${analysis.skippedRows.length}</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">Invalid:</span>
-        <span class="stat-value error">${analysis.invalidRows.length}</span>
-      </div>
-    </div>
-  `;
-}
-
-// Drag and drop event handlers
-function setupSocialImportDragDrop() {
-  const dropZone = document.getElementById('socialImportDropZone');
-  if (!dropZone) return;
-
-  dropZone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dropZone.classList.add('drag-over');
-  });
-
-  dropZone.addEventListener('dragleave', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dropZone.classList.remove('drag-over');
-  });
-
-  dropZone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dropZone.classList.remove('drag-over');
-
-    const files = Array.from(e.dataTransfer.files || []);
-    if (files.length === 0) return;
-
-    // Filter for allowed file types
-    const allowedFiles = files.filter(file => 
-      file.name.endsWith('.json') || file.name.endsWith('.csv')
-    );
-
-    if (allowedFiles.length === 0) {
-      alert('Only JSON and CSV files are supported.');
-      return;
-    }
-
-    if (allowedFiles.length !== files.length) {
-      alert(`Only ${allowedFiles.length} of ${files.length} files were valid JSON/CSV files.`);
-    }
-
-    allowedFiles.forEach(file => {
-      const fileData = {
-        file: file,
-        name: file.name,
-        type: file.name.endsWith('.csv') ? 'csv' : 'json',
-        size: formatFileSize(file.size),
-        status: 'queued'
-      };
-      queuedSocialFiles.push(fileData);
-    });
-
-    renderSocialFileQueue();
-  });
-}
-
-function parseSocialCSV(content, importType) {
-  const lines = content.trim().split('\n');
-  if (lines.length < 2) {
-    throw new Error("CSV must have at least a header row and one data row");
-  }
-  
-  const headers = lines[0].split(',').map(h => h.trim());
-  const result = { friends: [], hangouts: [], ideas: [] };
-  
-  for (let i = 1; i < lines.length; i++) {
-    const values = parseCSVLine(lines[i]);
-    const row = {};
-    headers.forEach((header, idx) => {
-      row[header] = values[idx] || "";
-    });
-    
-    if (importType === 'hangouts') {
-      const hangout = {
-        id: createId("hangout"),
-        activity: row.Activity || row.activity || "",
-        date: parseDate(row.Date || row.date || ""),
-        time: row.Time || row.time || "",
-        location: row.Location || row.location || "",
-        cost: row.Cost || row.cost || "",
-        checklist: row.Checklist || row.checklist || "",
-        followUpReminder: row['Follow-up'] || row.followUpReminder || "",
-        notes: row.Notes || row.notes || "",
-        friendIds: [],
-        people: [],
-        completed: false,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      
-      // Parse friends column
-      if (row.Friends || row.friends) {
-        const friendNames = (row.Friends || row.friends)
-          .split(',')
-          .map(name => name.trim())
-          .filter(Boolean);
-        
-        // Normalize and deduplicate friend names
-        const normalizedNames = normalizeFriendNames(friendNames);
-        
-        // Match to existing friends
-        normalizedNames.forEach(name => {
-          const friend = findFriendByName(name);
-          if (friend) {
-            hangout.friendIds.push(friend.id);
-            hangout.people.push(friend.name);
-          } else {
-            // Preserve original name for unmatched friends
-            hangout.people.push(name);
-          }
-        });
-      }
-      
-      result.hangouts.push(hangout);
-    } else if (importType === 'friends') {
-      const friend = {
-        id: createId("friend"),
-        name: row.Name || row.name || "",
-        birthday: parseDate(row.Birthday || row.birthday || ""),
-        phoneHandle: row['Phone/Social'] || row.phoneHandle || "",
-        relationshipType: row.Relationship || row.relationshipType || "Friend",
-        priority: row.Priority || row.priority || "Medium",
-        giftIdeas: row['Gift Ideas'] || row.giftIdeas || "",
-        importantNotes: row.Notes || row.importantNotes || "",
-        nextFollowUp: parseDate(row['Next Follow-up'] || row.nextFollowUp || "")
-      };
-      result.friends.push(friend);
-    }
-  }
-  
-  return result;
-}
-
-function parseCSVLine(line) {
-  const result = [];
-  let current = '';
-  let inQuotes = false;
-  
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    if (char === '"') {
-      inQuotes = !inQuotes;
-    } else if (char === ',' && !inQuotes) {
-      result.push(current);
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-  result.push(current);
-  
-  return result.map(val => val.replace(/^"|"$/g, '').trim());
-}
-
-function parseDate(dateStr) {
-  if (!dateStr) return "";
-  // Try to parse various date formats
-  const date = new Date(dateStr);
-  if (!isNaN(date.getTime())) {
-    return date.toISOString().split('T')[0];
-  }
-  // Try MM/DD/YY format
-  const parts = dateStr.split('/');
-  if (parts.length === 3) {
-    const month = parts[0].padStart(2, '0');
-    const day = parts[1].padStart(2, '0');
-    const year = parts[2].length === 2 ? '20' + parts[2] : parts[2];
-    return `${year}-${month}-${day}`;
-  }
-  return dateStr;
-}
-
-function normalizeFriendNames(names) {
-  const normalized = names.map(name => name.trim().toLowerCase());
-  const seen = new Set();
-  return names.filter((name, idx) => {
-    const key = normalized[idx];
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function findFriendByName(name) {
-  const normalizedName = name.trim().toLowerCase();
-  return socialData.friends.find(f => 
-    f.name.trim().toLowerCase() === normalizedName
-  );
-}
-
-function downloadSocialCSVExample() {
-  const importType = document.getElementById("socialImportType")?.value || "hangouts";
-  
-  switch (importType) {
-    case 'friends-csv':
-      downloadTemplate('friends-csv');
-      break;
-    case 'hangouts':
-      downloadTemplate('social-hangouts');
-      break;
-    case 'ideas-csv':
-      downloadTemplate('ideas-csv');
-      break;
-    default:
-      downloadTemplate('social-hangouts');
-  }
 }
 
 function previewSocialImport(data) {
@@ -3742,38 +2821,11 @@ function renderSocialImportPreview() {
     return;
   }
 
-  // Calculate duplicate counts
-  const existingFriendKeys = new Set((socialData.friends || []).map(f => getFriendDuplicateKey(f)));
-  const existingHangoutKeys = new Set((socialData.hangouts || []).map(h => getHangoutDuplicateKey(h)));
-  const existingIdeaKeys = new Set((socialData.ideas || []).map(i => getIdeaDuplicateKey(i)));
-
-  const duplicateFriends = pendingSocialImport.friends.filter(f => existingFriendKeys.has(getFriendDuplicateKey(f))).length;
-  const duplicateHangouts = pendingSocialImport.hangouts.filter(h => existingHangoutKeys.has(getHangoutDuplicateKey(h))).length;
-  const duplicateIdeas = pendingSocialImport.ideas.filter(i => existingIdeaKeys.has(getIdeaDuplicateKey(i))).length;
-
-  const newFriends = pendingSocialImport.friends.length - duplicateFriends;
-  const newHangouts = pendingSocialImport.hangouts.length - duplicateHangouts;
-  const newIdeas = pendingSocialImport.ideas.length - duplicateIdeas;
-
   box.innerHTML = `
     <div class="summary-grid import-count-grid">
       <div><strong>${pendingSocialImport.friends.length}</strong><span>Friends</span></div>
       <div><strong>${pendingSocialImport.hangouts.length}</strong><span>Hangouts</span></div>
       <div><strong>${pendingSocialImport.ideas.length}</strong><span>Ideas</span></div>
-    </div>
-    <div class="import-details">
-      <div class="import-detail-item">
-        <span class="import-detail-label">New records:</span>
-        <span class="import-detail-value">${newFriends} friends, ${newHangouts} hangouts, ${newIdeas} ideas</span>
-      </div>
-      <div class="import-detail-item">
-        <span class="import-detail-label">Duplicates found:</span>
-        <span class="import-detail-value warning">${duplicateFriends} friends, ${duplicateHangouts} hangouts, ${duplicateIdeas} ideas</span>
-      </div>
-      <div class="import-detail-item">
-        <span class="import-detail-label">Existing app records:</span>
-        <span class="import-detail-value">${socialData.friends.length} friends, ${socialData.hangouts.length} hangouts, ${socialData.ideas.length} ideas</span>
-      </div>
     </div>
   `;
   btn.disabled = false;
@@ -3785,79 +2837,15 @@ function confirmSocialImport() {
     return;
   }
 
-  const importMode = document.getElementById('socialImportMode').value;
-  const analysis = pendingSocialImport;
+  // Merge imported data with existing social data
+  socialData.friends = [...socialData.friends, ...pendingSocialImport.friends];
+  socialData.hangouts = [...socialData.hangouts, ...pendingSocialImport.hangouts];
+  socialData.ideas = [...socialData.ideas, ...pendingSocialImport.ideas];
 
-  // Preview only mode - don't import
-  if (importMode === 'preview') {
-    alert('Preview mode selected. No data will be imported.');
-    return;
-  }
-
-  // Create auto-backup before import
-  createAutoBackup('before-social-import');
-
-  // Store original data for transactional rollback
-  const originalFriends = [...socialData.friends];
-  const originalHangouts = [...socialData.hangouts];
-  const originalIdeas = [...socialData.ideas];
-
-  try {
-    // Handle different import modes
-    switch (importMode) {
-      case 'replace':
-        // Replace all existing social data
-        socialData.friends = analysis.newFriends;
-        socialData.hangouts = analysis.newHangouts;
-        socialData.ideas = analysis.newIdeas;
-        break;
-        
-      case 'new':
-        // Import only new records, skip duplicates
-        socialData.friends = [...socialData.friends, ...analysis.newFriends];
-        socialData.hangouts = [...socialData.hangouts, ...analysis.newHangouts];
-        socialData.ideas = [...socialData.ideas, ...analysis.newIdeas];
-        break;
-        
-      case 'merge':
-        // Merge with existing, include duplicates for manual review
-        socialData.friends = [...socialData.friends, ...analysis.newFriends, ...analysis.duplicateFriends];
-        socialData.hangouts = [...socialData.hangouts, ...analysis.newHangouts, ...analysis.duplicateHangouts];
-        socialData.ideas = [...socialData.ideas, ...analysis.newIdeas, ...analysis.duplicateIdeas];
-        break;
-    }
-
-    // Save and update UI
-    saveSocialData();
-    saveSocialDataToState();
-    
-    // Clear queue and preview
-    clearSocialFileQueue();
-    
-    renderSettings();
-    populateDataHealthCenter();
-    renderSocial();
-
-    // Show success message
-    const message = `Import completed:\n` +
-      `- New Friends: ${analysis.newFriends.length}\n` +
-      `- New Hangouts: ${analysis.newHangouts.length}\n` +
-      `- New Ideas: ${analysis.newIdeas.length}\n` +
-      `- Duplicates: ${analysis.duplicateFriends.length + analysis.duplicateHangouts.length + analysis.duplicateIdeas.length}\n` +
-      `- Invalid: ${analysis.invalidRows.length}\n` +
-      `- Skipped: ${analysis.skippedRows.length}\n\n` +
-      `Backup created. Undo available via Data Health Center.`;
-    alert(message);
-
-  } catch (error) {
-    // Transactional rollback on error
-    console.error('Import failed, rolling back:', error);
-    socialData.friends = originalFriends;
-    socialData.hangouts = originalHangouts;
-    socialData.ideas = originalIdeas;
-    saveSocialData();
-    alert(`Import failed: ${error.message}\n\nData has been rolled back to original state.`);
-  }
+  saveSocialData();
+  pendingSocialImport = null;
+  renderSettings();
+  alert("Social data imported successfully.");
 }
 
 function previewSocialImportFromLocalStorage() {
@@ -5250,18 +4238,6 @@ let manualLogTrackerId = null;
 // duplicate removed: let editingObjectiveIndex = null;
 let trackerCategoryFilter = "All";
 let completedObjectiveFilter = "All";
-
-// Objective filters state
-let objectiveFilters = {
-  search: "",
-  status: "all",
-  priority: "all",
-  category: "all",
-  type: "all",
-  sort: "dueDate",
-  compact: false
-};
-
 let activePlannerSection = "Day";
 let activeSystemsSection = "Overview";
 let activeSocialSection = "Friends";
@@ -5276,8 +4252,6 @@ let visiblePlannerMonth = getTodayISO().slice(0, 7);
 let plannerWeekStart = getStartOfWeekISO(getTodayISO());
 let plannerWeekEnd = getDateOffset(plannerWeekStart, 6);
 let pendingSocialImport = null;
-let queuedSocialFiles = [];
-let mergedSocialImportData = { friends: [], hangouts: [], ideas: [] };
 let habitCompleteModalIndex = null;
 let manageOptionsOpen = false;
 
@@ -5292,21 +4266,6 @@ function saveSocialData() {
   const result = DataService.saveSocialData(socialData);
   triggerAutosync();
   return result;
-}
-
-function saveSocialDataToState() {
-  // Save social data to flow-planner-state-v3 if it contains socialData
-  try {
-    const stateV3 = localStorage.getItem('flow-planner-state-v3');
-    if (stateV3) {
-      const parsed = JSON.parse(stateV3);
-      parsed.socialData = socialData;
-      parsed.updatedAt = new Date().toISOString();
-      localStorage.setItem('flow-planner-state-v3', JSON.stringify(parsed));
-    }
-  } catch (e) {
-    console.error("Error saving social data to state:", e);
-  }
 }
 
 function saveSystemsData() {
@@ -5370,11 +4329,6 @@ function updateSyncStatusDisplay() {
   const cloudStatus = document.getElementById("cloudStatus");
   const lastSyncTime = document.getElementById("lastSyncTime");
 
-  // Only update if elements exist (they won't since we removed the UI)
-  if (!localStorageStatus && !cloudStatus && !lastSyncTime) {
-    return;
-  }
-
   if (localStorageStatus) {
     localStorageStatus.textContent = "Active ✓";
   }
@@ -5414,7 +4368,192 @@ function updateSyncStatusDisplay() {
   }
 }
 
-// Cloud sync UI functions removed - Data Sync Status card removed from Settings
+async function forceSyncFromCloud() {
+  console.log("[SYNC] Manual sync from cloud triggered");
+  const cloudStatus = document.getElementById("cloudStatus");
+  const syncErrorMessage = document.getElementById("syncErrorMessage");
+  
+  if (cloudStatus) {
+    cloudStatus.textContent = "Syncing...";
+    cloudStatus.style.color = "blue";
+  }
+  if (syncErrorMessage) {
+    syncErrorMessage.textContent = "";
+    syncErrorMessage.style.display = "none";
+  }
+
+  const result = await DataService.loadFromSupabase();
+  if (result) {
+    alert("Sync from cloud successful!");
+    updateSyncStatusDisplay();
+    location.reload();
+  } else {
+    const errorMsg = "Sync from cloud failed. " + 
+      (DataService.syncStatus.syncErrors.length > 0 
+        ? DataService.syncStatus.syncErrors[DataService.syncStatus.syncErrors.length - 1].error 
+        : "Supabase not configured or connection error.");
+    alert(errorMsg);
+    if (syncErrorMessage) {
+      syncErrorMessage.textContent = errorMsg;
+      syncErrorMessage.style.display = "block";
+      syncErrorMessage.style.color = "red";
+    }
+    updateSyncStatusDisplay();
+  }
+}
+
+async function forceSyncToCloud() {
+  console.log("[SYNC] Manual sync to cloud triggered");
+  const cloudStatus = document.getElementById("cloudStatus");
+  const syncErrorMessage = document.getElementById("syncErrorMessage");
+  
+  if (cloudStatus) {
+    cloudStatus.textContent = "Syncing...";
+    cloudStatus.style.color = "blue";
+  }
+  if (syncErrorMessage) {
+    syncErrorMessage.textContent = "";
+    syncErrorMessage.style.display = "none";
+  }
+
+  const data = {
+    plannerData,
+    scheduleData,
+    systemsData,
+    socialData,
+    allZipData,
+    allZipCustomOptions
+  };
+  const result = await DataService.saveToSupabase(data);
+  if (result) {
+    alert("Sync to cloud successful!");
+    updateSyncStatusDisplay();
+  } else {
+    const errorMsg = "Sync to cloud failed. " + 
+      (DataService.syncStatus.syncErrors.length > 0 
+        ? DataService.syncStatus.syncErrors[DataService.syncStatus.syncErrors.length - 1].error 
+        : "Supabase not configured or connection error.");
+    alert(errorMsg);
+    if (syncErrorMessage) {
+      syncErrorMessage.textContent = errorMsg;
+      syncErrorMessage.style.display = "block";
+      syncErrorMessage.style.color = "red";
+    }
+    updateSyncStatusDisplay();
+  }
+}
+
+async function testCloudSync() {
+  console.log("[SYNC] Testing cloud sync");
+  const testButton = document.getElementById("testCloudSyncButton");
+  const testResult = document.getElementById("testCloudSyncResult");
+  
+  if (testButton) {
+    testButton.textContent = "Testing...";
+    testButton.disabled = true;
+  }
+  if (testResult) {
+    testResult.textContent = "";
+    testResult.style.display = "none";
+  }
+
+  if (!window.flowSupabaseStorage?.enabled) {
+    const errorMsg = "Supabase not configured. Please check your environment variables.";
+    if (testResult) {
+      testResult.textContent = errorMsg;
+      testResult.style.display = "block";
+      testResult.style.color = "red";
+    }
+    if (testButton) {
+      testButton.textContent = "Test Cloud Sync";
+      testButton.disabled = false;
+    }
+    alert(errorMsg);
+    return;
+  }
+
+  try {
+    const ownerId = await window.flowSupabaseStorage.getOwnerId();
+    if (!ownerId) {
+      throw new Error("Could not get owner ID");
+    }
+
+    // Write test object
+    const testData = {
+      test: true,
+      timestamp: new Date().toISOString(),
+      message: "Cloud sync test"
+    };
+
+    const { error: upsertError } = await window.flowSupabaseStorage.client
+      .from("flow_planner_sync")
+      .upsert({
+        user_id: ownerId,
+        data: testData,
+        updated_at: new Date().toISOString()
+      }, {
+        onConflict: "user_id"
+      });
+
+    if (upsertError) {
+      throw new Error("Write failed: " + upsertError.message);
+    }
+
+    // Read test object back
+    const { data: readData, error: readError } = await window.flowSupabaseStorage.client
+      .from("flow_planner_sync")
+      .select("data")
+      .eq("user_id", ownerId)
+      .maybeSingle();
+
+    if (readError) {
+      throw new Error("Read failed: " + readError.message);
+    }
+
+    if (!readData || !readData.data || readData.data.test !== true) {
+      throw new Error("Data verification failed");
+    }
+
+    // Restore actual data
+    const actualData = {
+      plannerData,
+      scheduleData,
+      systemsData,
+      socialData,
+      allZipData,
+      allZipCustomOptions,
+      updatedAt: new Date().toISOString()
+    };
+
+    await window.flowSupabaseStorage.syncToCloud(actualData);
+
+    const successMsg = "Cloud sync test passed! Write and read successful.";
+    if (testResult) {
+      testResult.textContent = successMsg;
+      testResult.style.display = "block";
+      testResult.style.color = "green";
+    }
+    if (testButton) {
+      testButton.textContent = "Test Cloud Sync";
+      testButton.disabled = false;
+    }
+    alert(successMsg);
+    console.log("[SYNC] Test passed");
+  } catch (error) {
+    const errorMsg = "Cloud sync test failed: " + error.message;
+    if (testResult) {
+      testResult.textContent = errorMsg;
+      testResult.style.display = "block";
+      testResult.style.color = "red";
+    }
+    if (testButton) {
+      testButton.textContent = "Test Cloud Sync";
+      testButton.disabled = false;
+    }
+    alert(errorMsg);
+    console.error("[SYNC] Test failed:", error);
+  }
+}
 
 // EXPORT/IMPORT FUNCTIONS
 function downloadFullBackup() {
@@ -5424,226 +4563,6 @@ function downloadFullBackup() {
   const a = document.createElement("a");
   a.href = url;
   a.download = `flow-planner-backup-${getTodayISO()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-// Example Template Download Functions
-function downloadTemplate(type) {
-  let content, filename, mimeType;
-  
-  switch (type) {
-    case 'master-log':
-      content = JSON.stringify([
-        {
-          "id": "example-1",
-          "date": "2024-01-15",
-          "source": "Planner",
-          "category": "Work",
-          "name": "Deep work session",
-          "startTime": "09:00",
-          "endTime": "11:00",
-          "amount": "2h",
-          "notes": "Focused work on project"
-        },
-        {
-          "id": "example-2",
-          "date": "2024-01-15",
-          "source": "Social",
-          "category": "Social",
-          "name": "Coffee with friend",
-          "startTime": "14:00",
-          "endTime": "15:00",
-          "amount": "1h",
-          "notes": "Catch up meeting"
-        }
-      ], null, 2);
-      filename = "master-log-template.json";
-      mimeType = "application/json";
-      break;
-      
-    case 'sessions':
-      content = JSON.stringify([
-        {
-          "id": "session-1",
-          "title": "Deep Work Session",
-          "date": "2024-01-15",
-          "start": "09:00",
-          "end": "11:00",
-          "notes": "Focused work on project",
-          "completed": false
-        },
-        {
-          "id": "session-2",
-          "title": "Meeting",
-          "date": "2024-01-15",
-          "start": "14:00",
-          "end": "15:00",
-          "notes": "Team sync",
-          "completed": true
-        }
-      ], null, 2);
-      filename = "sessions-template.json";
-      mimeType = "application/json";
-      break;
-      
-    case 'sleep-habit':
-      content = JSON.stringify([
-        {
-          "id": "habit-1",
-          "name": "Sleep 8 hours",
-          "target": "8",
-          "unit": "hours",
-          "completions": ["2024-01-14", "2024-01-15"],
-          "notes": "Track sleep duration"
-        }
-      ], null, 2);
-      filename = "sleep-habit-template.json";
-      mimeType = "application/json";
-      break;
-      
-    case 'daily-metrics':
-      content = JSON.stringify([
-        {
-          "id": "metric-1",
-          "date": "2024-01-15",
-          "weight": "70",
-          "sleep": "7.5",
-          "mood": "Good",
-          "energy": "High",
-          "notes": "Productive day"
-        },
-        {
-          "id": "metric-2",
-          "date": "2024-01-14",
-          "weight": "70.5",
-          "sleep": "8",
-          "mood": "Excellent",
-          "energy": "High",
-          "notes": "Restful night"
-        }
-      ], null, 2);
-      filename = "daily-metrics-template.json";
-      mimeType = "application/json";
-      break;
-      
-    case 'social-hangouts':
-      content = "Date,Activity,Friends,Time,Location,Cost,Checklist,Follow-up,Notes\n1/15/24,Coffee with friends,\"Britney, Chloe, Axel\",14:00,Central Cafe,15,\"Order drinks\",\"Text after meetup\",\"Good conversation\"\n1/20/24,Movie night,\"Murabitos, Adair\",19:00,AMC Theater,20,\"Buy tickets\",\"Bring snacks\",\"Fun night\"\n";
-      filename = "social-hangouts-template.csv";
-      mimeType = "text/csv";
-      break;
-      
-    case 'friends-csv':
-      content = "Name,Birthday,Phone/Social,Relationship,Priority,Gift Ideas,Next Follow-up,Notes\nJohn Doe,1990-05-15,+1234567890,Friend,Medium,\"Books, Coffee mug\",2/1/24,Met at college\nJane Smith,1988-12-20,jane@example.com,Family,High,\"Plants, Art supplies\",1/25/24,Sister\n";
-      filename = "friends-template.csv";
-      mimeType = "text/csv";
-      break;
-      
-    case 'ideas-csv':
-      content = "Title,Category,Friends,Notes\nBeach trip,Social,\"John, Jane\",Summer vacation\nBook club,Social,\"Sarah, Mike\",Monthly meeting\n";
-      filename = "ideas-template.csv";
-      mimeType = "text/csv";
-      break;
-      
-    case 'full-social':
-      content = JSON.stringify({
-        "friends": [
-          {
-            "id": "friend-1",
-            "name": "John Doe",
-            "birthday": "1990-05-15",
-            "phoneHandle": "+1234567890",
-            "relationshipType": "Friend",
-            "priority": "Medium",
-            "giftIdeas": "Books, Coffee mug",
-            "importantNotes": "Met at college",
-            "nextFollowUp": "2024-02-01"
-          },
-          {
-            "id": "friend-2",
-            "name": "Jane Smith",
-            "birthday": "1988-12-20",
-            "phoneHandle": "jane@example.com",
-            "relationshipType": "Family",
-            "priority": "High",
-            "giftIdeas": "Plants, Art supplies",
-            "importantNotes": "Sister",
-            "nextFollowUp": "2024-01-25"
-          }
-        ],
-        "hangouts": [
-          {
-            "id": "hangout-1",
-            "activity": "Coffee with friends",
-            "date": "2024-01-15",
-            "time": "14:00",
-            "location": "Central Cafe",
-            "friendIds": ["friend-1", "friend-2"],
-            "people": ["John Doe", "Jane Smith"],
-            "cost": "15",
-            "checklist": "Order drinks",
-            "followUpReminder": "Text after meetup",
-            "notes": "Good conversation",
-            "completed": false
-          }
-        ],
-        "ideas": [
-          {
-            "id": "idea-1",
-            "title": "Beach trip",
-            "category": "Social",
-            "friendIds": ["friend-1"],
-            "notes": "Summer vacation"
-          }
-        ]
-      }, null, 2);
-      filename = "full-social-backup-template.json";
-      mimeType = "application/json";
-      break;
-      
-    case 'friends':
-      content = JSON.stringify({
-        "friends": [
-          {
-            "id": "friend-1",
-            "name": "John Doe",
-            "birthday": "1990-05-15",
-            "phoneHandle": "+1234567890",
-            "relationshipType": "Friend",
-            "priority": "Medium",
-            "giftIdeas": "Books, Coffee mug",
-            "importantNotes": "Met at college",
-            "nextFollowUp": "2024-02-01"
-          },
-          {
-            "id": "friend-2",
-            "name": "Jane Smith",
-            "birthday": "1988-12-20",
-            "phoneHandle": "jane@example.com",
-            "relationshipType": "Family",
-            "priority": "High",
-            "giftIdeas": "Plants, Art supplies",
-            "importantNotes": "Sister",
-            "nextFollowUp": "2024-01-25"
-          }
-        ],
-        "hangouts": [],
-        "ideas": []
-      }, null, 2);
-      filename = "friends-template.json";
-      mimeType = "application/json";
-      break;
-      
-    default:
-      alert("Unknown template type");
-      return;
-  }
-  
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -6050,28 +4969,24 @@ const pages = {
           <span>${friendFormOpen ? "^" : "v"}</span>
         </button>
         <div class="${friendFormOpen ? "" : "hidden"}">
-          <label>Name</label>
           <input id="friendName" placeholder="Name">
-          <label>Birthday</label>
-          <input id="friendBirthday" type="date" placeholder="mm/dd/yyyy">
-          <label>Phone or Social Handle</label>
+          <input id="friendBirthday" type="date">
           <input id="friendPhoneHandle" placeholder="Phone or social handle">
-          <label>Relationship</label>
           <select id="friendRelationshipType">
             ${getSocialTypes().map(t => `<option value="${escapeHTML(t)}">${escapeHTML(t)}</option>`).join("")}
           </select>
-          <label>Priority</label>
           <select id="friendPriority">
             <option>High</option>
             <option>Medium</option>
             <option>Low</option>
           </select>
-          <label>Next Follow-Up Date</label>
-          <input id="friendNextFollowUp" type="date" placeholder="mm/dd/yyyy">
-          <label>Gift Ideas</label>
+          <input id="friendLastContacted" type="date">
+          <input id="friendLastSeen" type="date">
+          <input id="friendFavoriteFood" placeholder="Favorite food">
+          <textarea id="friendFavoriteActivities" placeholder="Favorite activities"></textarea>
           <textarea id="friendGiftIdeas" placeholder="Gift ideas"></textarea>
-          <label>Important Notes</label>
           <textarea id="friendImportantNotes" placeholder="Important notes"></textarea>
+          <textarea id="friendPreferredHangoutStyle" placeholder="Preferred hangout style"></textarea>
           <button id="friendSaveButton" onclick="saveFriend()">Save Friend</button>
           <button class="secondary-btn" onclick="resetFriendForm()">Clear Friend Form</button>
         </div>
@@ -6109,38 +5024,27 @@ const pages = {
           <span>${hangoutFormOpen ? "^" : "v"}</span>
         </button>
         <div class="${hangoutFormOpen ? "" : "hidden"}">
-          <label>Activity</label>
           <input id="hangoutActivity" placeholder="Activity">
-          <label>Hangout Date</label>
-          <input id="hangoutDate" type="date" placeholder="mm/dd/yyyy" onchange="renderHangoutFreeSlots()">
+          <input id="hangoutDate" type="date" onchange="renderHangoutFreeSlots()">
           <div id="hangoutFreeSlots"></div>
-          <label>Time</label>
           <input id="hangoutTime" type="time">
-          <label>Location</label>
           <input id="hangoutLocation" placeholder="Place/location">
-          <div class="friend-multiselect">
-            <label>Friends</label>
-            <div class="friend-dropdown-trigger" onclick="toggleFriendDropdown()">
-              <span id="friendDropdownTriggerText">Search or select friends...</span>
-              <span class="dropdown-arrow">▼</span>
-            </div>
-            <div id="friendDropdown" class="friend-dropdown" style="display: none;">
-              <input id="friendDropdownSearch" placeholder="Search friends..." oninput="filterFriendDropdown()">
-              <div id="friendDropdownList"></div>
-            </div>
-            <div class="selected-friend-chips">
-              <span id="selectedHangoutFriendsCount" class="muted-text small">0 friends selected</span>
-              <button class="secondary-btn small clear-friends-btn" onclick="clearHangoutFriendSelection()">Clear all</button>
-            </div>
-            <div id="selectedHangoutFriendChips" class="selected-friend-chips-list"></div>
-          </div>
-          <label>Cost</label>
+          <input id="hangoutFriendSearch" placeholder="Search friends to pick" oninput="populateHangoutPeopleSelect()">
+          <select id="hangoutPeopleSelect" multiple onchange="renderSelectedHangoutPeopleChips()"></select>
+          <div id="selectedHangoutPeopleChips" class="chip-row"></div>
           <input id="hangoutCost" placeholder="Cost">
-          <label>Checklist</label>
           <textarea id="hangoutChecklist" placeholder="Checklist, one item per line"></textarea>
-          <label>Follow-Up Date</label>
-          <input id="hangoutFollowUpReminder" type="date" placeholder="mm/dd/yyyy">
-          <label>Notes</label>
+          <input id="hangoutFollowUpReminder" type="date">
+          <select id="hangoutRating">
+            <option value="">Rating after</option>
+            <option>5</option>
+            <option>4</option>
+            <option>3</option>
+            <option>2</option>
+            <option>1</option>
+          </select>
+          <input id="hangoutMoodAfter" placeholder="Mood after">
+          <textarea id="hangoutMemories" placeholder="Photos/memories notes"></textarea>
           <textarea id="hangoutNotes" placeholder="Notes"></textarea>
           <button id="hangoutSaveButton" onclick="saveHangout()">Save Hangout</button>
           <button class="secondary-btn" onclick="resetHangoutForm()">Clear Hangout Form</button>
@@ -6292,6 +5196,23 @@ const pages = {
       </div>
       </div>
     </div>
+    <div class="card">
+      <h3>Data Sync Status</h3>
+      <div id="offlineModeBanner" class="offline-banner" style="display:none; background:#fff3cd; color:#856404; padding:10px; border-radius:4px; margin-bottom:10px;">
+        ⚠️ Offline mode active — local storage only.
+      </div>
+      <div id="syncStatusDisplay">
+        <p><strong>Local Storage:</strong> <span id="localStorageStatus">Checking...</span></p>
+        <p><strong>Cloud Connection:</strong> <span id="cloudStatus">Checking...</span></p>
+        <p><strong>Last Sync:</strong> <span id="lastSyncTime">Never</span></p>
+      </div>
+      <p id="syncErrorMessage" class="sync-error" style="display:none; color:red; margin:10px 0;"></p>
+      <button onclick="forceSyncFromCloud()">Sync from Cloud</button>
+      <button onclick="forceSyncToCloud()">Sync to Cloud</button>
+      <button id="testCloudSyncButton" onclick="testCloudSync()" class="secondary-btn">Test Cloud Sync</button>
+      <p id="testCloudSyncResult" class="test-result" style="display:none; margin:10px 0;"></p>
+      <p id="cloudSyncNotConnected" class="muted-text" style="display:none;">Cloud sync not connected. Local backup still works.</p>
+    </div>
     <div class="card backup-restore-card">
       <h3>Backup + Restore</h3>
       <p class="settings-warning">Local data is saved per browser and per URL/port. Switching between localhost, Replit, Netlify, Codex preview, or different ports may show different data unless you import a backup.</p>
@@ -6301,7 +5222,7 @@ const pages = {
       <button onclick="importAllData()">Restore From Backup</button>
     </div>
     <div class="card">
-      <h3>Unified Data Rows Export/Import</h3>
+      <h3>All Zip Data Export/Import</h3>
       <p class="muted-text">Export all data as a unified master log (Google Sheets-style schema) with fields: id, date, source, category, type, name, amount, unit, startTime, endTime, durationMinutes, status, notes, linkedGoalId, linkedHabitId, linkedPlannerBlockId, createdAt, updatedAt.</p>
       <p class="muted-text">Supports planner blocks, habits, routines, manual metrics, goals, social logs, study hours, body metrics, taper/recovery logs, and course/license hours.</p>
       <div class="list-controls">
@@ -6343,11 +5264,12 @@ const pages = {
           <option value="session_csv">Session CSV (Google Sheets)</option>
           <option value="weight">Weight Log CSV</option>
           <option value="buy">Purchase Log CSV</option>
+          <option value="social">Social Hangouts CSV</option>
         </select>
       </div>
       <div id="allZipImportFileMode">
         <label class="file-upload-box">
-          <span>Import Unified Data Rows (JSON, CSV, or ICS)</span>
+          <span>Import All Zip Data (JSON, CSV, or ICS)</span>
           <input id="allZipDataImportFile" type="file" accept=".json,.csv,.ics,application/json,text/csv,text/calendar" onchange="handleAllZipDataImport(event)">
         </label>
       </div>
@@ -6370,67 +5292,29 @@ const pages = {
       </div>
     </div>
             <div class="card social-import-card">
-      <h3>Social Import</h3>
-      <p class="muted-text">Import friends, hangouts, and ideas from multiple files. Supports JSON, CSV, and mixed file types.</p>
-      <div>
-        <label>Import Mode</label>
-        <select id="socialImportMode">
-          <option value="merge">Merge with Existing</option>
-          <option value="new">Import Only New</option>
-          <option value="replace">Replace Existing Social Data</option>
-          <option value="preview">Preview Only</option>
-        </select>
+      <h3>Social Data Import</h3>
+      <p class="muted-text">Bring in friends, hangouts, and ideas from a backup file, pasted JSON, or browser localStorage.</p>
+      <div class="import-mode-grid">
+        <button onclick="showSocialImportMode('file')">Upload JSON file</button>
+        <button class="secondary-btn" onclick="showSocialImportMode('paste')">Paste JSON manually</button>
+        <button class="secondary-btn" onclick="previewSocialImportFromLocalStorage()">Import from browser localStorage</button>
       </div>
-      <div id="socialImportDropZone" class="drop-zone">
-        <p>Drag and drop files here or</p>
+      <div id="socialImportFileMode" class="social-import-mode">
         <label class="file-upload-box">
-          <span>Choose files</span>
-          <input id="socialImportFile" type="file" multiple accept=".json,.csv,application/json,text/csv" onchange="handleSocialImportFiles(event)">
+          <span>Choose a JSON file</span>
+          <input id="socialImportFile" type="file" accept="application/json,.json" onchange="handleSocialImportFile(event)">
         </label>
       </div>
-      <div id="socialFileQueue" class="file-queue hidden">
-        <h4>Queued Files</h4>
-        <div id="socialFileQueueList"></div>
-        <div class="button-row">
-          <button onclick="previewSocialImportFiles()">Preview Import</button>
-          <button class="secondary-btn" onclick="clearSocialFileQueue()">Clear Queue</button>
-        </div>
-      </div>
       <div id="socialImportPasteMode" class="social-import-mode hidden">
-        <textarea id="hangoutPlannerImportJson" placeholder="Paste JSON or CSV data here"></textarea>
-        <button onclick="previewSocialImportFromTextarea()">Preview pasted data</button>
+        <textarea id="hangoutPlannerImportJson" placeholder="Paste social JSON here"></textarea>
+        <button onclick="previewSocialImportFromTextarea()">Preview pasted JSON</button>
       </div>
       <div id="socialImportPreview" class="import-preview empty-state small">
         <p>No import preview yet.</p>
       </div>
-      <div id="socialImportSummary" class="import-summary hidden"></div>
       <div class="button-row">
         <button id="socialImportConfirmButton" onclick="confirmSocialImport()" disabled>Import Previewed Data</button>
-        <button class="secondary-btn" onclick="addMoreSocialFiles()">Import Another File</button>
         <button class="secondary-btn" onclick="exportCurrentSocialData()">Export Social Data</button>
-        <button class="secondary-btn" onclick="removeDuplicateSocialData()">Remove Duplicate Social Data</button>
-      </div>
-      <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
-        <button class="secondary-btn" onclick="downloadSocialCSVExample()">Download Example CSV</button>
-      </div>
-    </div>
-    <div class="card">
-      <h3>Download Example Templates</h3>
-      <p class="muted-text">Download correctly formatted example CSV/JSON templates for each import type.</p>
-      <div>
-        <label>Template Type</label>
-        <select id="templateType" onchange="downloadTemplate(this.value)">
-          <option value="">Select a template to download...</option>
-          <option value="full-social">Full Social Backup (JSON)</option>
-          <option value="friends">Friends Import (JSON)</option>
-          <option value="friends-csv">Friends Import (CSV)</option>
-          <option value="social-hangouts">Social Hangouts (CSV)</option>
-          <option value="ideas-csv">Ideas Import (CSV)</option>
-          <option value="master-log">Master Log / Unified Data Rows (JSON)</option>
-          <option value="sessions">Session Logs (JSON)</option>
-          <option value="sleep-habit">Sleep Habit Import (JSON)</option>
-          <option value="daily-metrics">Daily Metrics (JSON)</option>
-        </select>
       </div>
     </div>
     <div id="dataHealthCenterSection" class="card">
@@ -6471,15 +5355,48 @@ const pages = {
           <button onclick="repairTimestamps()">Fill Missing Timestamps</button>
           <button onclick="normalizeStoredDates()">Normalize Dates</button>
           <button onclick="normalizeStoredTimes()">Normalize Times</button>
-          <button onclick="syncLogsWithAllZipData()">Sync Logs to Unified Data</button>
-          <button onclick="syncAllZipDataToLogs()">Sync Unified Data to Logs</button>
+          <button onclick="syncLogsWithAllZipData()">Sync Logs to All Zip Data</button>
+          <button onclick="syncAllZipDataToLogs()">Sync All Zip Data to Logs</button>
+          <button onclick="repairPlannerLogLinks()">Repair Planner ↔ Log Links</button>
           <button class="secondary-btn" onclick="downloadDataHealthBackup()">Backup Before Repair</button>
         </div>
-        <div class="button-row">
-          <button class="secondary-btn" onclick="restoreLastBackup()">Restore Last Backup</button>
-          <button class="secondary-btn" onclick="restoreBackupFromFile()">Restore Backup From File</button>
-        </div>
         <div id="repairResult" class="repair-result"></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Planner ↔ Logs Auto-Linking</h3>
+      <p class="muted-text">Automatically link planner blocks and activity logs when they represent the same activity.</p>
+      
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="autoLinkPlannerLogs" onchange="toggleAutoLinkSetting('autoLinkPlannerLogs')">
+          Auto-link planner blocks and logs
+        </label>
+      </div>
+      
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="autoCreatePlannerFromLogs" onchange="toggleAutoLinkSetting('autoCreatePlannerFromLogs')">
+          Auto-create planner blocks from logs
+        </label>
+      </div>
+      
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="autoCreateLogsFromPlanner" onchange="toggleAutoLinkSetting('autoCreateLogsFromPlanner')">
+          Auto-create logs from planner blocks
+        </label>
+      </div>
+      
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="keepLinkedItemsSynced" onchange="toggleAutoLinkSetting('keepLinkedItemsSynced')">
+          Keep linked items synced
+        </label>
+      </div>
+      
+      <div class="button-row">
+        <button onclick="runAutoLinkAll()">Run Auto-Link on All Data</button>
       </div>
     </div>
   `
@@ -6626,7 +5543,7 @@ function renderSettings() {
   renderOptionsLists();
   bindManageOptionsEvents();
   populateDataHealthCenter();
-  setupSocialImportDragDrop();
+  populateAutoLinkSettings();
 }
 
 function toggleManageOptions() {
@@ -6728,7 +5645,7 @@ function renderDataCounts(health) {
       <div class="count-item"><span class="count-badge">${counts.socialFriends}</span> Friends</div>
       <div class="count-item"><span class="count-badge">${counts.socialHangouts}</span> Hangouts</div>
       <div class="count-item"><span class="count-badge">${counts.socialIdeas}</span> Ideas</div>
-      <div class="count-item"><span class="count-badge">${counts.allZipDataRows}</span> Unified Data Rows</div>
+      <div class="count-item"><span class="count-badge">${counts.allZipDataRows}</span> All Zip Rows</div>
     </div>
   `;
 }
@@ -6737,48 +5654,16 @@ function renderDuplicateHealth(health) {
   const container = document.getElementById('duplicateHealth');
   if (!container) return;
 
-  const duplicateResult = findDuplicateRows();
-  const count = duplicateResult.totalDuplicates;
-  
-  const sectionLabels = {
-    planner: 'Planner Blocks',
-    habits: 'Habits',
-    habitLogs: 'Habit Logs',
-    trackers: 'Trackers',
-    trackerLogs: 'Tracker Logs',
-    objectives: 'Objectives',
-    metrics: 'Daily Metrics',
-    friends: 'Social Friends',
-    hangouts: 'Hangouts',
-    ideas: 'Ideas',
-    allZip: 'Unified Data Rows'
-  };
-  
+  const count = health.duplicates.length;
   container.innerHTML = `
     <div class="health-status ${count > 0 ? 'health-warning' : 'health-ok'}">
       <span class="count-badge ${count > 0 ? 'badge-warning' : 'badge-ok'}">${count}</span>
-      <span>potential duplicate groups found</span>
-    </div>
-    <div class="health-details">
-      <div class="detail-row">
-        <span class="detail-label">Rows scanned:</span>
-        <span class="detail-value">${duplicateResult.rowsScanned.toLocaleString()}</span>
-      </div>
-      ${Object.entries(duplicateResult.bySection).filter(([_, c]) => c > 0).map(([section, count]) => `
-        <div class="detail-row">
-          <span class="detail-label">${sectionLabels[section] || section}:</span>
-          <span class="detail-value">${count}</span>
-        </div>
-      `).join('')}
-    </div>
-    <div class="duplicate-rules">
-      <p class="muted-text small">Only exact normalized matches (date, title, time, amount, notes, linked IDs) are considered safe duplicates.</p>
+      <span>duplicate rows found</span>
     </div>
     ${count > 0 ? `
       <div class="button-row">
-        <button onclick="reviewDuplicates()">Review Potential Duplicates</button>
-        <button onclick="removeExactDuplicates()">Remove Exact Duplicates Only</button>
-        <button class="secondary-btn" onclick="exportDuplicateReport()">Export Report</button>
+        <button onclick="reviewDuplicates()">Review Duplicates</button>
+        <button onclick="removeExactDuplicates()">Remove Exact Duplicates</button>
       </div>
     ` : ''}
   `;
@@ -6788,20 +5673,8 @@ function renderMissingFieldHealth(health) {
   const container = document.getElementById('missingFieldHealth');
   if (!container) return;
 
-  const missing = findMissingFields();
+  const missing = health.missingFields;
   const totalIssues = Object.values(missing).reduce((sum, arr) => sum + arr.length, 0);
-  
-  const fieldLabels = {
-    missingDate: 'Missing date',
-    missingName: 'Missing name/title',
-    missingCategory: 'Missing category',
-    missingType: 'Missing type',
-    missingUnit: 'Missing unit',
-    missingTime: 'Missing time',
-    missingLinkedId: 'Missing linked ID',
-    emptyStrings: 'Empty strings (should be null)'
-  };
-  
   container.innerHTML = `
     <div class="health-status ${totalIssues > 0 ? 'health-warning' : 'health-ok'}">
       <span class="count-badge ${totalIssues > 0 ? 'badge-warning' : 'badge-ok'}">${totalIssues}</span>
@@ -6809,15 +5682,12 @@ function renderMissingFieldHealth(health) {
     </div>
     ${totalIssues > 0 ? `
       <div class="missing-details">
-        ${Object.entries(missing).filter(([_, arr]) => arr.length > 0).map(([key, arr]) => `
-          <div class="detail-row">
-            <span class="detail-label">${fieldLabels[key] || key}:</span>
-            <span class="detail-value">${arr.length}</span>
-          </div>
-        `).join('')}
-      </div>
-      <div class="button-row">
-        <button onclick="autoFixMissingFields()">Auto Fix Missing Fields</button>
+        ${missing.missingDate?.length ? `<div>Missing date: ${missing.missingDate.length}</div>` : ''}
+        ${missing.missingCategory?.length ? `<div>Missing category: ${missing.missingCategory.length}</div>` : ''}
+        ${missing.missingType?.length ? `<div>Missing type: ${missing.missingType.length}</div>` : ''}
+        ${missing.missingUnit?.length ? `<div>Missing unit: ${missing.missingUnit.length}</div>` : ''}
+        ${missing.missingTime?.length ? `<div>Missing time: ${missing.missingTime.length}</div>` : ''}
+        ${missing.missingLinkedId?.length ? `<div>Missing linked ID: ${missing.missingLinkedId.length}</div>` : ''}
       </div>
     ` : ''}
   `;
@@ -6828,7 +5698,10 @@ function renderBrokenLinkHealth(health) {
   if (!container) return;
 
   const broken = health.brokenLinks;
-  const totalIssues = Object.values(broken).reduce((sum, arr) => sum + arr.length, 0);
+  const plannerLogBroken = (broken.logsToMissingBlocks?.length || 0) + (broken.blocksToMissingLogs?.length || 0);
+  const otherBroken = Object.values(broken).reduce((sum, arr) => sum + arr.length, 0) - plannerLogBroken;
+  const totalIssues = plannerLogBroken + otherBroken;
+  
   container.innerHTML = `
     <div class="health-status ${totalIssues > 0 ? 'health-warning' : 'health-ok'}">
       <span class="count-badge ${totalIssues > 0 ? 'badge-warning' : 'badge-ok'}">${totalIssues}</span>
@@ -6836,472 +5709,68 @@ function renderBrokenLinkHealth(health) {
     </div>
     ${totalIssues > 0 ? `
       <div class="broken-details">
-        ${broken.logsToMissingBlocks?.length ? `<div>Logs to missing blocks: ${broken.logsToMissingBlocks.length}</div>` : ''}
-        ${broken.blocksToMissingLogs?.length ? `<div>Blocks to missing logs: ${broken.blocksToMissingLogs.length}</div>` : ''}
-        ${broken.logsToMissingTrackers?.length ? `<div>Logs to missing trackers: ${broken.logsToMissingTrackers.length}</div>` : ''}
-        ${broken.logsToMissingHabits?.length ? `<div>Logs to missing habits: ${broken.logsToMissingHabits.length}</div>` : ''}
-        ${broken.logsToMissingGoals?.length ? `<div>Logs to missing goals: ${broken.logsToMissingGoals.length}</div>` : ''}
+        <div class="broken-category">
+          <strong>Planner ↔ Log Links:</strong>
+          ${broken.logsToMissingBlocks?.length ? `<div>Logs → missing blocks: ${broken.logsToMissingBlocks.length}</div>` : '<div>✓ No orphaned log links</div>'}
+          ${broken.blocksToMissingLogs?.length ? `<div>Blocks → missing logs: ${broken.blocksToMissingLogs.length}</div>` : '<div>✓ No orphaned block links</div>'}
+        </div>
+        <div class="broken-category" style="margin-top: 8px;">
+          <strong>Other Links:</strong>
+          ${broken.logsToMissingTrackers?.length ? `<div>Logs → missing trackers: ${broken.logsToMissingTrackers.length}</div>` : ''}
+          ${broken.logsToMissingHabits?.length ? `<div>Logs → missing habits: ${broken.logsToMissingHabits.length}</div>` : ''}
+          ${broken.logsToMissingGoals?.length ? `<div>Logs → missing goals: ${broken.logsToMissingGoals.length}</div>` : ''}
+        </div>
       </div>
+      ${plannerLogBroken > 0 ? `
+        <div class="button-row" style="margin-top: 8px;">
+          <button onclick="repairPlannerLogLinks()">Repair Planner ↔ Log Links</button>
+        </div>
+      ` : ''}
     ` : ''}
   `;
 }
 
 function findDuplicateRows() {
-  const result = {
-    totalDuplicates: 0,
-    rowsScanned: 0,
-    bySection: {},
-    duplicates: []
-  };
-  
-  // Helper function to normalize row for comparison
-  const normalizeRow = (row, section) => {
-    const normalized = {
-      section,
-      id: row.id,
-      createdAt: row.createdAt,
-      original: row
-    };
-    
-    switch (section) {
-      case 'planner':
-        normalized.date = row.date || '';
-        normalized.title = normalizeText(row.title || '');
-        normalized.category = normalizeText(row.category || '');
-        normalized.start = row.start || '';
-        normalized.end = row.end || '';
-        normalized.notes = normalizeText(row.notes || '');
-        normalized.linkedGoalId = row.linkedGoalId || '';
-        break;
-      case 'habits':
-        normalized.name = normalizeText(row.name || '');
-        normalized.target = row.target || '';
-        normalized.unit = normalizeText(row.unit || '');
-        break;
-      case 'habitLogs':
-        normalized.date = row.date || '';
-        normalized.habitId = row.habitId || '';
-        normalized.notes = normalizeText(row.notes || '');
-        break;
-      case 'trackers':
-        normalized.name = normalizeText(row.name || '');
-        normalized.unit = normalizeText(row.unit || '');
-        normalized.category = normalizeText(row.category || '');
-        break;
-      case 'trackerLogs':
-        normalized.date = row.date || '';
-        normalized.trackerId = row.trackerId || '';
-        normalized.value = row.value || '';
-        normalized.notes = normalizeText(row.notes || '');
-        break;
-      case 'objectives':
-        normalized.title = normalizeText(row.title || '');
-        normalized.category = normalizeText(row.category || '');
-        normalized.status = normalizeText(row.status || '');
-        normalized.notes = normalizeText(row.notes || '');
-        break;
-      case 'metrics':
-        normalized.date = row.date || '';
-        normalized.weight = row.weight || '';
-        normalized.sleep = row.sleep || '';
-        normalized.mood = normalizeText(row.mood || '');
-        break;
-      case 'friends':
-        normalized.name = normalizeText(row.name || '');
-        normalized.phone = normalizeText(row.phoneHandle || '');
-        normalized.email = normalizeText(row.email || row.phoneHandle || '');
-        normalized.birthday = row.birthday || '';
-        normalized.relationshipType = normalizeText(row.relationshipType || '');
-        break;
-      case 'hangouts':
-        normalized.date = row.date || '';
-        normalized.activity = normalizeText(row.activity || row.title || '');
-        normalized.location = normalizeText(row.location || '');
-        const friendIds = Array.isArray(row.friendIds) ? row.friendIds.sort().join(',') : '';
-        normalized.friendIds = friendIds;
-        normalized.cost = row.cost || '';
-        normalized.followUpReminder = row.followUpReminder || '';
-        normalized.notes = normalizeText(row.notes || '');
-        break;
-      case 'ideas':
-        normalized.title = normalizeText(row.title || row.name || '');
-        normalized.category = normalizeText(row.category || '');
-        normalized.notes = normalizeText(row.notes || '');
-        break;
-      case 'allZip':
-        normalized.date = row.date || '';
-        normalized.category = normalizeText(row.category || '');
-        normalized.type = normalizeText(row.type || '');
-        normalized.name = normalizeText(row.name || '');
-        normalized.amount = row.amount || '';
-        normalized.unit = normalizeText(row.unit || '');
-        normalized.start = row.startTime || '';
-        normalized.end = row.endTime || '';
-        normalized.notes = normalizeText(row.notes || '');
-        normalized.linkedGoalId = row.linkedGoalId || '';
-        normalized.linkedHabitId = row.linkedHabitId || '';
-        normalized.linkedPlannerBlockId = row.linkedPlannerBlockId || '';
-        break;
+  const duplicates = [];
+  const seen = new Map();
+  const allRows = [...(systemsData.logs || []), ...(allZipData || [])];
+
+  allRows.forEach(row => {
+    const key = `${row.date}-${row.category}-${row.type}-${row.amount}-${row.startTime}-${row.endTime}`;
+    if (seen.has(key)) {
+      duplicates.push({ ...row, duplicateOf: seen.get(key) });
+    } else {
+      seen.set(key, row);
     }
-    
-    return normalized;
-  };
-  
-  // Helper function to generate comparison key
-  const getComparisonKey = (normalized) => {
-    const parts = [];
-    if (normalized.date) parts.push(normalized.date);
-    if (normalized.title || normalized.name) parts.push(normalized.title || normalized.name);
-    if (normalized.category) parts.push(normalized.category);
-    if (normalized.type) parts.push(normalized.type);
-    if (normalized.amount) parts.push(normalized.amount);
-    if (normalized.unit) parts.push(normalized.unit);
-    if (normalized.start) parts.push(normalized.start);
-    if (normalized.end) parts.push(normalized.end);
-    if (normalized.notes) parts.push(normalized.notes);
-    if (normalized.friendIds) parts.push(normalized.friendIds);
-    if (normalized.habitId) parts.push(normalized.habitId);
-    if (normalized.trackerId) parts.push(normalized.trackerId);
-    if (normalized.value) parts.push(normalized.value);
-    if (normalized.status) parts.push(normalized.status);
-    if (normalized.weight) parts.push(normalized.weight);
-    if (normalized.sleep) parts.push(normalized.sleep);
-    if (normalized.mood) parts.push(normalized.mood);
-    if (normalized.target) parts.push(normalized.target);
-    if (normalized.cost) parts.push(normalized.cost);
-    if (normalized.followUpReminder) parts.push(normalized.followUpReminder);
-    if (normalized.linkedGoalId) parts.push(normalized.linkedGoalId);
-    if (normalized.linkedHabitId) parts.push(normalized.linkedHabitId);
-    if (normalized.linkedPlannerBlockId) parts.push(normalized.linkedPlannerBlockId);
-    if (normalized.birthday) parts.push(normalized.birthday);
-    if (normalized.relationshipType) parts.push(normalized.relationshipType);
-    return parts.join('|');
-  };
-  
-  // Protected sections - only exact duplicates allowed
-  const protectedSections = ['planner', 'objectives', 'friends', 'hangouts', 'trackerLogs'];
-  
-  // Helper function to get match reason
-  const getMatchReason = (normalized, section) => {
-    const fields = [];
-    if (normalized.date) fields.push('date');
-    if (normalized.title || normalized.name) fields.push(normalized.title || normalized.name);
-    if (normalized.activity) fields.push(normalized.activity);
-    if (normalized.category) fields.push(normalized.category);
-    if (normalized.type) fields.push(normalized.type);
-    if (normalized.amount) fields.push(`amount: ${normalized.amount}`);
-    if (normalized.cost) fields.push(`cost: ${normalized.cost}`);
-    if (normalized.start) fields.push(`start: ${normalized.start}`);
-    if (normalized.end) fields.push(`end: ${normalized.end}`);
-    if (normalized.notes) fields.push(`notes: ${normalized.notes.substring(0, 30)}...`);
-    if (normalized.friendIds) fields.push(`friends: ${normalized.friendIds}`);
-    if (normalized.linkedGoalId) fields.push(`linked goal: ${normalized.linkedGoalId}`);
-    if (normalized.linkedHabitId) fields.push(`linked habit: ${normalized.linkedHabitId}`);
-    if (normalized.linkedPlannerBlockId) fields.push(`linked block: ${normalized.linkedPlannerBlockId}`);
-    return fields.join(', ');
-  };
-  
-  // Scan each section
-  const sections = [
-    { name: 'planner', data: scheduleData?.blocks || [] },
-    { name: 'habits', data: systemsData?.habits || [] },
-    { name: 'habitLogs', data: systemsData?.logs?.filter(l => l.category === 'Habit') || [] },
-    { name: 'trackers', data: systemsData?.trackers || [] },
-    { name: 'trackerLogs', data: systemsData?.logs?.filter(l => l.category === 'Tracker') || [] },
-    { name: 'objectives', data: systemsData?.objectives || [] },
-    { name: 'metrics', data: systemsData?.metrics || [] },
-    { name: 'friends', data: socialData?.friends || [] },
-    { name: 'hangouts', data: socialData?.hangouts || [] },
-    { name: 'ideas', data: socialData?.ideas || [] },
-    { name: 'allZip', data: allZipData || [] }
-  ];
-  
-  sections.forEach(section => {
-    const seen = new Map();
-    const sectionDuplicates = [];
-    
-    section.data.forEach(row => {
-      result.rowsScanned++;
-      const normalized = normalizeRow(row, section.name);
-      const key = getComparisonKey(normalized);
-      
-      if (seen.has(key)) {
-        const existing = seen.get(key);
-        
-        // Calculate confidence level based on section protection
-        const isProtected = protectedSections.includes(section.name);
-        const confidence = isProtected ? 'high' : 'medium';
-        
-        // Determine match reason
-        const matchReason = getMatchReason(normalized, section.name);
-        
-        // Keep the oldest (by createdAt) row
-        const createdAt1 = normalized.createdAt || '';
-        const createdAt2 = existing.createdAt || '';
-        const keepOlder = createdAt1 < createdAt2;
-        
-        if (keepOlder) {
-          sectionDuplicates.push({
-            section: section.name,
-            removed: existing,
-            kept: normalized,
-            key,
-            confidence,
-            matchReason,
-            isProtected
-          });
-          seen.set(key, normalized);
-        } else {
-          sectionDuplicates.push({
-            section: section.name,
-            removed: normalized,
-            kept: existing,
-            key,
-            confidence,
-            matchReason,
-            isProtected
-          });
-        }
-      } else {
-        seen.set(key, normalized);
-      }
-    });
-    
-    result.bySection[section.name] = sectionDuplicates.length;
-    result.duplicates.push(...sectionDuplicates);
   });
-  
-  result.totalDuplicates = result.duplicates.length;
-  return result;
+
+  return duplicates;
 }
 
 function findMissingFields() {
   const missing = {
     missingDate: [],
-    missingName: [],
     missingCategory: [],
     missingType: [],
     missingUnit: [],
     missingTime: [],
-    missingLinkedId: [],
-    emptyStrings: []
+    missingLinkedId: []
   };
 
-  // Check planner blocks
-  (scheduleData?.blocks || []).forEach(row => {
-    if (!row.date) missing.missingDate.push({ id: row.id, section: 'planner' });
-    if (!row.title || row.title === '') missing.missingName.push({ id: row.id, section: 'planner' });
-    if (!row.category || row.category === '') missing.missingCategory.push({ id: row.id, section: 'planner' });
-    if (!row.start) missing.missingTime.push({ id: row.id, section: 'planner' });
-    if (!row.end) missing.missingTime.push({ id: row.id, section: 'planner' });
-  });
+  const allRows = [...(systemsData.logs || []), ...(allZipData || [])];
 
-  // Check habits
-  (systemsData?.habits || []).forEach(row => {
-    if (!row.name || row.name === '') missing.missingName.push({ id: row.id, section: 'habits' });
-    if (!row.unit || row.unit === '') missing.missingUnit.push({ id: row.id, section: 'habits' });
-  });
-
-  // Check habit logs
-  (systemsData?.logs || []).filter(l => l.category === 'Habit').forEach(row => {
-    if (!row.date) missing.missingDate.push({ id: row.id, section: 'habitLogs' });
-    if (!row.habitId) missing.missingLinkedId.push({ id: row.id, section: 'habitLogs' });
-  });
-
-  // Check trackers
-  (systemsData?.trackers || []).forEach(row => {
-    if (!row.name || row.name === '') missing.missingName.push({ id: row.id, section: 'trackers' });
-    if (!row.unit || row.unit === '') missing.missingUnit.push({ id: row.id, section: 'trackers' });
-    if (!row.category || row.category === '') missing.missingCategory.push({ id: row.id, section: 'trackers' });
-  });
-
-  // Check tracker logs
-  (systemsData?.logs || []).filter(l => l.category === 'Tracker').forEach(row => {
-    if (!row.date) missing.missingDate.push({ id: row.id, section: 'trackerLogs' });
-    if (!row.trackerId) missing.missingLinkedId.push({ id: row.id, section: 'trackerLogs' });
-  });
-
-  // Check objectives
-  (systemsData?.objectives || []).forEach(row => {
-    if (!row.title || row.title === '') missing.missingName.push({ id: row.id, section: 'objectives' });
-    if (!row.category || row.category === '') missing.missingCategory.push({ id: row.id, section: 'objectives' });
-  });
-
-  // Check metrics
-  (systemsData?.metrics || []).forEach(row => {
-    if (!row.date) missing.missingDate.push({ id: row.id, section: 'metrics' });
-  });
-
-  // Check social friends
-  (socialData?.friends || []).forEach(row => {
-    if (!row.name || row.name === '') missing.missingName.push({ id: row.id, section: 'friends' });
-  });
-
-  // Check hangouts
-  (socialData?.hangouts || []).forEach(row => {
-    if (!row.date) missing.missingDate.push({ id: row.id, section: 'hangouts' });
-    if (!row.activity || row.activity === '') missing.missingName.push({ id: row.id, section: 'hangouts' });
-  });
-
-  // Check ideas
-  (socialData?.ideas || []).forEach(row => {
-    if (!row.title || row.title === '') missing.missingName.push({ id: row.id, section: 'ideas' });
-  });
-
-  // Check all zip data for empty strings
-  (allZipData || []).forEach(row => {
-    Object.keys(row).forEach(key => {
-      if (row[key] === '') {
-        missing.emptyStrings.push({ id: row.id, section: 'allZip', field: key });
-      }
-    });
-    if (!row.date) missing.missingDate.push({ id: row.id, section: 'allZip' });
-    if (!row.category || row.category === '') missing.missingCategory.push({ id: row.id, section: 'allZip' });
-    if (!row.type || row.type === '') missing.missingType.push({ id: row.id, section: 'allZip' });
+  allRows.forEach(row => {
+    if (!row.date) missing.missingDate.push(row.id || 'unknown');
+    if (!row.category) missing.missingCategory.push(row.id || 'unknown');
+    if (!row.type) missing.missingType.push(row.id || 'unknown');
+    if (row.amount && !row.unit) missing.missingUnit.push(row.id || 'unknown');
+    if (row.durationMinutes && (!row.startTime || !row.endTime)) missing.missingTime.push(row.id || 'unknown');
+    if ((row.category === 'Habit' || row.category === 'Goal' || row.category === 'Tracker') && !row.linkedTrackerId) {
+      missing.missingLinkedId.push(row.id || 'unknown');
+    }
   });
 
   return missing;
-}
-
-function autoFixMissingFields() {
-  if (!confirm('Auto-fix missing fields? This will infer category/type from linked trackers/habits, fill timestamps, and normalize empty strings to null. A backup will be created first.')) return;
-  
-  // Create backup
-  downloadDataHealthBackup();
-  
-  let fixes = {
-    normalizedEmptyStrings: 0,
-    inferredFromTracker: 0,
-    inferredFromHabit: 0,
-    filledTimestamps: 0
-  };
-  
-  // Normalize empty strings to null in all zip data
-  if (allZipData) {
-    allZipData.forEach(row => {
-      Object.keys(row).forEach(key => {
-        if (row[key] === '') {
-          row[key] = null;
-          fixes.normalizedEmptyStrings++;
-        }
-      });
-    });
-  }
-  
-  // Infer category/type from linked tracker
-  if (systemsData?.logs) {
-    systemsData.logs.forEach(log => {
-      if (!log.category && log.trackerId) {
-        const tracker = systemsData.trackers?.find(t => t.id === log.trackerId);
-        if (tracker) {
-          log.category = tracker.category || 'Tracker';
-          if (!log.type) {
-            log.type = tracker.name || '';
-          }
-          fixes.inferredFromTracker++;
-        }
-      }
-    });
-  }
-  
-  // Infer category/type from linked habit
-  if (systemsData?.logs) {
-    systemsData.logs.forEach(log => {
-      if (!log.category && log.habitId) {
-        const habit = systemsData.habits?.find(h => h.id === log.habitId);
-        if (habit) {
-          log.category = 'Habit';
-          if (!log.type) {
-            log.type = habit.name || '';
-          }
-          fixes.inferredFromHabit++;
-        }
-      }
-    });
-  }
-  
-  // Fill missing timestamps
-  const now = new Date().toISOString();
-  
-  // Fill planner block timestamps
-  if (scheduleData?.blocks) {
-    scheduleData.blocks.forEach(block => {
-      if (!block.createdAt) {
-        block.createdAt = now;
-        fixes.filledTimestamps++;
-      }
-      if (!block.updatedAt) {
-        block.updatedAt = now;
-        fixes.filledTimestamps++;
-      }
-    });
-  }
-  
-  // Fill habit timestamps
-  if (systemsData?.habits) {
-    systemsData.habits.forEach(habit => {
-      if (!habit.createdAt) {
-        habit.createdAt = now;
-        fixes.filledTimestamps++;
-      }
-      if (!habit.updatedAt) {
-        habit.updatedAt = now;
-        fixes.filledTimestamps++;
-      }
-    });
-  }
-  
-  // Fill tracker timestamps
-  if (systemsData?.trackers) {
-    systemsData.trackers.forEach(tracker => {
-      if (!tracker.createdAt) {
-        tracker.createdAt = now;
-        fixes.filledTimestamps++;
-      }
-      if (!tracker.updatedAt) {
-        tracker.updatedAt = now;
-        fixes.filledTimestamps++;
-      }
-    });
-  }
-  
-  // Fill social timestamps
-  if (socialData?.friends) {
-    socialData.friends.forEach(friend => {
-      if (!friend.createdAt) {
-        friend.createdAt = now;
-        fixes.filledTimestamps++;
-      }
-      if (!friend.updatedAt) {
-        friend.updatedAt = now;
-        fixes.filledTimestamps++;
-      }
-    });
-  }
-  
-  if (socialData?.hangouts) {
-    socialData.hangouts.forEach(hangout => {
-      if (!hangout.createdAt) {
-        hangout.createdAt = now;
-        fixes.filledTimestamps++;
-      }
-      if (!hangout.updatedAt) {
-        hangout.updatedAt = now;
-        fixes.filledTimestamps++;
-      }
-    });
-  }
-  
-  saveAllAppState();
-  populateDataHealthCenter();
-  
-  const message = `Auto-fix complete:\n` +
-    `- Normalized ${fixes.normalizedEmptyStrings} empty strings to null\n` +
-    `- Inferred category/type from ${fixes.inferredFromTracker} tracker links\n` +
-    `- Inferred category/type from ${fixes.inferredFromHabit} habit links\n` +
-    `- Filled ${fixes.filledTimestamps} missing timestamps`;
-  
-  alert(message);
 }
 
 function findBrokenLinks() {
@@ -7561,325 +6030,6 @@ function downloadDataHealthBackup() {
   showRepairResult('Backup downloaded successfully');
 }
 
-function createAutoBackup(reason) {
-  const backup = {
-    backupDate: new Date().toISOString(),
-    backupReason: reason,
-    backupType: 'auto',
-    data: {
-      plannerData,
-      scheduleData,
-      systemsData,
-      socialData,
-      allZipData
-    }
-  };
-  
-  const backupKey = `flow-auto-backup-${Date.now()}`;
-  localStorage.setItem(backupKey, JSON.stringify(backup));
-  
-  const allBackups = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key && key.startsWith('flow-auto-backup-')) {
-      allBackups.push({ key, value: localStorage.getItem(key) });
-    }
-  }
-  allBackups.sort((a, b) => parseInt(a.key.split('-').pop()) - parseInt(b.key.split('-').pop()));
-  
-  while (allBackups.length > 5) {
-    const oldest = allBackups.shift();
-    localStorage.removeItem(oldest.key);
-  }
-  
-  return backup;
-}
-
-function getLatestAutoBackup() {
-  let latestBackup = null;
-  let latestTimestamp = 0;
-  
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key && key.startsWith('flow-auto-backup-')) {
-      const timestamp = parseInt(key.split('-').pop());
-      if (timestamp > latestTimestamp) {
-        latestTimestamp = timestamp;
-        latestBackup = JSON.parse(localStorage.getItem(key));
-      }
-    }
-  }
-  
-  return latestBackup;
-}
-
-function restoreFromBackup(backup) {
-  if (!backup || !backup.data) {
-    alert('Invalid backup data');
-    return;
-  }
-  
-  if (!confirm('Restore from backup? This will replace all current data. Current data will be lost.')) return;
-  
-  if (backup.data.plannerData) plannerData = backup.data.plannerData;
-  if (backup.data.scheduleData) scheduleData = backup.data.scheduleData;
-  if (backup.data.systemsData) systemsData = backup.data.systemsData;
-  if (backup.data.socialData) socialData = backup.data.socialData;
-  if (backup.data.allZipData) allZipData = backup.data.allZipData;
-  
-  saveAllAppState();
-  populateDataHealthCenter();
-  alert(`Restored from backup created on ${new Date(backup.backupDate).toLocaleString()}`);
-}
-
-let ignoredDuplicates = JSON.parse(localStorage.getItem('ignoredDuplicates') || '[]');
-
-function reviewDuplicates() {
-  const duplicateResult = findDuplicateRows();
-  if (duplicateResult.totalDuplicates === 0) {
-    alert('No potential duplicates found.');
-    return;
-  }
-  
-  const sectionLabels = {
-    planner: 'Planner Blocks',
-    habits: 'Habits',
-    habitLogs: 'Habit Logs',
-    trackers: 'Trackers',
-    trackerLogs: 'Tracker Logs',
-    objectives: 'Objectives',
-    metrics: 'Daily Metrics',
-    friends: 'Social Friends',
-    hangouts: 'Hangouts',
-    ideas: 'Ideas',
-    allZip: 'Unified Data Rows'
-  };
-  
-  const modal = document.createElement('div');
-  modal.className = 'modal';
-  modal.innerHTML = `
-    <div class="modal-content large-modal">
-      <div class="modal-header">
-        <h2>Review Potential Duplicates</h2>
-        <button class="close-modal" onclick="this.closest('.modal').remove()">×</button>
-      </div>
-      <div class="modal-body">
-        <p class="muted-text">Found ${duplicateResult.totalDuplicates} potential duplicate groups. Review and select which to remove.</p>
-        <div class="duplicate-table-container">
-          <table class="duplicate-table">
-            <thead>
-              <tr>
-                <th><input type="checkbox" id="selectAllDuplicates" onchange="toggleAllDuplicateCheckboxes(this)"></th>
-                <th>Section</th>
-                <th>Original (Kept)</th>
-                <th>Duplicate (Remove)</th>
-                <th>Match Reason</th>
-                <th>Confidence</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${duplicateResult.duplicates.map((dup, idx) => `
-                <tr class="duplicate-row" data-duplicate-idx="${idx}">
-                  <td><input type="checkbox" class="duplicate-checkbox" data-duplicate-idx="${idx}" ${dup.confidence !== 'high' ? 'disabled' : ''}></td>
-                  <td>${sectionLabels[dup.section] || dup.section}</td>
-                  <td>
-                    <div class="duplicate-cell">
-                      <strong>${dup.kept.title || dup.kept.name || dup.kept.activity || '(no title)'}</strong>
-                      <small class="muted-text">ID: ${dup.kept.id.substring(0, 8)}...</small><br>
-                      <small class="muted-text">Created: ${dup.kept.createdAt ? new Date(dup.kept.createdAt).toLocaleString() : 'N/A'}</small>
-                    </div>
-                  </td>
-                  <td>
-                    <div class="duplicate-cell">
-                      <strong>${dup.removed.title || dup.removed.name || dup.removed.activity || '(no title)'}</strong>
-                      <small class="muted-text">ID: ${dup.removed.id.substring(0, 8)}...</small><br>
-                      <small class="muted-text">Created: ${dup.removed.createdAt ? new Date(dup.removed.createdAt).toLocaleString() : 'N/A'}</small>
-                    </div>
-                  </td>
-                  <td><small>${dup.matchReason}</small></td>
-                  <td>
-                    <span class="confidence-badge ${dup.confidence === 'high' ? 'confidence-high' : 'confidence-medium'}">
-                      ${dup.confidence === 'high' ? 'High' : 'Medium'}
-                    </span>
-                  </td>
-                  <td>
-                    <button class="secondary-btn small" onclick="ignoreDuplicate('${dup.kept.id}', '${dup.removed.id}')">Ignore</button>
-                  </td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button onclick="removeSelectedDuplicates()">Remove Selected</button>
-        <button class="secondary-btn" onclick="this.closest('.modal').remove()">Keep All</button>
-        <button class="secondary-btn" onclick="exportDuplicateReport()">Export Report</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(modal);
-}
-
-function toggleAllDuplicateCheckboxes(checkbox) {
-  const checkboxes = document.querySelectorAll('.duplicate-checkbox:not(:disabled)');
-  checkboxes.forEach(cb => cb.checked = checkbox.checked);
-}
-
-function removeSelectedDuplicates() {
-  const checkboxes = document.querySelectorAll('.duplicate-checkbox:checked');
-  if (checkboxes.length === 0) {
-    alert('No duplicates selected for removal.');
-    return;
-  }
-  
-  if (!confirm(`Remove ${checkboxes.length} selected duplicates? A backup will be created before removal.`)) return;
-  
-  createAutoBackup('before-duplicate-removal');
-  
-  const duplicateResult = findDuplicateRows();
-  const idsToRemove = [];
-  
-  checkboxes.forEach(cb => {
-    const idx = parseInt(cb.dataset.duplicateIdx);
-    const dup = duplicateResult.duplicates[idx];
-    if (dup) {
-      idsToRemove.push(dup.removed.id);
-    }
-  });
-  
-  removeDuplicateIds(idsToRemove);
-  
-  document.querySelector('.modal').remove();
-  renderDuplicateHealth();
-  showToast(`${idsToRemove.length} duplicates removed — <a href="#" onclick="undoDuplicateRemoval()">Undo</a>`);
-}
-
-function removeExactDuplicates() {
-  const duplicateResult = findDuplicateRows();
-  const exactDuplicates = duplicateResult.duplicates.filter(dup => dup.confidence === 'high');
-  
-  if (exactDuplicates.length === 0) {
-    alert('No exact duplicates found.');
-    return;
-  }
-  
-  if (!confirm(`Remove ${exactDuplicates.length} exact duplicates? A backup will be created before removal.`)) return;
-  
-  createAutoBackup('before-exact-duplicate-removal');
-  
-  const idsToRemove = exactDuplicates.map(dup => dup.removed.id);
-  removeDuplicateIds(idsToRemove);
-  
-  renderDuplicateHealth();
-  showToast(`${idsToRemove.length} exact duplicates removed — <a href="#" onclick="undoDuplicateRemoval()">Undo</a>`);
-}
-
-function removeDuplicateIds(ids) {
-  if (!ids || ids.length === 0) return;
-  
-  const idSet = new Set(ids);
-  
-  scheduleData.blocks = scheduleData.blocks.filter(b => !idSet.has(b.id));
-  systemsData.habits = systemsData.habits.filter(h => !idSet.has(h.id));
-  systemsData.trackers = systemsData.trackers.filter(t => !idSet.has(t.id));
-  systemsData.objectives = systemsData.objectives.filter(o => !idSet.has(o.id));
-  systemsData.logs = systemsData.logs.filter(l => !idSet.has(l.id));
-  systemsData.metrics = systemsData.metrics.filter(m => !idSet.has(m.id));
-  socialData.friends = socialData.friends.filter(f => !idSet.has(f.id));
-  socialData.hangouts = socialData.hangouts.filter(h => !idSet.has(h.id));
-  socialData.ideas = socialData.ideas.filter(i => !idSet.has(i.id));
-  allZipData = allZipData.filter(r => !idSet.has(r.id));
-  
-  saveAllAppState();
-}
-
-function ignoreDuplicate(id1, id2) {
-  const pair = [id1, id2].sort().join('|');
-  ignoredDuplicates.push(pair);
-  localStorage.setItem('ignoredDuplicates', JSON.stringify(ignoredDuplicates));
-  
-  alert('Duplicate pair marked as ignored. This pair will not be flagged in future scans.');
-  reviewDuplicates();
-}
-
-function undoDuplicateRemoval() {
-  const backup = getLatestAutoBackup();
-  if (!backup) {
-    alert('No backup available for undo.');
-    return;
-  }
-  
-  restoreFromBackup(backup);
-}
-
-function showToast(message) {
-  let toast = document.getElementById('duplicate-toast');
-  if (!toast) {
-    toast = document.createElement('div');
-    toast.id = 'duplicate-toast';
-    toast.className = 'toast';
-    document.body.appendChild(toast);
-  }
-  
-  toast.innerHTML = message;
-  toast.style.display = 'block';
-  
-  setTimeout(() => {
-    toast.style.display = 'none';
-  }, 30000);
-}
-
-function restoreLastBackup() {
-  const backup = getLatestAutoBackup();
-  if (!backup) {
-    alert('No auto-backup found. Backups are created automatically before duplicate removal or repair operations.');
-    return;
-  }
-  
-  if (!confirm(`Restore from backup created on ${new Date(backup.backupDate).toLocaleString()}?\n\nThis will replace all current data. Current data will be lost.`)) return;
-  
-  restoreFromBackup(backup);
-}
-
-function restoreBackupFromFile() {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = '.json';
-  input.onchange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const backup = JSON.parse(event.target.result);
-        if (!backup.data) {
-          alert('Invalid backup file. Could not find data.');
-          return;
-        }
-        
-        if (!confirm('Restore from file? This will replace all current data. Current data will be lost.')) return;
-        
-        if (backup.data.plannerData) plannerData = backup.data.plannerData;
-        if (backup.data.scheduleData) scheduleData = backup.data.scheduleData;
-        if (backup.data.systemsData) systemsData = backup.data.systemsData;
-        if (backup.data.socialData) socialData = backup.data.socialData;
-        if (backup.data.allZipData) allZipData = backup.data.allZipData;
-        
-        saveAllAppState();
-        populateDataHealthCenter();
-        alert(`Restored from backup file successfully.`);
-      } catch (err) {
-        alert('Error reading backup file: ' + err.message);
-      }
-    };
-    reader.readAsText(file);
-  };
-  input.click();
-}
-
 function showRepairResult(message) {
   const resultDiv = document.getElementById('repairResult');
   if (resultDiv) {
@@ -7891,157 +6041,415 @@ function showRepairResult(message) {
   }
 }
 
-function previewDuplicates() {
-  const duplicateResult = findDuplicateRows();
-  if (duplicateResult.totalDuplicates === 0) {
-    alert("No duplicates found.");
-    return;
-  }
-  
-  const sectionLabels = {
-    planner: 'Planner Blocks',
-    habits: 'Habits',
-    habitLogs: 'Habit Logs',
-    trackers: 'Trackers',
-    trackerLogs: 'Tracker Logs',
-    objectives: 'Objectives',
-    metrics: 'Daily Metrics',
-    friends: 'Social Friends',
-    hangouts: 'Hangouts',
-    ideas: 'Ideas',
-    allZip: 'Unified Data Rows'
-  };
-  
-  const modal = document.createElement('div');
-  modal.className = 'modal';
-  modal.innerHTML = `
-    <div class="modal-content" style="max-width: 900px; max-height: 80vh; overflow-y: auto;">
-      <div class="modal-header">
-        <h2>Duplicate Rows Preview</h2>
-        <button onclick="this.closest('.modal').remove()" class="close-btn">&times;</button>
-      </div>
-      <div class="modal-body">
-        <div class="duplicate-summary">
-          <p><strong>Total duplicates:</strong> ${duplicateResult.totalDuplicates}</p>
-          <p><strong>Rows scanned:</strong> ${duplicateResult.rowsScanned.toLocaleString()}</p>
-        </div>
-        ${Object.entries(duplicateResult.bySection).filter(([_, c]) => c > 0).map(([section, count]) => `
-          <div class="duplicate-section">
-            <h4>${sectionLabels[section] || section}: ${count}</h4>
-            <div class="duplicate-list">
-              ${duplicateResult.duplicates.filter(d => d.section === section).slice(0, 5).map(d => `
-                <div class="duplicate-item">
-                  <div class="duplicate-header">
-                    <span class="badge badge-warning">Duplicate</span>
-                    <span class="duplicate-id">${d.removed.id}</span>
-                  </div>
-                  <div class="duplicate-details">
-                    <div class="duplicate-row">
-                      <span class="label">Kept:</span>
-                      <span class="value">${JSON.stringify(d.kept, null, 2)}</span>
-                    </div>
-                    <div class="duplicate-row">
-                      <span class="label">Remove:</span>
-                      <span class="value">${JSON.stringify(d.removed, null, 2)}</span>
-                    </div>
-                  </div>
-                </div>
-              `).join('')}
-              ${duplicateResult.duplicates.filter(d => d.section === section).length > 5 ? `<p class="muted-text">...and ${duplicateResult.duplicates.filter(d => d.section === section).length - 5} more</p>` : ''}
-            </div>
-          </div>
-        `).join('')}
-      </div>
-      <div class="modal-footer">
-        <button onclick="this.closest('.modal').remove()">Close</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(modal);
+function reviewDuplicates() {
+  const duplicates = findDuplicateRows();
+  alert(`Found ${duplicates.length} duplicate rows:\n\n` + 
+    duplicates.slice(0, 10).map(d => 
+      `${d.date} | ${d.category} | ${d.type} | ${d.amount} | ${d.startTime}-${d.endTime}`
+    ).join('\n') +
+    (duplicates.length > 10 ? '\n...and more' : ''));
 }
 
-function removeAllDuplicates() {
-  if (!confirm('Remove all duplicate rows? This will keep the oldest row (by createdAt) for each duplicate group. A backup will be created first.')) return;
+function removeExactDuplicates() {
+  if (!confirm('Remove exact duplicate rows? This will keep only the first occurrence of each duplicate.')) return;
   
-  // Create backup
-  downloadDataHealthBackup();
+  const seen = new Map();
+  const uniqueLogs = [];
+  const uniqueZip = [];
   
-  const duplicateResult = findDuplicateRows();
-  const toRemove = new Set(duplicateResult.duplicates.map(d => d.removed.id));
+  (systemsData.logs || []).forEach(log => {
+    const key = `${log.date}-${log.category}-${log.type}-${log.amount}-${log.startTime}-${log.endTime}`;
+    if (!seen.has(key)) {
+      seen.set(key, true);
+      uniqueLogs.push(log);
+    }
+  });
   
-  // Remove duplicates from each section
-  if (scheduleData?.blocks) {
-    scheduleData.blocks = scheduleData.blocks.filter(b => !toRemove.has(b.id));
-  }
+  systemsData.logs = uniqueLogs;
   
-  if (systemsData?.habits) {
-    systemsData.habits = systemsData.habits.filter(h => !toRemove.has(h.id));
-  }
+  const seenZip = new Map();
+  (allZipData || []).forEach(row => {
+    const key = `${row.date}-${row.category}-${row.type}-${row.amount}-${row.startTime}-${row.endTime}`;
+    if (!seenZip.has(key)) {
+      seenZip.set(key, true);
+      uniqueZip.push(row);
+    }
+  });
   
-  if (systemsData?.logs) {
-    systemsData.logs = systemsData.logs.filter(l => !toRemove.has(l.id));
-  }
-  
-  if (systemsData?.trackers) {
-    systemsData.trackers = systemsData.trackers.filter(t => !toRemove.has(t.id));
-  }
-  
-  if (systemsData?.objectives) {
-    systemsData.objectives = systemsData.objectives.filter(o => !toRemove.has(o.id));
-  }
-  
-  if (systemsData?.metrics) {
-    systemsData.metrics = systemsData.metrics.filter(m => !toRemove.has(m.id));
-  }
-  
-  if (socialData?.friends) {
-    socialData.friends = socialData.friends.filter(f => !toRemove.has(f.id));
-  }
-  
-  if (socialData?.hangouts) {
-    socialData.hangouts = socialData.hangouts.filter(h => !toRemove.has(h.id));
-  }
-  
-  if (socialData?.ideas) {
-    socialData.ideas = socialData.ideas.filter(i => !toRemove.has(i.id));
-  }
-  
-  if (allZipData) {
-    allZipData = allZipData.filter(r => !toRemove.has(r.id));
-  }
+  allZipData = uniqueZip;
   
   saveAllAppState();
+  showRepairResult(`Removed duplicates. Kept ${uniqueLogs.length + uniqueZip.length} unique rows`);
   populateDataHealthCenter();
-  alert(`Removed ${duplicateResult.totalDuplicates} duplicate rows. Kept ${duplicateResult.rowsScanned - duplicateResult.totalDuplicates} unique rows.`);
 }
 
-function exportDuplicateReport() {
-  const duplicateResult = findDuplicateRows();
+// Planner ↔ Logs Auto-Linking System
+let autoLinkSettings = {
+  autoLinkPlannerLogs: false,
+  autoCreatePlannerFromLogs: false,
+  autoCreateLogsFromPlanner: false,
+  keepLinkedItemsSynced: false
+};
+
+// Load auto-link settings from localStorage
+function loadAutoLinkSettings() {
+  const saved = localStorage.getItem('flow-planner-autolink-settings');
+  if (saved) {
+    autoLinkSettings = { ...autoLinkSettings, ...JSON.parse(saved) };
+  }
+}
+
+// Save auto-link settings to localStorage
+function saveAutoLinkSettings() {
+  localStorage.setItem('flow-planner-autolink-settings', JSON.stringify(autoLinkSettings));
+}
+
+// Generate stable ID for planner block
+function generateStablePlannerId(date, startTime, endTime, category) {
+  const parts = [
+    date || '',
+    startTime || '',
+    endTime || '',
+    category || ''
+  ].filter(Boolean);
+  return `planner-${parts.join('-').replace(/\s+/g, '-').toLowerCase()}`;
+}
+
+// Generate stable ID for activity log
+function generateStableLogId(date, startTime, endTime, category, amount) {
+  const parts = [
+    date || '',
+    startTime || '',
+    endTime || '',
+    category || '',
+    String(amount || '')
+  ].filter(Boolean);
+  return `log-${parts.join('-').replace(/\s+/g, '-').toLowerCase()}`;
+}
+
+// Parse time string to minutes from midnight
+function timeToMinutes(timeStr) {
+  if (!timeStr) return null;
+  const parts = timeStr.split(':');
+  if (parts.length < 2) return null;
+  const hours = parseInt(parts[0], 10);
+  const minutes = parseInt(parts[1], 10);
+  if (isNaN(hours) || isNaN(minutes)) return null;
+  return hours * 60 + minutes;
+}
+
+// Check if two time ranges overlap
+function timesOverlap(start1, end1, start2, end2) {
+  const s1 = timeToMinutes(start1);
+  const e1 = timeToMinutes(end1);
+  const s2 = timeToMinutes(start2);
+  const e2 = timeToMinutes(end2);
   
-  if (duplicateResult.totalDuplicates === 0) {
-    alert('No duplicates to export.');
-    return;
+  if (s1 === null || e1 === null || s2 === null || e2 === null) return false;
+  return s1 < e2 && e1 > s2;
+}
+
+// Calculate time difference in minutes
+function timeDifference(time1, time2) {
+  const t1 = timeToMinutes(time1);
+  const t2 = timeToMinutes(time2);
+  if (t1 === null || t2 === null) return Infinity;
+  return Math.abs(t1 - t2);
+}
+
+// Find matching planner block for a log
+function findMatchingPlannerBlock(log) {
+  if (!autoLinkSettings.autoLinkPlannerLogs) return null;
+  
+  const blocks = scheduleData?.blocks || [];
+  let bestMatch = null;
+  let bestScore = 0;
+  
+  blocks.forEach(block => {
+    let score = 0;
+    
+    // Same date (strong match)
+    if (block.date === log.date) {
+      score += 50;
+    }
+    
+    // Time overlap (strong match)
+    if (timesOverlap(block.startTime, block.endTime, log.startTime, log.endTime)) {
+      score += 30;
+    }
+    
+    // Similar start time (within 30 mins)
+    if (timeDifference(block.startTime, log.startTime) <= 30) {
+      score += 20;
+    }
+    
+    // Similar end time (within 30 mins)
+    if (timeDifference(block.endTime, log.endTime) <= 30) {
+      score += 20;
+    }
+    
+    // Same category
+    if (block.category === log.category) {
+      score += 15;
+    }
+    
+    // Same type
+    if (block.type === log.type) {
+      score += 15;
+    }
+    
+    // Same linked tracker
+    if (block.linkedTrackerId && block.linkedTrackerId === log.linkedTrackerId) {
+      score += 25;
+    }
+    
+    // Same linked habit
+    if (block.linkedHabitId && block.linkedHabitId === log.linkedHabitId) {
+      score += 25;
+    }
+    
+    // Fuzzy title match (optional)
+    if (block.title && log.name) {
+      const titleLower = block.title.toLowerCase();
+      const nameLower = log.name.toLowerCase();
+      if (titleLower.includes(nameLower) || nameLower.includes(titleLower)) {
+        score += 10;
+      }
+    }
+    
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = block;
+    }
+  });
+  
+  // Strong match: score >= 80
+  // Medium match: score >= 50
+  return bestScore >= 50 ? bestMatch : null;
+}
+
+// Find matching activity log for a planner block
+function findMatchingLog(block) {
+  if (!autoLinkSettings.autoLinkPlannerLogs) return null;
+  
+  const logs = systemsData?.logs || [];
+  let bestMatch = null;
+  let bestScore = 0;
+  
+  logs.forEach(log => {
+    let score = 0;
+    
+    // Same date (strong match)
+    if (log.date === block.date) {
+      score += 50;
+    }
+    
+    // Time overlap (strong match)
+    if (timesOverlap(log.startTime, log.endTime, block.startTime, block.endTime)) {
+      score += 30;
+    }
+    
+    // Similar start time (within 30 mins)
+    if (timeDifference(log.startTime, block.startTime) <= 30) {
+      score += 20;
+    }
+    
+    // Similar end time (within 30 mins)
+    if (timeDifference(log.endTime, block.endTime) <= 30) {
+      score += 20;
+    }
+    
+    // Same category
+    if (log.category === block.category) {
+      score += 15;
+    }
+    
+    // Same type
+    if (log.type === block.type) {
+      score += 15;
+    }
+    
+    // Same linked tracker
+    if (log.linkedTrackerId && log.linkedTrackerId === block.linkedTrackerId) {
+      score += 25;
+    }
+    
+    // Same linked habit
+    if (log.linkedHabitId && log.linkedHabitId === block.linkedHabitId) {
+      score += 25;
+    }
+    
+    // Fuzzy title match (optional)
+    if (block.title && log.name) {
+      const titleLower = block.title.toLowerCase();
+      const nameLower = log.name.toLowerCase();
+      if (titleLower.includes(nameLower) || nameLower.includes(titleLower)) {
+        score += 10;
+      }
+    }
+    
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = log;
+    }
+  });
+  
+  return bestScore >= 50 ? bestMatch : null;
+}
+
+// Auto-link log to planner block
+function autoLinkLogToPlanner(log) {
+  if (!autoLinkSettings.autoLinkPlannerLogs) return false;
+  
+  const matchingBlock = findMatchingPlannerBlock(log);
+  if (matchingBlock) {
+    log.linkedPlannerBlockId = matchingBlock.id;
+    matchingBlock.linkedActivityLogId = log.id;
+    return true;
   }
   
-  const csvHeader = 'section,rowAId,rowBId,confidence,matchReason,action\n';
-  const csvRows = duplicateResult.duplicates.map(d => {
-    const section = d.section;
-    const rowAId = d.kept.id;
-    const rowBId = d.removed.id;
-    const confidence = d.confidence;
-    const matchReason = d.matchReason.replace(/,/g, ';');
-    const action = d.confidence === 'high' ? 'exact duplicate' : 'possible duplicate';
-    return `"${section}","${rowAId}","${rowBId}","${confidence}","${matchReason}","${action}"`;
-  }).join('\n');
+  // Auto-create planner block if enabled
+  if (autoLinkSettings.autoCreatePlannerFromLogs && log.date && log.startTime && log.endTime) {
+    const newBlock = {
+      id: generateStablePlannerId(log.date, log.startTime, log.endTime, log.category),
+      title: log.name || log.type || 'Activity',
+      date: log.date,
+      entryDate: log.date,
+      startTime: log.startTime,
+      endTime: log.endTime,
+      startDateTime: `${log.date}T${log.startTime}:00`,
+      endDateTime: `${log.date}T${log.endTime}:00`,
+      durationMinutes: log.durationMinutes || 0,
+      category: log.category,
+      type: log.type,
+      notes: log.notes || '',
+      linkedActivityLogId: log.id,
+      linkedTrackerId: log.linkedTrackerId,
+      linkedHabitId: log.linkedHabitId
+    };
+    
+    scheduleData.blocks.push(newBlock);
+    log.linkedPlannerBlockId = newBlock.id;
+    return true;
+  }
   
-  const csv = csvHeader + csvRows;
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `duplicate-report-${new Date().toISOString().split('T')[0]}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  return false;
+}
+
+// Auto-link planner block to log
+function autoLinkBlockToLog(block) {
+  if (!autoLinkSettings.autoLinkPlannerLogs) return false;
+  
+  const matchingLog = findMatchingLog(block);
+  if (matchingLog) {
+    block.linkedActivityLogId = matchingLog.id;
+    matchingLog.linkedPlannerBlockId = block.id;
+    return true;
+  }
+  
+  // Auto-create log if enabled
+  if (autoLinkSettings.autoCreateLogsFromPlanner && block.date && block.startTime && block.endTime) {
+    const now = new Date().toISOString();
+    const newLog = {
+      id: generateStableLogId(block.date, block.startTime, block.endTime, block.category),
+      date: block.date,
+      category: block.category,
+      type: block.type,
+      name: block.title || block.type || 'Activity',
+      amount: '',
+      unit: '',
+      startTime: block.startTime,
+      endTime: block.endTime,
+      durationMinutes: block.durationMinutes || 0,
+      status: 'completed',
+      notes: block.notes || '',
+      linkedPlannerBlockId: block.id,
+      linkedTrackerId: block.linkedTrackerId,
+      linkedHabitId: block.linkedHabitId,
+      createdAt: now,
+      updatedAt: now
+    };
+    
+    systemsData.logs.push(newLog);
+    block.linkedActivityLogId = newLog.id;
+    return true;
+  }
+  
+  return false;
+}
+
+// Sync linked planner block when log updates
+function syncLinkedPlannerBlock(log) {
+  if (!autoLinkSettings.keepLinkedItemsSynced || !log.linkedPlannerBlockId) return;
+  
+  const block = scheduleData?.blocks?.find(b => b.id === log.linkedPlannerBlockId);
+  if (block) {
+    if (log.startTime) block.startTime = log.startTime;
+    if (log.endTime) block.endTime = log.endTime;
+    if (log.durationMinutes) block.durationMinutes = log.durationMinutes;
+    if (log.notes) block.notes = log.notes;
+    block.startDateTime = `${block.date}T${block.startTime}:00`;
+    block.endDateTime = `${block.date}T${block.endTime}:00`;
+  }
+}
+
+// Sync linked log when planner block updates
+function syncLinkedLog(block) {
+  if (!autoLinkSettings.keepLinkedItemsSynced || !block.linkedActivityLogId) return;
+  
+  const log = systemsData?.logs?.find(l => l.id === block.linkedActivityLogId);
+  if (log) {
+    if (block.startTime) log.startTime = block.startTime;
+    if (block.endTime) log.endTime = block.endTime;
+    if (block.durationMinutes) log.durationMinutes = block.durationMinutes;
+    if (block.notes) log.notes = block.notes;
+    log.updatedAt = new Date().toISOString();
+  }
+}
+
+// Remove broken link when log is deleted
+function removeLogFromPlannerLink(logId) {
+  const block = scheduleData?.blocks?.find(b => b.linkedActivityLogId === logId);
+  if (block) {
+    block.linkedActivityLogId = '';
+  }
+}
+
+// Remove broken link when planner block is deleted
+function removeBlockFromLogLink(blockId) {
+  const log = systemsData?.logs?.find(l => l.linkedPlannerBlockId === blockId);
+  if (log) {
+    log.linkedPlannerBlockId = '';
+  }
+}
+
+// Repair broken planner/log links
+function repairPlannerLogLinks() {
+  if (!confirm('Repair broken Planner ↔ Log links? This will remove orphaned links.')) return;
+  
+  let repaired = 0;
+  const blockIds = new Set((scheduleData?.blocks || []).map(b => b.id));
+  const logIds = new Set((systemsData?.logs || []).map(l => l.id));
+  
+  // Remove logs linked to missing blocks
+  (systemsData?.logs || []).forEach(log => {
+    if (log.linkedPlannerBlockId && !blockIds.has(log.linkedPlannerBlockId)) {
+      log.linkedPlannerBlockId = '';
+      repaired++;
+    }
+  });
+  
+  // Remove blocks linked to missing logs
+  (scheduleData?.blocks || []).forEach(block => {
+    if (block.linkedActivityLogId && !logIds.has(block.linkedActivityLogId)) {
+      block.linkedActivityLogId = '';
+      repaired++;
+    }
+  });
+  
+  saveAllAppState();
+  showRepairResult(`Repaired ${repaired} broken links`);
+  populateDataHealthCenter();
 }
 
 // Bind delegated event listeners for Manage Options Edit/Delete buttons
@@ -8222,8 +6630,16 @@ function addTimeBlock() {
 
   if (editingBlockIndex === null) {
     scheduleData.blocks.push(block);
+    // Auto-link to activity log if enabled
+    if (autoLinkSettings.autoLinkPlannerLogs && !block.linkedActivityLogId) {
+      autoLinkBlockToLog(block);
+    }
   } else {
     scheduleData.blocks[editingBlockIndex] = block;
+    // Sync linked log if enabled
+    if (autoLinkSettings.keepLinkedItemsSynced && block.linkedActivityLogId) {
+      syncLinkedLog(block);
+    }
     editingBlockIndex = null;
   }
   if (createdLinks.objectiveId) {
@@ -8535,6 +6951,7 @@ function renderVisualTimeBlock(block, index, isOverlapping, timelineStart, pxPer
         <div class="visual-block-meta">
           ${renderCategoryPill(block.category)}
           ${block.type && block.type !== "task" ? `<span class="block-tag block-tag-${block.type}">${block.type}</span>` : ""}
+          ${block.linkedActivityLogId ? `<span class="linked-log-badge" title="Linked to Activity Log">📊</span>` : ""}
           <span class="block-status ${block.completed ? "status-complete" : "status-open"}">${block.completed ? "Complete" : "Open"}</span>
           ${isOverlapping ? `<span class="overlap-pill">Overlap</span>` : ""}
         </div>
@@ -12166,60 +10583,6 @@ function renderTrackerFormFields() {
     <textarea id="trackerNotes" placeholder="Notes"></textarea>
     
     <details class="advanced-options">
-      <summary>Goal Settings</summary>
-      <label class="inline-check"><input type="checkbox" id="trackerGoalEnabled"> Enable goal for this tracker</label>
-      <div id="trackerGoalSettings" class="goal-settings hidden">
-        <label class="muted-text small">Goal Mode</label>
-        <select id="trackerGoalMode">
-          <option value="period">Period goal</option>
-          <option value="milestone">Milestone goal</option>
-          <option value="taper">Taper goal</option>
-        </select>
-        <label class="muted-text small">Reset Period</label>
-        <select id="trackerGoalResetPeriod">
-          <option value="none">None</option>
-          <option value="daily">Daily</option>
-          <option value="weekly">Weekly</option>
-          <option value="monthly">Monthly</option>
-          <option value="yearly">Yearly</option>
-          <option value="custom">Custom date range</option>
-        </select>
-        <div id="trackerGoalCustomDates" class="habit-meta-row hidden">
-          <input id="trackerGoalCustomStartDate" type="date" placeholder="Start date">
-          <input id="trackerGoalCustomEndDate" type="date" placeholder="End date">
-        </div>
-        <label class="muted-text small">Target Amount</label>
-        <input id="trackerGoalTargetAmount" type="number" step="any" placeholder="Target amount">
-        <label class="muted-text small">Target Unit</label>
-        <input id="trackerGoalTargetUnit" placeholder="Use tracker unit">
-        <label class="muted-text small">Goal Direction</label>
-        <select id="trackerGoalDirection">
-          <option value="at_least">At least target</option>
-          <option value="at_most">At most target</option>
-          <option value="equal">Equal to target</option>
-          <option value="increase">Increase toward target</option>
-          <option value="decrease">Decrease toward target</option>
-        </select>
-        <label class="muted-text small">Carryover</label>
-        <select id="trackerGoalCarryover">
-          <option value="none">Do not carry over</option>
-          <option value="remaining">Carry over remaining amount</option>
-          <option value="excess">Carry over excess amount</option>
-        </select>
-        <label class="muted-text small">Progress Calculation</label>
-        <select id="trackerGoalCalculation">
-          <option value="sum">Sum logs in current period</option>
-          <option value="average">Average logs in current period</option>
-          <option value="latest">Latest log value</option>
-          <option value="count">Count completed logs</option>
-        </select>
-        <p class="form-section-label">Milestone Targets</p>
-        <div id="trackerGoalMilestones"></div>
-        <button class="secondary-btn small" onclick="addTrackerGoalMilestone()">+ Add Milestone</button>
-      </div>
-    </details>
-    
-    <details class="advanced-options">
       <summary>Advanced Options & Links</summary>
       <p class="form-section-label">Behavior</p>
       <select id="trackerLogValueMode">
@@ -12265,250 +10628,6 @@ function renderTrackerFormFields() {
     <button id="trackerSaveButton" onclick="saveUnifiedTrackerFromModal()">${editingTrackerIndex === null ? "Save Tracker" : "Update Tracker"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
   `;
-}
-
-// Goal Settings Functions
-function toggleTrackerGoalSettings() {
-  const enabled = document.getElementById('trackerGoalEnabled')?.checked;
-  const settingsDiv = document.getElementById('trackerGoalSettings');
-  if (settingsDiv) {
-    settingsDiv.classList.toggle('hidden', !enabled);
-  }
-}
-
-function toggleTrackerGoalCustomDates() {
-  const resetPeriod = document.getElementById('trackerGoalResetPeriod')?.value;
-  const customDatesDiv = document.getElementById('trackerGoalCustomDates');
-  if (customDatesDiv) {
-    customDatesDiv.classList.toggle('hidden', resetPeriod !== 'custom');
-  }
-}
-
-function addTrackerGoalMilestone() {
-  const container = document.getElementById('trackerGoalMilestones');
-  if (!container) return;
-  
-  const milestoneIndex = container.children.length;
-  const milestoneHtml = `
-    <div class="milestone-row" id="trackerGoalMilestone_${milestoneIndex}">
-      <div class="habit-meta-row">
-        <input type="text" placeholder="Milestone name" id="trackerGoalMilestoneName_${milestoneIndex}">
-        <input type="number" step="any" placeholder="Target amount" id="trackerGoalMilestoneAmount_${milestoneIndex}">
-      </div>
-      <div class="habit-meta-row">
-        <input type="date" placeholder="Target date" id="trackerGoalMilestoneDate_${milestoneIndex}">
-        <button class="secondary-btn small" onclick="removeTrackerGoalMilestone(${milestoneIndex})">Remove</button>
-      </div>
-      <textarea placeholder="Notes" id="trackerGoalMilestoneNotes_${milestoneIndex}"></textarea>
-    </div>
-  `;
-  container.insertAdjacentHTML('beforeend', milestoneHtml);
-}
-
-function removeTrackerGoalMilestone(index) {
-  const milestoneRow = document.getElementById(`trackerGoalMilestone_${index}`);
-  if (milestoneRow) {
-    milestoneRow.remove();
-  }
-}
-
-function getTrackerGoalMilestonesFromForm() {
-  const container = document.getElementById('trackerGoalMilestones');
-  if (!container) return [];
-  
-  const milestones = [];
-  const rows = container.querySelectorAll('.milestone-row');
-  rows.forEach((row, index) => {
-    const name = document.getElementById(`trackerGoalMilestoneName_${index}`)?.value.trim();
-    const amount = document.getElementById(`trackerGoalMilestoneAmount_${index}`)?.value;
-    const date = document.getElementById(`trackerGoalMilestoneDate_${index}`)?.value;
-    const notes = document.getElementById(`trackerGoalMilestoneNotes_${index}`)?.value.trim();
-    
-    if (name || amount || date) {
-      milestones.push({
-        id: `milestone-${Date.now()}-${index}`,
-        name: name || '',
-        targetAmount: parseFloat(amount) || 0,
-        targetDate: date || '',
-        notes: notes || '',
-        completed: false
-      });
-    }
-  });
-  
-  return milestones;
-}
-
-function renderTrackerGoalMilestones(milestones) {
-  const container = document.getElementById('trackerGoalMilestones');
-  if (!container) return;
-  
-  container.innerHTML = '';
-  milestones.forEach((milestone, index) => {
-    const milestoneHtml = `
-      <div class="milestone-row" id="trackerGoalMilestone_${index}">
-        <div class="habit-meta-row">
-          <input type="text" placeholder="Milestone name" id="trackerGoalMilestoneName_${index}" value="${escapeHTML(milestone.name || '')}">
-          <input type="number" step="any" placeholder="Target amount" id="trackerGoalMilestoneAmount_${index}" value="${milestone.targetAmount || ''}">
-        </div>
-        <div class="habit-meta-row">
-          <input type="date" placeholder="Target date" id="trackerGoalMilestoneDate_${index}" value="${milestone.targetDate || ''}">
-          <button class="secondary-btn small" onclick="removeTrackerGoalMilestone(${index})">Remove</button>
-        </div>
-        <textarea placeholder="Notes" id="trackerGoalMilestoneNotes_${index}">${escapeHTML(milestone.notes || '')}</textarea>
-      </div>
-    `;
-    container.insertAdjacentHTML('beforeend', milestoneHtml);
-  });
-}
-
-// Progress Helper Functions
-function getTrackerLogs(trackerId) {
-  return (systemsData.logs || []).filter(log => log.linkedTrackerId === trackerId);
-}
-
-function getCurrentPeriodRange(resetPeriod, customStartDate = '', customEndDate = '') {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  
-  let startDate, endDate;
-  
-  switch (resetPeriod) {
-    case 'daily':
-      startDate = new Date(today);
-      endDate = new Date(today);
-      endDate.setHours(23, 59, 59, 999);
-      break;
-    case 'weekly':
-      const dayOfWeek = today.getDay();
-      const weekStartSunday = 0; // Sunday
-      const diff = dayOfWeek - weekStartSunday;
-      startDate = new Date(today);
-      startDate.setDate(today.getDate() - diff);
-      startDate.setHours(0, 0, 0, 0);
-      endDate = new Date(startDate);
-      endDate.setDate(startDate.getDate() + 6);
-      endDate.setHours(23, 59, 59, 999);
-      break;
-    case 'monthly':
-      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-      endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-      endDate.setHours(23, 59, 59, 999);
-      break;
-    case 'yearly':
-      startDate = new Date(now.getFullYear(), 0, 1);
-      endDate = new Date(now.getFullYear(), 11, 31);
-      endDate.setHours(23, 59, 59, 999);
-      break;
-    case 'custom':
-      startDate = customStartDate ? new Date(customStartDate) : new Date(today);
-      endDate = customEndDate ? new Date(customEndDate) : new Date(today);
-      if (customEndDate) endDate.setHours(23, 59, 59, 999);
-      break;
-    default:
-      startDate = new Date(0); // Beginning of time
-      endDate = new Date(); // Now
-  }
-  
-  return { startDate, endDate };
-}
-
-function getTrackerGoalProgress(tracker) {
-  if (!tracker.goal?.enabled) return null;
-  
-  const logs = getTrackerLogs(tracker.id);
-  const { startDate, endDate } = getCurrentPeriodRange(tracker.goal.resetPeriod, tracker.goal.customStartDate, tracker.goal.customEndDate);
-  
-  const periodLogs = logs.filter(log => {
-    if (!log.date) return false;
-    const logDate = new Date(log.date);
-    return logDate >= startDate && logDate <= endDate;
-  });
-  
-  let progress = 0;
-  const calculation = tracker.goal.calculation || 'sum';
-  
-  switch (calculation) {
-    case 'sum':
-      progress = periodLogs.reduce((sum, log) => sum + (parseFloat(log.amount) || 0), 0);
-      break;
-    case 'average':
-      if (periodLogs.length > 0) {
-        progress = periodLogs.reduce((sum, log) => sum + (parseFloat(log.amount) || 0), 0) / periodLogs.length;
-      }
-      break;
-    case 'latest':
-      if (periodLogs.length > 0) {
-        const sortedLogs = [...periodLogs].sort((a, b) => new Date(b.date) - new Date(a.date));
-        progress = parseFloat(sortedLogs[0].amount) || 0;
-      }
-      break;
-    case 'count':
-      progress = periodLogs.length;
-      break;
-  }
-  
-  return {
-    progress,
-    totalLogs: periodLogs.length,
-    periodStart: startDate,
-    periodEnd: endDate
-  };
-}
-
-function getNextMilestone(tracker) {
-  if (!tracker.goal?.enabled || !tracker.goal.milestones || tracker.goal.milestones.length === 0) {
-    return null;
-  }
-  
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  
-  const sortedMilestones = [...tracker.goal.milestones]
-    .filter(m => !m.completed)
-    .sort((a, b) => new Date(a.targetDate) - new Date(b.targetDate));
-  
-  for (const milestone of sortedMilestones) {
-    if (!milestone.targetDate) continue;
-    const targetDate = new Date(milestone.targetDate);
-    if (targetDate >= today) {
-      return milestone;
-    }
-  }
-  
-  return sortedMilestones[0] || null;
-}
-
-function calculateRemainingAmount(tracker, progress) {
-  if (!tracker.goal?.enabled) return null;
-  
-  const target = tracker.goal.targetAmount || 0;
-  const direction = tracker.goal.direction || 'at_least';
-  
-  switch (direction) {
-    case 'at_least':
-      return Math.max(0, target - progress);
-    case 'at_most':
-      return Math.max(0, target - progress);
-    case 'equal':
-      return target - progress;
-    case 'increase':
-      return target - progress;
-    case 'decrease':
-      return progress - target;
-    default:
-      return target - progress;
-  }
-}
-
-function getDaysLeftInPeriod(resetPeriod, customEndDate = '') {
-  const { endDate } = getCurrentPeriodRange(resetPeriod, '', customEndDate);
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  
-  const diffTime = endDate - today;
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  return Math.max(0, diffDays);
 }
 
 function renderTrackerManualLogFormFields() {
@@ -12821,226 +10940,31 @@ function deleteObjective(index) {
   renderHome();
 }
 
-function getFilteredObjectives() {
-  const search = objectiveFilters.search.toLowerCase().trim();
-  const status = objectiveFilters.status;
-  const priority = objectiveFilters.priority;
-  const category = objectiveFilters.category;
-  const type = objectiveFilters.type;
-
-  return systemsData.objectives.filter(objective => {
-    // Search filter
-    if (search) {
-      const searchable = [
-        objective.title || "",
-        objective.notes || "",
-        objective.category || "",
-        objective.type || "",
-        getLinkedItemName(systemsData.habits, objective.linkedHabitId) || "",
-        getLinkedItemName(systemsData.trackers, objective.linkedTrackerId) || "",
-        getLinkedItemName(systemsData.goals, objective.linkedGoalId) || ""
-      ].join(" ").toLowerCase();
-      if (!searchable.includes(search)) return false;
-    }
-
-    // Status filter
-    if (status !== "all") {
-      const objectiveStatus = objective.status || "Not started";
-      const statusMap = {
-        "notStarted": "Not started",
-        "inProgress": "In progress",
-        "done": "Done",
-        "deferred": "Deferred"
-      };
-      if (statusMap[status] !== objectiveStatus) return false;
-    }
-
-    // Priority filter
-    if (priority !== "all" && objective.priority !== priority) return false;
-
-    // Category filter
-    if (category !== "all" && objective.category !== category) return false;
-
-    // Type filter
-    if (type !== "all" && objective.type !== type) return false;
-
-    return true;
-  });
-}
-
-function sortObjectives(objectives) {
-  const sort = objectiveFilters.sort;
-  const sorted = [...objectives];
-
-  sorted.sort((a, b) => {
-    // Primary sort: due date
-    if (sort === "dueDate" || sort === "dueDate") {
-      const aRank = getObjectiveRank(a);
-      const bRank = getObjectiveRank(b);
-      if (aRank !== bRank) return aRank - bRank;
-    }
-
-    // Sort by priority
-    if (sort === "priority" || sort === "dueDate") {
-      const priorityOrder = { "High": 0, "Medium": 1, "Low": 2 };
-      const aPriority = priorityOrder[a.priority] ?? 1;
-      const bPriority = priorityOrder[b.priority] ?? 1;
-      if (aPriority !== bPriority) return aPriority - bPriority;
-    }
-
-    // Sort by status
-    if (sort === "status") {
-      const statusOrder = { "Not started": 0, "In progress": 1, "Deferred": 2, "Done": 3 };
-      const aStatus = statusOrder[a.status] ?? 99;
-      const bStatus = statusOrder[b.status] ?? 99;
-      if (aStatus !== bStatus) return aStatus - bStatus;
-    }
-
-    // Sort by name
-    if (sort === "name") {
-      return (a.title || "").localeCompare(b.title || "");
-    }
-
-    // Sort by newest/oldest (based on creation if available, otherwise due date)
-    if (sort === "newest") {
-      const aDate = a.createdAt || a.dueDate || "";
-      const bDate = b.createdAt || b.dueDate || "";
-      return bDate.localeCompare(aDate);
-    }
-
-    if (sort === "oldest") {
-      const aDate = a.createdAt || a.dueDate || "";
-      const bDate = b.createdAt || b.dueDate || "";
-      return aDate.localeCompare(bDate);
-    }
-
-    return 0;
-  });
-
-  return sorted;
-}
-
-function renderObjectiveFilters() {
-  const categories = [...new Set(systemsData.objectives.map(o => o.category).filter(Boolean))];
-  const types = [...new Set(systemsData.objectives.map(o => o.type).filter(Boolean))];
-
-  return `
-    <div class="objective-filters">
-      <div class="filter-row">
-        <input 
-          type="text" 
-          id="objectiveSearch" 
-          class="objective-search-input" 
-          placeholder="Search objectives..."
-          value="${escapeHTML(objectiveFilters.search)}"
-          oninput="updateObjectiveFilter('search', this.value)"
-        />
-      </div>
-      <div class="filter-row">
-        <select id="objectiveStatusFilter" onchange="updateObjectiveFilter('status', this.value)">
-          <option value="all" ${objectiveFilters.status === "all" ? "selected" : ""}>All statuses</option>
-          <option value="notStarted" ${objectiveFilters.status === "notStarted" ? "selected" : ""}>Not Started</option>
-          <option value="inProgress" ${objectiveFilters.status === "inProgress" ? "selected" : ""}>In Progress</option>
-          <option value="done" ${objectiveFilters.status === "done" ? "selected" : ""}>Done</option>
-          <option value="deferred" ${objectiveFilters.status === "deferred" ? "selected" : ""}>Deferred</option>
-        </select>
-        <select id="objectivePriorityFilter" onchange="updateObjectiveFilter('priority', this.value)">
-          <option value="all" ${objectiveFilters.priority === "all" ? "selected" : ""}>All priorities</option>
-          <option value="High" ${objectiveFilters.priority === "High" ? "selected" : ""}>High</option>
-          <option value="Medium" ${objectiveFilters.priority === "Medium" ? "selected" : ""}>Medium</option>
-          <option value="Low" ${objectiveFilters.priority === "Low" ? "selected" : ""}>Low</option>
-        </select>
-      </div>
-      <div class="filter-row">
-        <select id="objectiveCategoryFilter" onchange="updateObjectiveFilter('category', this.value)">
-          <option value="all" ${objectiveFilters.category === "all" ? "selected" : ""}>All categories</option>
-          ${categories.map(cat => `<option value="${escapeHTML(cat)}" ${objectiveFilters.category === cat ? "selected" : ""}>${escapeHTML(cat)}</option>`).join("")}
-        </select>
-        <select id="objectiveTypeFilter" onchange="updateObjectiveFilter('type', this.value)">
-          <option value="all" ${objectiveFilters.type === "all" ? "selected" : ""}>All types</option>
-          <option value="Task" ${objectiveFilters.type === "Task" ? "selected" : ""}>Task</option>
-          <option value="Objective" ${objectiveFilters.type === "Objective" ? "selected" : ""}>Objective</option>
-          <option value="Goal" ${objectiveFilters.type === "Goal" ? "selected" : ""}>Goal</option>
-          <option value="Custom" ${objectiveFilters.type === "Custom" ? "selected" : ""}>Custom</option>
-          ${types.filter(t => !["Task", "Objective", "Goal", "Custom"].includes(t)).map(t => `<option value="${escapeHTML(t)}" ${objectiveFilters.type === t ? "selected" : ""}>${escapeHTML(t)}</option>`).join("")}
-        </select>
-      </div>
-      <div class="filter-row">
-        <select id="objectiveSortFilter" onchange="updateObjectiveFilter('sort', this.value)">
-          <option value="dueDate" ${objectiveFilters.sort === "dueDate" ? "selected" : ""}>Sort by due date</option>
-          <option value="priority" ${objectiveFilters.sort === "priority" ? "selected" : ""}>Sort by priority</option>
-          <option value="status" ${objectiveFilters.sort === "status" ? "selected" : ""}>Sort by status</option>
-          <option value="name" ${objectiveFilters.sort === "name" ? "selected" : ""}>Sort by name</option>
-          <option value="newest" ${objectiveFilters.sort === "newest" ? "selected" : ""}>Sort by newest</option>
-          <option value="oldest" ${objectiveFilters.sort === "oldest" ? "selected" : ""}>Sort by oldest</option>
-        </select>
-        <label class="compact-toggle">
-          <input 
-            type="checkbox" 
-            id="objectiveCompactToggle"
-            ${objectiveFilters.compact ? "checked" : ""}
-            onchange="updateObjectiveFilter('compact', this.checked)"
-          />
-          Compact view
-        </label>
-      </div>
-    </div>
-  `;
-}
-
-function updateObjectiveFilter(key, value) {
-  objectiveFilters[key] = value;
-  renderSystemsObjectives();
-}
-
 function renderSystemsObjectives() {
   const box = document.getElementById("systemsObjectives");
   if (!box) return;
-  
-  const filtered = getFilteredObjectives();
-  const sorted = sortObjectives(filtered);
-  
-  box.innerHTML = `
-    ${renderObjectiveFilters()}
-    ${sorted.length
-      ? `<div class="systems-card-grid ${objectiveFilters.compact ? 'compact-view' : ''}">${sorted.map(objective => {
-        const index = systemsData.objectives.findIndex(item => item.id === objective.id);
-        const linkedCount = [
-          objective.linkedPlannerBlockId,
-          objective.linkedRoutineId,
-          objective.linkedHabitId,
-          objective.linkedTrackerId,
-          objective.linkedGoalId
-        ].filter(Boolean).length;
-        
-        return `
-          <div class="system-item objective-system-card">
-            ${renderObjectiveCard(objective)}
-            <div class="objective-meta">
-              <span class="objective-status">${escapeHTML(objective.status || "Not started")}</span>
-              <span class="objective-priority priority-${(objective.priority || "Medium").toLowerCase()}">${escapeHTML(objective.priority || "Medium")}</span>
-              ${objective.category ? `<span class="objective-category">${escapeHTML(objective.category)}</span>` : ""}
-              ${objective.type ? `<span class="objective-type">${escapeHTML(objective.type)}</span>` : ""}
-              ${objective.dueDate ? `<span class="objective-due-date">${formatDate(objective.dueDate)}</span>` : ""}
-              ${linkedCount > 0 ? `<span class="objective-linked-count">${linkedCount} linked</span>` : ""}
-            </div>
-            ${renderConnectionBadges({
-              plannerBlockId: objective.linkedPlannerBlockId,
-              routineId: objective.linkedRoutineId,
-              habitId: objective.linkedHabitId,
-              trackerId: objective.linkedTrackerId,
-              goalId: objective.linkedGoalId
-            })}
-            <div class="button-row ${objectiveFilters.compact ? 'compact-buttons' : ''}">
-              <button class="secondary-btn" onclick="editObjective(${index})">Edit Links</button>
-              <button class="danger-btn" onclick="deleteObjective(${index})">Delete</button>
-            </div>
+  const list = [...systemsData.objectives].sort((a, b) => getObjectiveRank(a) - getObjectiveRank(b));
+  box.innerHTML = list.length
+    ? `<div class="systems-card-grid">${list.map(objective => {
+      const index = systemsData.objectives.findIndex(item => item.id === objective.id);
+      return `
+        <div class="system-item objective-system-card">
+          ${renderObjectiveCard(objective)}
+          ${renderConnectionBadges({
+            plannerBlockId: objective.linkedPlannerBlockId,
+            routineId: objective.linkedRoutineId,
+            habitId: objective.linkedHabitId,
+            trackerId: objective.linkedTrackerId,
+            goalId: objective.linkedGoalId
+          })}
+          <div class="button-row">
+            <button class="secondary-btn" onclick="editObjective(${index})">Edit Links</button>
+            <button class="danger-btn" onclick="deleteObjective(${index})">Delete</button>
           </div>
-        `;
-      }).join("")}</div>`
-      : `<div class="empty-state"><p>No objectives match your filters.</p><button onclick="openSystemsForm('objective')">Add first objective</button></div>`
-    }
-  `;
+        </div>
+      `;
+    }).join("")}</div>`
+    : `<div class="empty-state"><p>No objectives yet.</p><button onclick="openSystemsForm('objective')">Add first objective</button></div>`;
 }
 
 function openSystemsForm(kind, index = null) {
@@ -13701,9 +11625,17 @@ function saveSystemLog() {
     const id = systemsData.logs[editingLogIndex].id;
     systemsData.logs[editingLogIndex] = { ...systemsData.logs[editingLogIndex], ...payload, id };
     log = systemsData.logs[editingLogIndex];
+    // Sync linked planner block if enabled
+    if (autoLinkSettings.keepLinkedItemsSynced && log.linkedPlannerBlockId) {
+      syncLinkedPlannerBlock(log);
+    }
   } else {
     log = { id: createId("log"), ...payload };
     systemsData.logs.push(log);
+    // Auto-link to planner block if enabled
+    if (autoLinkSettings.autoLinkPlannerLogs && !log.linkedPlannerBlockId) {
+      autoLinkLogToPlanner(log);
+    }
   }
 
   // Log to All Zip Data when manual metric is logged
@@ -15606,6 +13538,7 @@ function renderLogsList() {
             <div class="log-card-left">
               <div class="log-card-header">
                 <strong>${escapeHTML(log.title)}</strong>
+                ${log.linkedPlannerBlockId ? `<span class="linked-planner-badge" title="Linked to Planner Block">📅</span>` : ''}
                 ${trackerName ? `<span class="log-tracker-pill">${escapeHTML(trackerName)}</span>` : ''}
               </div>
               <div class="log-card-meta">
@@ -17153,44 +15086,6 @@ function renderSingleTrackerCard(tracker) {
   // Check if this is a Coke tracker for insights button
   const isCokeTracker = tracker.name.toLowerCase() === 'coke' && tracker.unit === 'g';
 
-  // Goal progress display
-  let goalProgressHtml = '';
-  if (tracker.goal?.enabled) {
-    const goalProgress = getTrackerGoalProgress(tracker);
-    const nextMilestone = getNextMilestone(tracker);
-    const remaining = calculateRemainingAmount(tracker, goalProgress?.progress || 0);
-    const daysLeft = getDaysLeftInPeriod(tracker.goal.resetPeriod, tracker.goal.customEndDate);
-    const targetUnit = escapeHTML(tracker.goal.targetUnit || unit);
-    
-    const goalPct = goalProgress && tracker.goal.targetAmount > 0 
-      ? Math.min(100, (goalProgress.progress / tracker.goal.targetAmount) * 100) 
-      : 0;
-    
-    const isGoalOverLimit = tracker.goal.direction === 'at_most' || tracker.goal.direction === 'decrease';
-    const goalIsOver = isGoalOverLimit && goalProgress?.progress > tracker.goal.targetAmount;
-    
-    goalProgressHtml = `
-      <div class="tracker-goal-section">
-        <div class="tracker-goal-header">
-          <strong>${tracker.goal.mode === 'taper' ? 'Taper' : tracker.goal.mode === 'milestone' ? 'Milestone' : 'Period'} ${tracker.goal.resetPeriod}</strong>
-          <span class="tracker-goal-badge">${goalProgress?.progress || 0} / ${tracker.goal.targetAmount} ${targetUnit}</span>
-        </div>
-        <div class="tracker-progress-bar ${goalIsOver ? 'tracker-progress-over-limit' : ''}">
-          <div class="tracker-progress-fill ${goalIsOver ? 'tracker-progress-fill-over-limit' : ''}" style="width:${goalPct}%"></div>
-        </div>
-        <div class="tracker-goal-details">
-          <span class="tracker-goal-remaining">${remaining !== null ? `Remaining: ${remaining >= 0 ? remaining : 0} ${targetUnit}` : ''}</span>
-          <span class="tracker-goal-days">Resets in ${daysLeft} days</span>
-        </div>
-        ${nextMilestone ? `
-          <div class="tracker-next-milestone">
-            Next: ${escapeHTML(nextMilestone.name)} (${nextMilestone.targetAmount} ${targetUnit} by ${escapeHTML(nextMilestone.targetDate)})
-          </div>
-        ` : ''}
-      </div>
-    `;
-  }
-
   return `
     <div class="system-item tracker-card ${isOverLimit ? 'tracker-over-limit' : ''}">
       <div class="tracker-card-header">
@@ -17199,7 +15094,6 @@ function renderSingleTrackerCard(tracker) {
           <div class="habit-pill-row">
             <span class="metric-type-pill">${escapeHTML(typeLabel)}</span>
             ${tracker.resetType && tracker.resetType !== "No reset" && typeLabel !== "Monthly Limit" && typeLabel !== "Limit" ? `<span class="metric-type-pill">${escapeHTML(tracker.resetType)}</span>` : ""}
-            ${tracker.goal?.enabled ? `<span class="metric-type-pill goal-badge">Goal</span>` : ""}
             ${habit ? `<span class="metric-type-pill">Habit: ${escapeHTML(habit.name)}</span>` : ""}
             ${streak ? `<span class="streak-badge">${streak} streak</span>` : ""}
           </div>
@@ -17213,7 +15107,6 @@ function renderSingleTrackerCard(tracker) {
         routineId: tracker.linkedRoutineId,
         objectiveId: tracker.linkedObjectiveId
       })}
-      ${goalProgressHtml}
       ${hasTarget ? (() => {
         return `
         <div class="tracker-progress-bar ${isOverLimit ? 'tracker-progress-over-limit' : ''}">
@@ -17311,22 +15204,6 @@ function saveUnifiedTrackerFromModal() {
   const type = document.getElementById("trackerType").value.trim();
   const unit = document.getElementById("trackerUnit").value.trim();
   const autoLogUnit = document.getElementById("trackerAutoLogUnit")?.value.trim() ?? "";
-  
-  const goalEnabled = document.getElementById("trackerGoalEnabled")?.checked;
-  const goal = goalEnabled ? {
-    enabled: true,
-    mode: document.getElementById("trackerGoalMode")?.value || "period",
-    resetPeriod: document.getElementById("trackerGoalResetPeriod")?.value || "none",
-    customStartDate: document.getElementById("trackerGoalCustomStartDate")?.value || "",
-    customEndDate: document.getElementById("trackerGoalCustomEndDate")?.value || "",
-    targetAmount: parseFloat(document.getElementById("trackerGoalTargetAmount")?.value) || 0,
-    targetUnit: document.getElementById("trackerGoalTargetUnit")?.value.trim() || unit,
-    direction: document.getElementById("trackerGoalDirection")?.value || "at_least",
-    carryover: document.getElementById("trackerGoalCarryover")?.value || "none",
-    calculation: document.getElementById("trackerGoalCalculation")?.value || "sum",
-    milestones: getTrackerGoalMilestonesFromForm()
-  } : { enabled: false };
-  
   const trackerRaw = {
     id: editingTrackerIndex === null ? createId("tracker") : systemsData.trackers[editingTrackerIndex].id,
     name,
@@ -17352,8 +15229,7 @@ function saveUnifiedTrackerFromModal() {
     autoLogAmount: document.getElementById("trackerAutoLogAmount")?.value ?? "1",
     autoLogUnit,
     preventDuplicateAutoLogs: document.getElementById("trackerPreventDupAuto")?.checked !== false,
-    notes: document.getElementById("trackerNotes").value.trim(),
-    goal
+    notes: document.getElementById("trackerNotes").value.trim()
   };
   const tracker = normalizeUnifiedTrackerRecord(trackerRaw);
   rememberTrackerCategory(tracker.category);
@@ -17406,34 +15282,6 @@ function fillEditingTrackerForm() {
   if (el("trackerPreventDupAuto")) el("trackerPreventDupAuto").checked = t.preventDuplicateAutoLogs !== false;
   if (el("trackerMilestones")) el("trackerMilestones").value = (t.milestones || []).map(item => item.title || "").join("\n");
   el("trackerNotes").value = t.notes || "";
-  
-  // Load goal settings
-  if (el("trackerGoalEnabled")) {
-    el("trackerGoalEnabled").checked = Boolean(t.goal?.enabled);
-    toggleTrackerGoalSettings();
-  }
-  if (t.goal?.enabled) {
-    el("trackerGoalMode").value = t.goal.mode || "period";
-    el("trackerGoalResetPeriod").value = t.goal.resetPeriod || "none";
-    toggleTrackerGoalCustomDates();
-    el("trackerGoalCustomStartDate").value = t.goal.customStartDate || "";
-    el("trackerGoalCustomEndDate").value = t.goal.customEndDate || "";
-    el("trackerGoalTargetAmount").value = t.goal.targetAmount || "";
-    el("trackerGoalTargetUnit").value = t.goal.targetUnit || t.unit || "";
-    el("trackerGoalDirection").value = t.goal.direction || "at_least";
-    el("trackerGoalCarryover").value = t.goal.carryover || "none";
-    el("trackerGoalCalculation").value = t.goal.calculation || "sum";
-    renderTrackerGoalMilestones(t.goal.milestones || []);
-  }
-  
-  // Add event listeners for goal settings
-  if (el("trackerGoalEnabled")) {
-    el("trackerGoalEnabled").addEventListener('change', toggleTrackerGoalSettings);
-  }
-  if (el("trackerGoalResetPeriod")) {
-    el("trackerGoalResetPeriod").addEventListener('change', toggleTrackerGoalCustomDates);
-  }
-  
   const btn = el("trackerSaveButton");
   if (btn) btn.textContent = "Update Tracker";
 }
@@ -17801,9 +15649,8 @@ function renderMonthlyCalendar() {
 
 function renderSocial() {
   fillEditingSocialForms();
-  renderFriendDropdown();
-  renderSelectedHangoutFriendChips();
-  updateSelectedFriendCount();
+  populateHangoutPeopleSelect();
+  renderSelectedHangoutPeopleChips();
   populateIdeaFriendSelect();
   populateIdeaFriendFilter();
   renderSelectedIdeaFriends();
@@ -17816,18 +15663,6 @@ function renderSocial() {
   renderIdeas();
   renderFriends();
   renderHangouts();
-  
-  // Add click-outside listener to close friend dropdown
-  document.addEventListener('click', handleDocumentClick);
-}
-
-function handleDocumentClick(event) {
-  const multiselect = document.querySelector('.friend-multiselect');
-  if (!multiselect) return;
-  
-  if (!multiselect.contains(event.target)) {
-    closeFriendDropdown();
-  }
 }
 
 function toggleFriendForm() {
@@ -17838,9 +15673,6 @@ function toggleFriendForm() {
 
 function toggleHangoutForm() {
   hangoutFormOpen = !hangoutFormOpen;
-  if (hangoutFormOpen && editingHangoutIndex === null) {
-    selectedHangoutFriendIds = [];
-  }
   main.innerHTML = getPageHTML("Social");
   renderSocial();
 }
@@ -17853,11 +15685,15 @@ function saveFriend() {
     name,
     birthday: document.getElementById("friendBirthday").value,
     phoneHandle: document.getElementById("friendPhoneHandle").value.trim(),
+    favoriteFood: document.getElementById("friendFavoriteFood").value.trim(),
     giftIdeas: document.getElementById("friendGiftIdeas").value.trim(),
     importantNotes: document.getElementById("friendImportantNotes").value.trim(),
     relationshipType: document.getElementById("friendRelationshipType").value,
     priority: document.getElementById("friendPriority").value,
-    nextFollowUp: document.getElementById("friendNextFollowUp").value,
+    lastContacted: document.getElementById("friendLastContacted").value,
+    lastSeen: document.getElementById("friendLastSeen").value,
+    favoriteActivities: document.getElementById("friendFavoriteActivities").value.trim(),
+    preferredHangoutStyle: document.getElementById("friendPreferredHangoutStyle").value.trim(),
     interests: "",
     details: "",
     contactNotes: document.getElementById("friendPhoneHandle").value.trim(),
@@ -17919,7 +15755,8 @@ function renderFriends() {
         <strong>${escapeHTML(f.name)}</strong>
         <span class="priority-pill ${f.priority.toLowerCase()}">${escapeHTML(f.priority)}</span>
       </div>
-      <p>${escapeHTML(f.relationshipType)} • Next follow-up: ${f.nextFollowUp || "Not set"}</p>
+      <p>${escapeHTML(f.relationshipType)} • Last contacted: ${f.lastContacted || "Not logged yet"} • Last seen: ${f.lastSeen || "Not logged yet"}</p>
+      <p>${escapeHTML(f.favoriteFood ? `Favorite food: ${f.favoriteFood}` : f.favoriteActivities || "")}</p>
       <div class="button-row three-actions">
         <button onclick="quickContactFriend(${i})">Contact</button>
         <button onclick="toggleFriendDetail(${i})">View</button>
@@ -17948,6 +15785,8 @@ function renderFriendDetail(friend) {
       <p><strong>Contact:</strong> ${escapeHTML(friend.phoneHandle || friend.contactNotes || "None added")}</p>
       <p><strong>Gift ideas:</strong> ${escapeHTML(friend.giftIdeas || "None added")}</p>
       <p><strong>Important notes:</strong> ${escapeHTML(friend.importantNotes || friend.notes || "None added")}</p>
+      <p><strong>Favorite activities:</strong> ${escapeHTML(friend.favoriteActivities || "None added")}</p>
+      <p><strong>Preferred hangout style:</strong> ${escapeHTML(friend.preferredHangoutStyle || "None added")}</p>
       <p><strong>Memory log:</strong></p>
       <p><strong>Related hangouts:</strong></p>
       ${
@@ -18015,156 +15854,6 @@ function getSelectedHangoutPeople() {
   return [...select.selectedOptions].map(option => option.value);
 }
 
-// Multi-select friend picker functions
-let selectedHangoutFriendIds = [];
-
-function getSelectedHangoutFriendIds() {
-  return selectedHangoutFriendIds || [];
-}
-
-function toggleHangoutFriendSelection(friendId) {
-  if (!selectedHangoutFriendIds.includes(friendId)) {
-    selectedHangoutFriendIds.push(friendId);
-  } else {
-    selectedHangoutFriendIds = selectedHangoutFriendIds.filter(id => id !== friendId);
-  }
-  renderFriendDropdown();
-  renderSelectedHangoutFriendChips();
-  updateSelectedFriendCount();
-}
-
-function clearHangoutFriendSelection() {
-  selectedHangoutFriendIds = [];
-  renderFriendDropdown();
-  renderSelectedHangoutFriendChips();
-  updateSelectedFriendCount();
-}
-
-function removeHangoutFriendChip(friendId) {
-  selectedHangoutFriendIds = selectedHangoutFriendIds.filter(id => id !== friendId);
-  renderFriendDropdown();
-  renderSelectedHangoutFriendChips();
-  updateSelectedFriendCount();
-}
-
-function toggleFriendDropdown() {
-  const dropdown = document.getElementById("friendDropdown");
-  if (!dropdown) return;
-  
-  const isVisible = dropdown.style.display !== "none";
-  dropdown.style.display = isVisible ? "none" : "block";
-  
-  if (!isVisible) {
-    renderFriendDropdown();
-    document.getElementById("friendDropdownSearch")?.focus();
-  }
-}
-
-function closeFriendDropdown() {
-  const dropdown = document.getElementById("friendDropdown");
-  if (dropdown) {
-    dropdown.style.display = "none";
-  }
-}
-
-function renderFriendDropdown() {
-  const list = document.getElementById("friendDropdownList");
-  if (!list) return;
-  
-  const search = document.getElementById("friendDropdownSearch")?.value.trim().toLowerCase() || "";
-  const selectedSet = new Set(selectedHangoutFriendIds);
-  
-  const friends = socialData.friends.filter(friend =>
-    !search || friend.name.toLowerCase().includes(search)
-  );
-
-  list.innerHTML = friends.length
-    ? friends.map(friend => `
-        <label class="friend-option">
-          <input type="checkbox" data-friend-id="${escapeHTML(friend.id)}" ${selectedSet.has(friend.id) ? 'checked' : ''} onchange="toggleFriendFromDropdown('${escapeHTML(friend.id)}')">
-          <span>${escapeHTML(friend.name)}</span>
-        </label>
-      `).join("")
-    : `<div class="friend-picker-empty">No friends match</div>`;
-}
-
-function filterFriendDropdown() {
-  renderFriendDropdown();
-}
-
-function toggleFriendFromDropdown(friendId) {
-  if (selectedHangoutFriendIds.includes(friendId)) {
-    selectedHangoutFriendIds = selectedHangoutFriendIds.filter(id => id !== friendId);
-  } else {
-    selectedHangoutFriendIds.push(friendId);
-  }
-  
-  renderFriendDropdown();
-  renderSelectedHangoutFriendChips();
-  updateSelectedFriendCount();
-}
-
-function updateSelectedFriendCount() {
-  const countEl = document.getElementById("selectedHangoutFriendsCount");
-  if (countEl) {
-    countEl.textContent = `${selectedHangoutFriendIds.length} friend${selectedHangoutFriendIds.length !== 1 ? 's' : ''} selected`;
-  }
-  
-  // Update dropdown trigger text
-  const triggerText = document.getElementById("friendDropdownTriggerText");
-  if (triggerText) {
-    if (selectedHangoutFriendIds.length === 0) {
-      triggerText.textContent = "Search or select friends...";
-    } else {
-      triggerText.textContent = `${selectedHangoutFriendIds.length} friend${selectedHangoutFriendIds.length !== 1 ? 's' : ''} selected`;
-    }
-  }
-}
-
-function renderSelectedHangoutFriendChips() {
-  const box = document.getElementById("selectedHangoutFriendChips");
-  if (!box) return;
-  
-  const selectedFriends = socialData.friends.filter(f => selectedHangoutFriendIds.includes(f.id));
-  
-  box.innerHTML = selectedFriends.length
-    ? selectedFriends.map(friend => `
-        <span class="friend-chip">
-          ${escapeHTML(friend.name)}
-          <span class="chip-remove" onclick="removeHangoutFriendChip('${escapeHTML(friend.id)}')">×</span>
-        </span>
-      `).join("")
-    : "";
-}
-
-function getHangoutFriendNames(hangout) {
-  if (Array.isArray(hangout.friendIds) && hangout.friendIds.length) {
-    const names = hangout.friendIds
-      .map(id => socialData.friends.find(f => f.id === id)?.name)
-      .filter(Boolean);
-    if (names.length === 0) return 'No friends';
-    if (names.length <= 3) return names.join(', ');
-    return `${names.slice(0, 3).join(', ')} +${names.length - 3} more`;
-  }
-
-  if (Array.isArray(hangout.people) && hangout.people.length) {
-    const names = hangout.people;
-    if (names.length <= 3) return names.join(', ');
-    return `${names.slice(0, 3).join(', ')} +${names.length - 3} more`;
-  }
-
-  if (Array.isArray(hangout.friends) && hangout.friends.length) {
-    const names = hangout.friends;
-    if (names.length <= 3) return names.join(', ');
-    return `${names.slice(0, 3).join(', ')} +${names.length - 3} more`;
-  }
-
-  if (hangout.friendName) return hangout.friendName;
-
-  return 'No friends';
-}
-
-// Legacy functions for backwards compatibility
 function populateHangoutPeopleSelect(selectedPeople = getSelectedHangoutPeople()) {
   const select = document.getElementById("hangoutPeopleSelect");
   if (!select) return;
@@ -18193,64 +15882,42 @@ function renderSelectedHangoutPeopleChips() {
 }
 
 function saveHangout() {
-  console.log("selectedHangoutFriendIds before save", selectedHangoutFriendIds);
-  
   const activity = document.getElementById("hangoutActivity").value.trim();
   const date = document.getElementById("hangoutDate").value;
   const time = document.getElementById("hangoutTime").value;
   const location = document.getElementById("hangoutLocation").value.trim();
-  const friendIds = getSelectedHangoutFriendIds();
+  const people = getSelectedHangoutPeople();
   const cost = document.getElementById("hangoutCost").value.trim();
   const checklist = document.getElementById("hangoutChecklist").value.trim();
   const followUpReminder = document.getElementById("hangoutFollowUpReminder").value;
+  const rating = document.getElementById("hangoutRating").value;
+  const moodAfter = document.getElementById("hangoutMoodAfter").value.trim();
+  const memories = document.getElementById("hangoutMemories").value.trim();
   const notes = document.getElementById("hangoutNotes").value.trim();
 
-  if (!activity) {
-    alert("Please add an activity.");
-    return;
-  }
-
-  if (!friendIds.length) {
-    alert("No friends selected.");
-  }
-
-  const people = friendIds
-    .map(id => socialData.friends.find(f => f.id === id)?.name)
-    .filter(Boolean);
+  if (!activity || !people.length) return;
 
   const hangout = {
-    id: editingHangoutIndex === null ? createId("hangout") : socialData.hangouts[editingHangoutIndex].id,
     activity,
     date,
     time,
     location,
-    friendIds,
-    friendId: friendIds[0] || "", // Legacy compatibility only
     people,
-    friends: people, // Also save as friends field for compatibility
     cost,
     checklist,
     followUpReminder,
+    rating,
+    moodAfter,
+    memories,
     notes,
-    completed: editingHangoutIndex === null ? false : socialData.hangouts[editingHangoutIndex].completed,
-    createdAt: editingHangoutIndex === null ? new Date().toISOString() : socialData.hangouts[editingHangoutIndex].createdAt,
-    updatedAt: new Date().toISOString()
+    completed: editingHangoutIndex === null ? false : socialData.hangouts[editingHangoutIndex].completed
   };
-
-  console.log("saving hangout", hangout);
 
   if (editingHangoutIndex === null) {
     socialData.hangouts.push(hangout);
   } else {
     socialData.hangouts[editingHangoutIndex] = hangout;
   }
-
-  saveSocialData();
-  saveSocialDataToState();
-  selectedHangoutFriendIds = [];
-  resetHangoutForm();
-  renderSocial();
-  renderSocialInsights();
 
   if (date && time && editingHangoutIndex === null) {
     const endTime = minutesToTime(timeToMinutes(time) + 60);
@@ -18357,7 +16024,6 @@ function renderHangouts() {
     .map((hangout, index) => ({ hangout, index }))
     .filter(({ hangout }) => {
       const status = hangout.completed ? "Completed" : "Planned";
-      const friendNames = getHangoutFriendNames(hangout);
       const searchable = [
         hangout.activity,
         hangout.date,
@@ -18365,7 +16031,7 @@ function renderHangouts() {
         hangout.location,
         hangout.cost,
         hangout.notes,
-        friendNames
+        hangout.people.join(" ")
       ].join(" ").toLowerCase();
 
       return (!search || searchable.includes(search)) &&
@@ -18378,9 +16044,7 @@ function renderHangouts() {
     });
 
   box.innerHTML = hangouts.length
-    ? hangouts.map(({ hangout: h, index: i }) => {
-        const friendNames = getHangoutFriendNames(h);
-        return `
+    ? hangouts.map(({ hangout: h, index: i }) => `
     <div class="social-item">
       <div class="item-title">
         <strong>${escapeHTML(h.activity)}</strong>
@@ -18388,7 +16052,7 @@ function renderHangouts() {
       </div>
       <p>${h.date || "No date"} ${h.time || ""}</p>
       <p>${escapeHTML(h.location || "")}</p>
-      <p>${escapeHTML(friendNames)}</p>
+      <p>${h.people.map(escapeHTML).join(", ")}</p>
       <p>${escapeHTML(h.cost || "")}</p>
       <div class="button-row">
         <button onclick="toggleHangoutDetail(${i})">View/Edit</button>
@@ -18398,19 +16062,20 @@ function renderHangouts() {
       <button class="danger-btn" onclick="deleteHangout(${i})">Delete</button>
       ${viewingHangoutIndex === i ? renderHangoutDetail(h, i) : ""}
     </div>
-  `;
-      }).join("")
+  `).join("")
     : "<p>No hangouts match those filters.</p>";
 }
 
 function renderHangoutDetail(hangout, index) {
-  const friendNames = getHangoutFriendNames(hangout);
   return `
     <div class="detail-panel">
-      <p><strong>People:</strong> ${escapeHTML(friendNames)}</p>
+      <p><strong>People:</strong> ${hangout.people.map(escapeHTML).join(", ") || "None"}</p>
       <p><strong>Location:</strong> ${escapeHTML(hangout.location || "None added")}</p>
       <p><strong>Cost:</strong> ${escapeHTML(hangout.cost || "None added")}</p>
       <p><strong>Checklist:</strong> ${escapeHTML(hangout.checklist || "None added")}</p>
+      <p><strong>Mood after:</strong> ${escapeHTML(hangout.moodAfter || "None added")}</p>
+      <p><strong>Rating:</strong> ${escapeHTML(hangout.rating || "None added")}</p>
+      <p><strong>Memories:</strong> ${escapeHTML(hangout.memories || "None added")}</p>
       <p><strong>Follow-up:</strong> ${escapeHTML(hangout.followUpReminder || "None added")}</p>
       <p><strong>Notes:</strong> ${escapeHTML(hangout.notes || "None added")}</p>
       <button onclick="editHangout(${index})">Edit Hangout</button>
@@ -18467,7 +16132,6 @@ function editHangout(i) {
 function resetHangoutForm() {
   editingHangoutIndex = null;
   hangoutFormOpen = false;
-  selectedHangoutFriendIds = [];
   activeSocialSection = "Hangouts";
   main.innerHTML = getPageHTML("Social");
   renderSocial();
@@ -18479,14 +16143,8 @@ function logHangout(i) {
   hangout.completed = true;
   hangout.date = seenDate;
 
-  // Get friend IDs from hangout (preserve friendIds, people, friends, friendId)
-  const friendIds = Array.isArray(hangout.friendIds) ? hangout.friendIds :
-    hangout.people ? hangout.people.map(name => socialData.friends.find(f => f.name === name)?.id).filter(Boolean) :
-    hangout.friends ? hangout.friends.map(name => socialData.friends.find(f => f.name === name)?.id).filter(Boolean) :
-    hangout.friendId ? [hangout.friendId] : [];
-
   socialData.friends.forEach(friend => {
-    if (friendIds.includes(friend.id)) {
+    if (hangout.people.includes(friend.name)) {
       friend.lastSeen = seenDate;
     }
   });
@@ -18705,9 +16363,13 @@ function fillEditingSocialForms() {
     document.getElementById("friendPhoneHandle").value = friend.phoneHandle || friend.contactNotes || "";
     document.getElementById("friendRelationshipType").value = friend.relationshipType || "Friend";
     document.getElementById("friendPriority").value = friend.priority;
-    document.getElementById("friendNextFollowUp").value = friend.nextFollowUp || "";
+    document.getElementById("friendLastContacted").value = friend.lastContacted || "";
+    document.getElementById("friendLastSeen").value = friend.lastSeen || "";
+    document.getElementById("friendFavoriteFood").value = friend.favoriteFood || "";
+    document.getElementById("friendFavoriteActivities").value = friend.favoriteActivities || "";
     document.getElementById("friendGiftIdeas").value = friend.giftIdeas || "";
     document.getElementById("friendImportantNotes").value = friend.importantNotes || friend.notes || "";
+    document.getElementById("friendPreferredHangoutStyle").value = friend.preferredHangoutStyle || "";
     document.getElementById("friendSaveButton").textContent = "Update Friend";
   }
 
@@ -18721,35 +16383,12 @@ function fillEditingSocialForms() {
     document.getElementById("hangoutCost").value = hangout.cost || "";
     document.getElementById("hangoutChecklist").value = hangout.checklist || "";
     document.getElementById("hangoutFollowUpReminder").value = hangout.followUpReminder || "";
+    document.getElementById("hangoutRating").value = hangout.rating || "";
+    document.getElementById("hangoutMoodAfter").value = hangout.moodAfter || "";
+    document.getElementById("hangoutMemories").value = hangout.memories || "";
     document.getElementById("hangoutNotes").value = hangout.notes || "";
-    
-    // Migrate old friendId to friendIds if needed
-    if (hangout.friendId && !hangout.friendIds) {
-      hangout.friendIds = [hangout.friendId];
-    }
-    
-    // Initialize selectedHangoutFriendIds from friendIds
-    if (Array.isArray(hangout.friendIds) && hangout.friendIds.length) {
-      selectedHangoutFriendIds = [...hangout.friendIds];
-    } else if (Array.isArray(hangout.people) && hangout.people.length) {
-      // Match people names to friend IDs for old data
-      selectedHangoutFriendIds = hangout.people
-        .map(name => socialData.friends.find(f => f.name === name)?.id)
-        .filter(Boolean);
-    } else if (Array.isArray(hangout.friends) && hangout.friends.length) {
-      // Match friends names to friend IDs for old data
-      selectedHangoutFriendIds = hangout.friends
-        .map(name => socialData.friends.find(f => f.name === name)?.id)
-        .filter(Boolean);
-    } else if (hangout.friendId) {
-      selectedHangoutFriendIds = [hangout.friendId];
-    } else {
-      selectedHangoutFriendIds = [];
-    }
-    
-    renderFriendDropdown();
-    renderSelectedHangoutFriendChips();
-    updateSelectedFriendCount();
+    populateHangoutPeopleSelect(hangout.people);
+    renderSelectedHangoutPeopleChips();
     document.getElementById("hangoutSaveButton").textContent = "Update Hangout";
   }
 
@@ -18774,10 +16413,7 @@ function renderSocialInsights() {
   const completedThisMonth = socialData.hangouts.filter(hangout =>
     hangout.completed && hangout.date && hangout.date.startsWith(monthPrefix)
   );
-  const friendsSeenThisMonth = [...new Set(completedThisMonth.flatMap(h => {
-    const friendIds = Array.isArray(h.friendIds) ? h.friendIds : [];
-    return socialData.friends.filter(f => friendIds.includes(f.id)).map(f => f.name);
-  }))];
+  const friendsSeenThisMonth = [...new Set(completedThisMonth.flatMap(h => h.people))];
   const notSeenRecently = socialData.friends
     .filter(friend => getDaysSince(friend.lastSeen) === null || getDaysSince(friend.lastSeen) >= 21)
     .map(friend => friend.name);
@@ -18897,12 +16533,9 @@ function renderSocialBalance() {
   socialData.friends.forEach(f => { counts[f.name] = 0; });
   socialData.hangouts
     .filter(h => h.completed)
-    .forEach(h => {
-      const friendIds = Array.isArray(h.friendIds) ? h.friendIds : [];
-      socialData.friends.filter(f => friendIds.includes(f.id)).forEach(f => {
-        if (Object.prototype.hasOwnProperty.call(counts, f.name)) counts[f.name]++;
-      });
-    });
+    .forEach(h => h.people.forEach(p => {
+      if (Object.prototype.hasOwnProperty.call(counts, p)) counts[p]++;
+    }));
 
   const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   const max = sorted.length ? sorted[0][1] : 1;
@@ -19101,36 +16734,89 @@ function startPeriodicAutosync() {
   }, 60000); // 60 seconds
 }
 
-// Load cloud sync settings from localStorage
-function loadCloudSyncSettings() {
-  try {
-    const raw = localStorage.getItem("flow-planner-cloud-settings");
-    return raw ? JSON.parse(raw) : {};
-  } catch (error) {
-    console.warn("Could not load cloud sync settings", error);
-    return {};
+// Initialize cloud sync on app load
+function initializeCloudSync() {
+  if (!supabase) {
+    console.log("[CLOUD] Supabase not configured");
+    return;
   }
+
+  console.log("[CLOUD] Initializing cloud sync");
+  loadCloudSyncSettings();
+  setupCloudSyncUI();
+  startCloudSync();
+  updateSyncStatusDisplay();
+  setInterval(updateSyncStatusDisplay, 60000);
+  initBackfill();
 }
 
-// Cloud sync initialization disabled - app is local-first
-// Initialize cloud sync on app load (disabled)
-function initializeCloudSync() {
-  try {
-    if (!supabase) {
-      return;
-    }
+// Initialize when DOM is ready
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initializeCloudSync);
+} else {
+  initializeCloudSync();
+}
 
-    console.log("[CLOUD] Initializing cloud sync");
-    loadCloudSyncSettings();
-    if (typeof startCloudSync === 'function') {
-      startCloudSync();
+function triggerAutosync() {
+  console.log("[SYNC] Autosync triggered (debounced)");
+  clearTimeout(syncDebounceTimer);
+  syncDebounceTimer = setTimeout(async () => {
+    console.log("[SYNC] Executing debounced autosync");
+    const data = {
+      plannerData,
+      scheduleData,
+      systemsData,
+      socialData,
+      allZipData,
+      allZipCustomOptions
+    };
+    await DataService.saveToSupabase(data);
+    updateSyncStatusDisplay();
+  }, 2000); // 2 second debounce
+}
+
+// Periodic autosync every 60 seconds
+function startPeriodicAutosync() {
+  console.log("[SYNC] Starting periodic autosync (60 seconds)");
+  if (autosyncTimer) clearInterval(autosyncTimer);
+  
+  autosyncTimer = setInterval(async () => {
+    console.log("[SYNC] Periodic autosync running");
+    const data = {
+      plannerData,
+      scheduleData,
+      systemsData,
+      socialData,
+      allZipData,
+      allZipCustomOptions
+    };
+    const result = await DataService.saveToSupabase(data);
+    if (result) {
+      console.log("[CLOUD] Periodic autosync successful");
     }
     updateSyncStatusDisplay();
-    setInterval(updateSyncStatusDisplay, 60000);
-    if (typeof initBackfill === 'function') {
-      initBackfill();
-    }
-  } catch (error) {
-    console.warn("Cloud sync failed to initialize, continuing app startup", error);
+  }, 60000); // 60 seconds
+}
+
+// Initialize cloud sync on app load
+function initializeCloudSync() {
+  if (!supabase) {
+    console.log("[CLOUD] Supabase not configured");
+    return;
   }
+
+  console.log("[CLOUD] Initializing cloud sync");
+  loadCloudSyncSettings();
+  setupCloudSyncUI();
+  startCloudSync();
+  updateSyncStatusDisplay();
+  setInterval(updateSyncStatusDisplay, 60000);
+  initBackfill();
+}
+
+// Initialize when DOM is ready
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initializeCloudSync);
+} else {
+  initializeCloudSync();
 }
