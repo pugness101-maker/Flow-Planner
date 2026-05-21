@@ -3,13 +3,6 @@ console.log("Flow Import/Export Module Loaded");
 (function() {
   'use strict';
 
-  // Check if required dependencies exist
-  if (typeof DataService === 'undefined') {
-    console.error("[IMPORT/EXPORT] DataService not available");
-    window.flowImportExport = { disabled: true, reason: "DataService not available" };
-    return;
-  }
-
   // Safe access to global variables
   const getGlobal = (name, fallback) => {
     try {
@@ -173,6 +166,21 @@ console.log("Flow Import/Export Module Loaded");
           masterRow.notes = row.notes || '';
           break;
 
+        case 'sessions_json':
+          // Sessions JSON format: amount, date, startTime, endDate, endTime, duration, status, notes
+          masterRow.date = parseUSDate(row.date);
+          masterRow.amount = row.amount || '';
+          masterRow.unit = 'g';
+          masterRow.category = 'Health';
+          masterRow.type = 'Session';
+          masterRow.name = 'Session Log';
+          masterRow.startTime = parseTimeAMPM(row.startTime);
+          masterRow.endTime = parseTimeAMPM(row.endTime);
+          masterRow.durationMinutes = parseDurationHMSToMinutes(row.duration);
+          masterRow.status = row.status || 'completed';
+          masterRow.notes = row.notes || '';
+          break;
+
         default:
           // Generic CSV - try to map common fields
           masterRow.date = formatDate(row.date);
@@ -235,6 +243,60 @@ console.log("Flow Import/Export Module Loaded");
     const mins = parseFloat(minStr);
     if (isNaN(mins)) return '';
     return String(Math.round(mins));
+  }
+
+  // Parse US date format (M/D/YYYY) to ISO
+  function parseUSDate(dateStr) {
+    if (!dateStr) return '';
+    try {
+      const parts = dateStr.split('/');
+      if (parts.length === 3) {
+        const month = parts[0].padStart(2, '0');
+        const day = parts[1].padStart(2, '0');
+        const year = parts[2];
+        return `${year}-${month}-${day}`;
+      }
+      return formatDate(dateStr);
+    } catch (e) {
+      return formatDate(dateStr);
+    }
+  }
+
+  // Parse time with AM/PM to HH:MM format
+  function parseTimeAMPM(timeStr) {
+    if (!timeStr) return '';
+    try {
+      const parts = timeStr.trim().split(' ');
+      if (parts.length === 2) {
+        const time = parts[0];
+        const period = parts[1].toUpperCase();
+        const [hours, minutes, seconds] = time.split(':');
+        let hour = parseInt(hours, 10);
+        if (period === 'PM' && hour !== 12) hour += 12;
+        if (period === 'AM' && hour === 12) hour = 0;
+        return `${String(hour).padStart(2, '0')}:${minutes}`;
+      }
+      return formatTime(timeStr);
+    } catch (e) {
+      return formatTime(timeStr);
+    }
+  }
+
+  // Parse duration from HH:MM:SS to minutes
+  function parseDurationHMSToMinutes(durationStr) {
+    if (!durationStr) return '';
+    try {
+      const parts = durationStr.split(':');
+      if (parts.length === 3) {
+        const hours = parseInt(parts[0], 10) || 0;
+        const minutes = parseInt(parts[1], 10) || 0;
+        const seconds = parseInt(parts[2], 10) || 0;
+        return String(hours * 60 + minutes + Math.round(seconds / 60));
+      }
+      return '';
+    } catch (e) {
+      return '';
+    }
   }
 
   // Merge imported allZipData with existing
@@ -510,6 +572,7 @@ console.log("Flow Import/Export Module Loaded");
             <option value="metrics">Daily Metrics</option>
             <option value="buy">Purchase/Buy Log</option>
             <option value="social">Social Hangouts</option>
+            <option value="sessions_json">Sessions JSON</option>
           </select>
         </div>
 
@@ -617,6 +680,8 @@ console.log("Flow Import/Export Module Loaded");
     parseGoogleSheetsCSV,
     mergeAllZipData
   };
+
+  console.log("[IMPORT/EXPORT] Module loaded successfully");
 
   // Start initialization
   init();

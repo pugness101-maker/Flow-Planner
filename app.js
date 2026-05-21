@@ -601,6 +601,7 @@ if (!Array.isArray(systemsData.trackers)) systemsData.trackers = [];
 if (!Array.isArray(systemsData.goals)) systemsData.goals = [];
 if (!Array.isArray(systemsData.metrics)) systemsData.metrics = [];
 if (!Array.isArray(systemsData.objectives)) systemsData.objectives = [];
+if (!Array.isArray(systemsData.dailyMetrics)) systemsData.dailyMetrics = [];
 if (!Array.isArray(systemsData.savedTrackerCategories)) systemsData.savedTrackerCategories = [];
 if (!Array.isArray(systemsData.savedTrackerUnits)) systemsData.savedTrackerUnits = [];
 if (!systemsData.unitSortMode) systemsData.unitSortMode = "defaults";
@@ -1391,17 +1392,140 @@ function handleAllZipDataImport(event) {
   const file = event.target.files[0];
   if (!file) return;
 
+  const importType = document.getElementById('allZipImportType').value;
   const reader = new FileReader();
   reader.onload = (e) => {
     const content = e.target.result;
-    const fileExtension = file.name.split('.').pop().toLowerCase();
 
-    if (fileExtension === 'json') {
-      importAllZipDataJSON(content);
-    } else if (fileExtension === 'csv') {
-      importAllZipDataCSV(content);
+    // Auto-detect ICS files by BEGIN:VCALENDAR
+    if (content.trim().startsWith('BEGIN:VCALENDAR')) {
+      document.getElementById('allZipImportType').value = 'calendar_ics';
+      try {
+        const result = importCalendarICS(content, { year: "2026" });
+        alert(`ICS import complete:
+Total events: ${result.totalEvents}
+2026 events: ${result.inSelectedYear}
+Social: ${result.social}
+Planner: ${result.planner}
+Objectives: ${result.objectives}
+Updated duplicates: ${result.duplicates}
+Skipped: ${result.skipped}`);
+        // Re-render all affected pages
+        main.innerHTML = getPageHTML("Social");
+        renderSocial();
+        main.innerHTML = getPageHTML("Schedule");
+        renderSchedule();
+        main.innerHTML = getPageHTML("Systems");
+        renderSystems();
+      } catch (e) {
+        alert("ICS import failed: " + e.message);
+      }
+      return;
+    }
+
+    // Detect CSV type from headers for mismatch warnings
+    const lines = content.trim().split("\n");
+    if (lines.length > 0) {
+      const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+      const detectedType = detectCSVType(headers);
+      console.log("Detected CSV type:", detectedType, "Selected import type:", importType);
+
+      // Warn about type mismatches
+      if (detectedType === 'inbox' && importType === 'daily_metrics_csv') {
+        alert("This looks like a Todoist/Inbox CSV (TYPE, CONTENT, DESCRIPTION, etc.).\n\nPlease choose 'Inbox CSV (Objectives)' instead of 'Daily Metrics CSV'.");
+        return;
+      }
+
+      if (detectedType === 'daily_metrics' && importType === 'inbox_csv') {
+        alert("This looks like a Daily Metrics CSV (Date, Bedtime, Wake-Up, etc.).\n\nPlease choose 'Daily Metrics CSV' instead of 'Inbox CSV (Objectives)'.");
+        return;
+      }
+    }
+
+    // Handle Inbox CSV import
+    if (importType === 'inbox_csv') {
+      const result = importInboxCSV(content);
+      if (result.success) {
+        alert(result.message);
+        // Re-render Systems to show new objectives
+        main.innerHTML = getPageHTML("Systems");
+        renderSystems();
+      } else {
+        alert(result.message);
+      }
+      return;
+    }
+
+    // Handle Calendar ICS import
+    if (importType === 'calendar_ics') {
+      try {
+        const result = importCalendarICS(content, { year: "2026" });
+        alert(`ICS import complete:
+Total events: ${result.totalEvents}
+2026 events: ${result.inSelectedYear}
+Social: ${result.social}
+Planner: ${result.planner}
+Objectives: ${result.objectives}
+Updated duplicates: ${result.duplicates}
+Skipped: ${result.skipped}`);
+        // Re-render all affected pages
+        main.innerHTML = getPageHTML("Social");
+        renderSocial();
+        main.innerHTML = getPageHTML("Schedule");
+        renderSchedule();
+        main.innerHTML = getPageHTML("Systems");
+        renderSystems();
+      } catch (e) {
+        alert("ICS import failed: " + e.message);
+      }
+      return;
+    }
+
+    // Handle Daily Metrics CSV import
+    if (importType === 'daily_metrics_csv') {
+      const result = importDailyMetricsCSV(content);
+      if (result.success) {
+        alert(result.message);
+        // Re-render Systems to show new daily metrics
+        main.innerHTML = getPageHTML("Systems");
+        renderSystems();
+      } else {
+        alert(result.message);
+      }
+      return;
+    }
+
+    // Use flow-import-export module if available and not generic type
+    if (typeof window.flowImportExport !== 'undefined' && !window.flowImportExport.disabled && importType !== 'generic') {
+      let result;
+      const layoutType = importType === 'sessions_json' ? 'sessions_json' :
+                         importType === 'session_csv' ? 'session' : importType;
+
+      if (layoutType === 'sessions_json') {
+        result = window.flowImportExport.importAllZipDataJSON(content);
+      } else {
+        result = window.flowImportExport.importGoogleSheetsCSV(content, layoutType);
+      }
+
+      if (result.success) {
+        if (result.preview) {
+          showAllZipImportPreview(result.preview);
+        } else {
+          alert(result.message);
+        }
+      } else {
+        alert(result.message);
+      }
     } else {
-      alert("Unsupported file type. Please upload a JSON or CSV file.");
+      // Use original generic import
+      const fileExtension = file.name.split('.').pop().toLowerCase();
+      if (fileExtension === 'json') {
+        importAllZipDataJSON(content);
+      } else if (fileExtension === 'csv') {
+        importAllZipDataCSV(content);
+      } else {
+        alert("Unsupported file type. Please upload a JSON or CSV file.");
+      }
     }
 
     event.target.value = "";
@@ -1410,6 +1534,1218 @@ function handleAllZipDataImport(event) {
     alert("Error reading file.");
   };
   reader.readAsText(file);
+}
+
+function toggleAllZipImportMode() {
+  const importType = document.getElementById('allZipImportType').value;
+  const fileMode = document.getElementById('allZipImportFileMode');
+  const pasteMode = document.getElementById('allZipImportPasteMode');
+
+  // Show paste mode for specific types, file mode for others
+  if (importType === 'sessions_json' || importType === 'daily_metrics_json' || importType === 'session_csv' ||
+      importType === 'weight' || importType === 'metrics' ||
+      importType === 'buy' || importType === 'social') {
+    fileMode.classList.add('hidden');
+    pasteMode.classList.remove('hidden');
+    showAllZipImportMode('file');
+  } else {
+    fileMode.classList.remove('hidden');
+    pasteMode.classList.add('hidden');
+  }
+}
+
+function showAllZipImportMode(mode) {
+  const fileSubMode = document.getElementById('allZipImportFileSubMode');
+  const pasteSubMode = document.getElementById('allZipImportPasteSubMode');
+
+  if (mode === 'file') {
+    fileSubMode.classList.remove('hidden');
+    pasteSubMode.classList.add('hidden');
+  } else {
+    fileSubMode.classList.add('hidden');
+    pasteSubMode.classList.remove('hidden');
+  }
+}
+
+function handleAllZipImportFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const content = e.target.result;
+    const importType = document.getElementById('allZipImportType').value;
+
+    if (importType === 'sessions_json') {
+      const result = importSessionsJSON(content);
+      if (result.success) {
+        if (result.preview) {
+          showAllZipImportPreview(result.preview);
+        } else {
+          alert(result.message);
+        }
+      } else {
+        alert(result.message);
+      }
+    } else {
+      alert("Please use Sessions JSON import type for this format.");
+    }
+
+    event.target.value = "";
+  };
+  reader.onerror = () => {
+    alert("Error reading file.");
+  };
+  reader.readAsText(file);
+}
+
+function handleAllZipDataPaste() {
+  const importType = document.getElementById('allZipImportType').value;
+  const data = document.getElementById('allZipImportPasteData').value.trim();
+
+  if (!data) {
+    alert("Please paste JSON or CSV data to import.");
+    return;
+  }
+
+  try {
+    let result;
+    if (importType === 'sessions_json') {
+      result = importSessionsJSON(data);
+    } else {
+      alert("Please use Sessions JSON import type for this format.");
+      return;
+    }
+
+    if (result.success) {
+      if (result.preview) {
+        showAllZipImportPreview(result.preview);
+      } else {
+        alert(result.message);
+      }
+    } else {
+      alert(result.message);
+    }
+  } catch (e) {
+    alert("Import failed: " + e.message);
+  }
+}
+
+function importSessionsJSON(jsonString) {
+  try {
+    const importedData = JSON.parse(jsonString);
+    if (!Array.isArray(importedData)) {
+      return { success: false, message: "Invalid format: Expected array of rows" };
+    }
+
+    // Convert sessions JSON to master log format
+    const convertedData = importedData.map(session => {
+      const date = parseUSDate(session.date);
+      const startTime = parseTimeAMPM(session.startTime);
+      const endTime = parseTimeAMPM(session.endTime);
+      const endDate = session.endDate ? parseUSDate(session.endDate) : date;
+      const durationMinutes = parseDurationHMSToMinutes(session.duration);
+
+      return {
+        id: generateSessionId(date, startTime, session.amount),
+        date: date,
+        source: 'import',
+        category: 'Health',
+        type: 'Session',
+        name: 'Session Log',
+        amount: session.amount || '',
+        unit: 'g',
+        startTime: startTime,
+        endDate: endDate,
+        endTime: endTime,
+        durationMinutes: durationMinutes,
+        durationHours: durationMinutes / 60,
+        status: session.status || 'completed',
+        notes: session.notes || '',
+        linkedGoalId: '',
+        linkedHabitId: '',
+        linkedPlannerBlockId: '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+    });
+
+    const result = mergeAllZipDataSimple(allZipData, convertedData);
+
+    return {
+      success: true,
+      message: `Import preview: ${result.newCount} new, ${result.updateCount} updated, ${result.skipCount} skipped`,
+      preview: {
+        rowsDetected: convertedData.length,
+        rowsNew: result.newCount,
+        rowsUpdated: result.updateCount,
+        rowsSkipped: result.skipCount,
+        errors: result.errors,
+        data: convertedData
+      }
+    };
+  } catch (e) {
+    console.error("[IMPORT] Sessions JSON import failed:", e);
+    return { success: false, message: "Import failed: " + e.message };
+  }
+}
+
+function importDailyMetricsJSON(jsonString) {
+  try {
+    const importedData = JSON.parse(jsonString);
+    if (!Array.isArray(importedData)) {
+      return { success: false, message: "Invalid format: Expected array of rows" };
+    }
+
+    const existingData = systemsData.dailyMetrics || [];
+    let newCount = 0;
+    let updateCount = 0;
+    let skipCount = 0;
+    const errors = [];
+
+    importedData.forEach(importedRow => {
+      if (!importedRow.date) {
+        errors.push(`Row missing date: ${JSON.stringify(importedRow)}`);
+        return;
+      }
+
+      const date = parseUSDate(importedRow.date) || importedRow.date;
+      if (!date || !date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        errors.push(`Invalid date format: ${importedRow.date}`);
+        return;
+      }
+
+      const existingEntry = existingData.find(m => m.date === date);
+      if (existingEntry) {
+        existingEntry.sleepDurationMinutes = importedRow.sleepDurationMinutes || existingEntry.sleepDurationMinutes || 0;
+        existingEntry.napDurationMinutes = importedRow.napDurationMinutes || existingEntry.napDurationMinutes || 0;
+        existingEntry.screenTimeMinutes = importedRow.screenTimeMinutes || existingEntry.screenTimeMinutes || 0;
+        existingEntry.socialTimeMinutes = importedRow.socialTimeMinutes || existingEntry.socialTimeMinutes || 0;
+        existingEntry.socialPercent = importedRow.socialPercent || existingEntry.socialPercent || 0;
+        existingEntry.weightLb = importedRow.weightLb || existingEntry.weightLb || 0;
+        existingEntry.mood = importedRow.mood || existingEntry.mood || '';
+        existingEntry.energy = importedRow.energy || existingEntry.energy || '';
+        existingEntry.notes = importedRow.notes || existingEntry.notes || '';
+        existingEntry.useDay = importedRow.useDay !== undefined ? importedRow.useDay : existingEntry.useDay;
+        existingEntry.updatedAt = new Date().toISOString();
+        updateCount++;
+      } else {
+        existingData.push({
+          id: `dm-${date}`,
+          date: date,
+          sleepDurationMinutes: importedRow.sleepDurationMinutes || 0,
+          napDurationMinutes: importedRow.napDurationMinutes || 0,
+          screenTimeMinutes: importedRow.screenTimeMinutes || 0,
+          socialTimeMinutes: importedRow.socialTimeMinutes || 0,
+          socialPercent: importedRow.socialPercent || 0,
+          weightLb: importedRow.weightLb || 0,
+          mood: importedRow.mood || '',
+          energy: importedRow.energy || '',
+          notes: importedRow.notes || '',
+          useDay: importedRow.useDay || false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+        newCount++;
+      }
+    });
+
+    systemsData.dailyMetrics = existingData;
+    saveSystemsData();
+
+    return {
+      success: true,
+      message: `Import completed: ${newCount} new, ${updateCount} updated, ${skipCount} skipped`,
+      newCount,
+      updateCount,
+      skipCount,
+      errors
+    };
+  } catch (e) {
+    console.error("[IMPORT] Daily Metrics import failed:", e);
+    return { success: false, message: "Import failed: " + e.message };
+  }
+}
+
+function importInboxCSV(csvText) {
+  try {
+    const lines = csvText.trim().split("\n");
+    if (lines.length < 2) {
+      return { success: false, message: "CSV file is empty or has no data rows." };
+    }
+
+    const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+    console.log("Inbox CSV headers:", headers);
+
+    const importedRows = [];
+    let totalRowsRead = 0;
+    let skippedBlankTitle = 0;
+    let skippedNonTask = 0;
+    const errors = [];
+
+    // Normalize headers to match expected fields
+    const headerMap = {};
+    headers.forEach((header, index) => {
+      const lower = header.toLowerCase();
+      if (lower === 'content' || lower.includes('title') || lower.includes('name') || lower.includes('task')) {
+        headerMap.content = index;
+      } else if (lower === 'description' || lower.includes('note')) {
+        headerMap.description = index;
+      } else if (lower === 'priority') {
+        headerMap.priority = index;
+      } else if (lower === 'date' || lower === 'deadline' || lower.includes('due')) {
+        headerMap.date = index;
+      } else if (lower === 'type') {
+        headerMap.type = index;
+      } else if (lower === 'status') {
+        headerMap.status = index;
+      } else if (lower === 'category' || lower.includes('project') || lower.includes('list')) {
+        headerMap.category = index;
+      }
+    });
+
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      totalRowsRead++;
+      const values = parseCSVLine(line);
+
+      // Build row object with safe cell access
+      const row = {};
+      headers.forEach((header, index) => {
+        row[header] = safeCell(values[index]);
+      });
+
+      // Check TYPE field
+      const type = safeCell(row.TYPE || row.Type || row.type || row['TYPE']);
+      if (type && type.toLowerCase() !== 'task') {
+        skippedNonTask++;
+        continue;
+      }
+
+      // Get CONTENT field
+      const title = safeCell(row.CONTENT || row.Content || row.content || row.title || row.Title || row['CONTENT']);
+      if (!title) {
+        skippedBlankTitle++;
+        continue;
+      }
+
+      // Get other fields with fallbacks
+      const notes = safeCell(row.DESCRIPTION || row.Description || row.description || row.notes || row.Notes || row['DESCRIPTION']);
+      const priorityRaw = safeCell(row.PRIORITY || row.Priority || row.priority || row['PRIORITY']);
+      const dateRaw = safeCell(row.DEADLINE || row.Deadline || row.deadline || row.DATE || row.Date || row.date || row['DEADLINE']);
+      const status = safeCell(row.STATUS || row.Status || row.status || row['STATUS']);
+      const category = safeCell(row.CATEGORY || row.Category || row.category || row.PROJECT || row.Project || row.project || row['CATEGORY']);
+
+      // Normalize due date
+      let dueDate = '';
+      if (dateRaw) {
+        dueDate = normalizeImportedDate(dateRaw) || parseUSDate(dateRaw) || dateRaw;
+      }
+
+      // Generate stable ID
+      const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
+      const stableId = `objective-inbox-${normalizedTitle}-${dueDate || 'no-date'}`;
+
+      importedRows.push({
+        id: stableId,
+        title: title,
+        notes: notes,
+        dueDate: dueDate,
+        priority: priorityRaw || 'Medium',
+        status: status || 'Not Started',
+        category: category || 'Inbox',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+    }
+
+    // Merge with existing objectives
+    let newCount = 0;
+    let updateCount = 0;
+
+    importedRows.forEach(importedRow => {
+      const existingObjective = systemsData.objectives.find(o => o.title === importedRow.title && o.dueDate === importedRow.dueDate);
+      if (existingObjective) {
+        // Update existing
+        existingObjective.notes = importedRow.notes;
+        existingObjective.priority = importedRow.priority;
+        existingObjective.status = importedRow.status;
+        existingObjective.category = importedRow.category;
+        existingObjective.updatedAt = new Date().toISOString();
+        updateCount++;
+      } else {
+        // Add new
+        systemsData.objectives.push(importedRow);
+        newCount++;
+      }
+    });
+
+    saveSystemsData();
+
+    const message = `Import completed: ${totalRowsRead} rows read, ${newCount} imported, ${updateCount} updated, ${skippedBlankTitle} skipped (blank title), ${skippedNonTask} skipped (non-task)`;
+    console.log("[IMPORT] Inbox CSV:", message);
+
+    return {
+      success: true,
+      message,
+      totalRowsRead,
+      newCount,
+      updateCount,
+      skippedBlankTitle,
+      skippedNonTask,
+      errors
+    };
+  } catch (e) {
+    console.error("[IMPORT] Inbox CSV import failed:", e);
+    return { success: false, message: "Import failed: " + e.message };
+  }
+}
+
+function normalizeImportedDate(value) {
+  if (!value) return '';
+
+  value = value.toString().trim();
+
+  // If already YYYY-MM-DD, return it
+  if (value.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    return value;
+  }
+
+  // Try M/D/YYYY or MM/DD/YYYY
+  const mdyMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdyMatch) {
+    const month = mdyMatch[1].padStart(2, '0');
+    const day = mdyMatch[2].padStart(2, '0');
+    const year = mdyMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  // Try M/D/YY (assume 20XX)
+  const mdyyMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (mdyyMatch) {
+    const month = mdyyMatch[1].padStart(2, '0');
+    const day = mdyyMatch[2].padStart(2, '0');
+    const year = parseInt(mdyyMatch[3], 10) >= 50 ? '19' + mdyyMatch[3] : '20' + mdyyMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  // Try Date constructor as fallback
+  const dateObj = new Date(value);
+  if (!isNaN(dateObj.getTime())) {
+    const year = dateObj.getFullYear();
+    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const day = String(dateObj.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  return '';
+}
+
+function detectCSVType(headers) {
+  const headerLower = headers.map(h => h.toLowerCase());
+
+  // Detect Daily Metrics CSV
+  if (headerLower.includes('date') && headerLower.some(h => h.includes('bedtime') || h.includes('wake') || h.includes('sleep'))) {
+    return 'daily_metrics';
+  }
+
+  // Detect Todoist/Inbox CSV
+  if (headerLower.includes('type') && headerLower.includes('content')) {
+    return 'inbox';
+  }
+
+  // Detect Session CSV
+  if (headerLower.includes('date') && (headerLower.includes('amount') || headerLower.includes('start'))) {
+    return 'session';
+  }
+
+  // Detect Weight CSV
+  if (headerLower.includes('date') && (headerLower.includes('weight') || headerLower.includes('lbs') || headerLower.includes('kg'))) {
+    return 'weight';
+  }
+
+  // Detect Purchase CSV
+  if (headerLower.includes('date') && (headerLower.includes('price') || headerLower.includes('cost') || headerLower.includes('item'))) {
+    return 'purchase';
+  }
+
+  // Detect Social CSV
+  if (headerLower.includes('date') && (headerLower.includes('social') || headerLower.includes('hangout'))) {
+    return 'social';
+  }
+
+  return 'unknown';
+}
+
+function safeCell(value) {
+  return value === undefined || value === null ? "" : String(value).trim();
+}
+
+function importCalendarICS(icsText, options = {}) {
+  const result = {
+    totalEvents: 0,
+    inSelectedYear: 0,
+    social: 0,
+    planner: 0,
+    objectives: 0,
+    skipped: 0,
+    duplicates: 0,
+    errors: []
+  };
+
+  if (!icsText || !icsText.includes("BEGIN:VCALENDAR")) {
+    throw new Error("This is not a valid ICS calendar file.");
+  }
+
+  // 1. Unfold wrapped ICS lines:
+  // Lines starting with space or tab continue previous line.
+  const rawLines = icsText.split(/\r?\n/);
+  const lines = [];
+  rawLines.forEach(line => {
+    if (/^[ \t]/.test(line) && lines.length) {
+      lines[lines.length - 1] += line.slice(1);
+    } else {
+      lines.push(line);
+    }
+  });
+
+  // 2. Extract VEVENT blocks.
+  const blocks = [];
+  let current = [];
+  let inside = false;
+
+  lines.forEach(line => {
+    if (line.trim() === "BEGIN:VEVENT") {
+      inside = true;
+      current = [line];
+      return;
+    }
+    if (inside) current.push(line);
+    if (line.trim() === "END:VEVENT") {
+      inside = false;
+      blocks.push(current);
+      current = [];
+    }
+  });
+
+  result.totalEvents = blocks.length;
+  if (!blocks.length) throw new Error("No VEVENT blocks found in ICS file.");
+
+  function getField(block, fieldName) {
+    const row = block.find(l => l.startsWith(fieldName + ":") || l.startsWith(fieldName + ";"));
+    if (!row) return "";
+    const idx = row.indexOf(":");
+    return idx >= 0 ? row.slice(idx + 1).replace(/\\n/g, "\n").replace(/\\,/g, ",").trim() : "";
+  }
+
+  function parseICSDate(block, fieldName) {
+    const row = block.find(l => l.startsWith(fieldName + ":") || l.startsWith(fieldName + ";"));
+    if (!row) return null;
+
+    const idx = row.indexOf(":");
+    const meta = row.slice(0, idx);
+    const value = row.slice(idx + 1).trim();
+
+    // All-day date: DTSTART;VALUE=DATE:20260424
+    if (meta.includes("VALUE=DATE")) {
+      const y = value.slice(0, 4);
+      const m = value.slice(4, 6);
+      const d = value.slice(6, 8);
+      return {
+        date: `${y}-${m}-${d}`,
+        time: "",
+        allDay: true,
+        dateTime: new Date(Number(y), Number(m) - 1, Number(d))
+      };
+    }
+
+    // UTC date: 20260518T130000Z
+    if (/^\d{8}T\d{6}Z$/.test(value)) {
+      const dt = new Date(
+        Date.UTC(
+          Number(value.slice(0,4)),
+          Number(value.slice(4,6)) - 1,
+          Number(value.slice(6,8)),
+          Number(value.slice(9,11)),
+          Number(value.slice(11,13)),
+          Number(value.slice(13,15))
+        )
+      );
+      const local = new Date(dt);
+      return {
+        date: local.toISOString().slice(0,10),
+        time: local.toTimeString().slice(0,5),
+        allDay: false,
+        dateTime: local
+      };
+    }
+
+    // Local date with TZID: 20260419T150000
+    if (/^\d{8}T\d{6}$/.test(value)) {
+      const y = Number(value.slice(0,4));
+      const m = Number(value.slice(4,6));
+      const d = Number(value.slice(6,8));
+      const h = Number(value.slice(9,11));
+      const min = Number(value.slice(11,13));
+      const sec = Number(value.slice(13,15));
+      const dt = new Date(y, m - 1, d, h, min, sec);
+      return {
+        date: `${y}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}`,
+        time: `${String(h).padStart(2,"0")}:${String(min).padStart(2,"0")}`,
+        allDay: false,
+        dateTime: dt
+      };
+    }
+
+    return null;
+  }
+
+  function minutesBetween(start, end) {
+    if (!start?.dateTime || !end?.dateTime) return 0;
+    return Math.max(0, Math.round((end.dateTime - start.dateTime) / 60000));
+  }
+
+  function classifyEvent(title) {
+    const t = title.toLowerCase();
+
+    if (/(hang|hangout|dinner w|lunch w|brunch w|movie|sleepover|seek|date)/i.test(title)) {
+      return "social";
+    }
+
+    if (/(work|pluckers|carter creek|via 313|educo|appointment|appt|therapy|interview|class|church|gym|workout|routine|wake up|drive|commute|shift)/i.test(title)) {
+      return "planner";
+    }
+
+    if (/(pay day|deadline|registration|cancel|sell|taxes|final|due|reminder)/i.test(title)) {
+      return "objective";
+    }
+
+    return "planner";
+  }
+
+  const selectedYear = options.year || "2026";
+
+  blocks.forEach(block => {
+    try {
+      const uid = getField(block, "UID");
+      const summary = getField(block, "SUMMARY") || "Untitled Calendar Event";
+      const description = getField(block, "DESCRIPTION");
+      const location = getField(block, "LOCATION");
+      const status = getField(block, "STATUS");
+      const created = getField(block, "CREATED");
+      const lastModified = getField(block, "LAST-MODIFIED");
+
+      const start = parseICSDate(block, "DTSTART");
+      const end = parseICSDate(block, "DTEND");
+
+      if (!start || !start.date) {
+        result.skipped++;
+        result.errors.push(`Skipped ${summary}: invalid/missing DTSTART`);
+        return;
+      }
+
+      if (selectedYear && !start.date.startsWith(String(selectedYear))) {
+        result.skipped++;
+        return;
+      }
+
+      result.inSelectedYear++;
+
+      const destination = classifyEvent(summary);
+      const baseId = uid ? `calendar-${uid}` : `calendar-${summary.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${start.date}-${start.time}`;
+      const durationMinutes = minutesBetween(start, end);
+      const now = new Date().toISOString();
+
+      if (destination === "social") {
+        socialData.hangouts = socialData.hangouts || [];
+
+        const id = `hangout-${baseId}`;
+        const existingIndex = socialData.hangouts.findIndex(h => h.id === id || h.calendarUid === uid);
+
+        const item = {
+          id,
+          activity: summary,
+          date: start.date,
+          time: start.time,
+          endDate: end?.date || start.date,
+          endTime: end?.time || "",
+          durationMinutes,
+          location,
+          notes: description,
+          completed: new Date(start.date) < new Date(),
+          source: "ics_import",
+          calendarUid: uid,
+          createdAt: created || now,
+          updatedAt: lastModified || now
+        };
+
+        if (existingIndex >= 0) {
+          socialData.hangouts[existingIndex] = { ...socialData.hangouts[existingIndex], ...item };
+          result.duplicates++;
+        } else {
+          socialData.hangouts.push(item);
+          result.social++;
+        }
+      } else if (destination === "objective") {
+        systemsData.objectives = systemsData.objectives || [];
+
+        const id = `objective-${baseId}`;
+        const existingIndex = systemsData.objectives.findIndex(o => o.id === id || o.calendarUid === uid);
+
+        const item = {
+          id,
+          title: summary,
+          dueDate: start.date,
+          priority: "Medium",
+          status: new Date(start.date) < new Date() ? "Done" : "Not Started",
+          category: "Calendar",
+          notes: [description, location].filter(Boolean).join("\n"),
+          source: "ics_import",
+          calendarUid: uid,
+          createdAt: created || now,
+          updatedAt: lastModified || now
+        };
+
+        if (existingIndex >= 0) {
+          systemsData.objectives[existingIndex] = { ...systemsData.objectives[existingIndex], ...item };
+          result.duplicates++;
+        } else {
+          systemsData.objectives.push(item);
+          result.objectives++;
+        }
+      } else {
+        scheduleData.blocks = scheduleData.blocks || [];
+
+        const id = `block-${baseId}`;
+        const existingIndex = scheduleData.blocks.findIndex(b => b.id === id || b.calendarUid === uid);
+
+        const item = {
+          id,
+          title: summary,
+          date: start.date,
+          startTime: start.time,
+          endDate: end?.date || start.date,
+          endTime: end?.time || "",
+          durationMinutes,
+          location,
+          notes: description,
+          category: "Calendar",
+          source: "ics_import",
+          calendarUid: uid,
+          status: new Date(start.date) < new Date() ? "completed" : "planned",
+          createdAt: created || now,
+          updatedAt: lastModified || now
+        };
+
+        if (existingIndex >= 0) {
+          scheduleData.blocks[existingIndex] = { ...scheduleData.blocks[existingIndex], ...item };
+          result.duplicates++;
+        } else {
+          scheduleData.blocks.push(item);
+          result.planner++;
+        }
+      }
+    } catch (err) {
+      result.errors.push(err.message);
+      result.skipped++;
+    }
+  });
+
+  saveScheduleData?.();
+  saveSystemsData?.();
+  saveSocialData?.();
+  if (typeof saveAllAppState === "function") saveAllAppState();
+
+  return result;
+}
+
+function importDailyMetricsCSV(csvText) {
+  try {
+    const lines = csvText.trim().split("\n");
+    if (lines.length < 2) {
+      return { success: false, message: "CSV file is empty or has no data rows." };
+    }
+
+    const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+    console.log("Daily Metrics CSV headers:", headers);
+
+    const importedRows = [];
+    let rowsRead = 0;
+    let rowsWithValidDate = 0;
+    const errors = [];
+    const rawDateValues = [];
+    const normalizedDateValues = [];
+
+    // Normalize headers to match expected fields
+    const headerMap = {};
+    headers.forEach((header, index) => {
+      const lower = header.toLowerCase();
+      if (lower === 'date' || lower === 'day' || lower.includes('log date')) {
+        headerMap.date = index;
+      } else if (lower.includes('bedtime') || lower.includes('bed time')) {
+        headerMap.bedtime = index;
+      } else if (lower.includes('wake-up') || lower.includes('wake up') || lower.includes('waketime')) {
+        headerMap.wakeTime = index;
+      } else if (lower.includes('nap start')) {
+        headerMap.napStart = index;
+      } else if (lower.includes('nap end')) {
+        headerMap.napEnd = index;
+      } else if (lower.includes('nap duration')) {
+        headerMap.napDuration = index;
+      } else if (lower.includes('sleep duration')) {
+        headerMap.sleepDuration = index;
+      } else if (lower.includes('time awake')) {
+        headerMap.timeAwake = index;
+      } else if (lower.includes('last use') || lower.includes('bed gap')) {
+        headerMap.lastUseToBedGap = index;
+      } else if (lower.includes('screen time')) {
+        headerMap.screenTime = index;
+      } else if (lower.includes('social time')) {
+        headerMap.socialTime = index;
+      } else if (lower.includes('social %') || lower.includes('social percent')) {
+        headerMap.socialPercent = index;
+      } else if (lower.includes('use day')) {
+        headerMap.useDay = index;
+      } else if (lower.includes('notes')) {
+        headerMap.notes = index;
+      }
+    });
+
+    if (headerMap.date === undefined) {
+      return { success: false, message: "No valid Date column found. Check CSV headers." };
+    }
+
+    const dateColumnName = headers[headerMap.date];
+    console.log("Detected date column:", dateColumnName);
+
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      rowsRead++;
+
+      const values = parseCSVLine(line);
+      const row = {};
+      headers.forEach((header, index) => {
+        row[header.toLowerCase()] = values[index] || "";
+      });
+
+      // Get date
+      let dateStr = headerMap.date !== undefined ? values[headerMap.date] : row.date || '';
+      if (!dateStr) {
+        errors.push(`Row ${i}: No date value`);
+        continue;
+      }
+
+      // Collect raw date values for debugging (first 5)
+      if (rawDateValues.length < 5) {
+        rawDateValues.push(dateStr);
+      }
+
+      // Normalize date to YYYY-MM-DD
+      const normalizedDate = normalizeImportedDate(dateStr);
+
+      // Collect normalized date values for debugging (first 5)
+      if (normalizedDateValues.length < 5) {
+        normalizedDateValues.push(normalizedDate || '(invalid)');
+      }
+
+      if (!normalizedDate) {
+        errors.push(`Row ${i}: Invalid date format "${dateStr}"`);
+        continue;
+      }
+
+      rowsWithValidDate++;
+
+      // Parse duration fields to minutes
+      const napDurationMinutes = parseDurationToMinutes(headerMap.napDuration !== undefined ? values[headerMap.napDuration] : row.napduration || '');
+      const sleepDurationMinutes = parseDurationToMinutes(headerMap.sleepDuration !== undefined ? values[headerMap.sleepDuration] : row.sleepduration || '');
+      const timeAwakeMinutes = parseDurationToMinutes(headerMap.timeAwake !== undefined ? values[headerMap.timeAwake] : row.timeawake || '');
+      const lastUseToBedGapMinutes = parseDurationToMinutes(headerMap.lastUseToBedGap !== undefined ? values[headerMap.lastUseToBedGap] : row.lastusetobedgap || '');
+      const screenTimeMinutes = parseDurationToMinutes(headerMap.screenTime !== undefined ? values[headerMap.screenTime] : row.screentime || '');
+      const socialTimeMinutes = parseDurationToMinutes(headerMap.socialTime !== undefined ? values[headerMap.socialTime] : row.socialtime || '');
+
+      // Parse social percent
+      let socialPercent = 0;
+      const socialPercentStr = headerMap.socialPercent !== undefined ? values[headerMap.socialPercent] : row['social %'] || row.socialpercent || '';
+      if (socialPercentStr) {
+        socialPercent = parseFloat(socialPercentStr.replace('%', '').trim()) || 0;
+      }
+
+      // Parse use day
+      let useDay = false;
+      const useDayStr = headerMap.useDay !== undefined ? values[headerMap.useDay] : row.useday || '';
+      if (useDayStr) {
+        useDay = useDayStr.toLowerCase() === 'use' || useDayStr.toLowerCase() === 'true' || useDayStr.toLowerCase() === 'yes';
+      }
+
+      // Generate stable ID
+      const stableId = `daily-metrics-${normalizedDate}`;
+
+      importedRows.push({
+        id: stableId,
+        date: normalizedDate,
+        bedtime: headerMap.bedtime !== undefined ? values[headerMap.bedtime] : row.bedtime || '',
+        wakeTime: headerMap.wakeTime !== undefined ? values[headerMap.wakeTime] : row['wake-up'] || row.waketime || '',
+        napStart: headerMap.napStart !== undefined ? values[headerMap.napStart] : row.napstart || '',
+        napEnd: headerMap.napEnd !== undefined ? values[headerMap.napEnd] : row.napend || '',
+        napDurationMinutes: napDurationMinutes,
+        sleepDurationMinutes: sleepDurationMinutes,
+        timeAwakeMinutes: timeAwakeMinutes,
+        lastUseToBedGapMinutes: lastUseToBedGapMinutes,
+        screenTimeMinutes: screenTimeMinutes,
+        socialTimeMinutes: socialTimeMinutes,
+        socialPercent: socialPercent,
+        useDay: useDay,
+        notes: headerMap.notes !== undefined ? values[headerMap.notes] : row.notes || '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+    }
+
+    // Check if no rows were detected
+    if (rowsRead === 0) {
+      return { success: false, message: "No rows detected. Check CSV headers." };
+    }
+
+    console.log("First 5 raw date values:", rawDateValues);
+    console.log("First 5 normalized date values:", normalizedDateValues);
+
+    if (rowsWithValidDate === 0) {
+      const errorMessage = `No valid dates found. Detected date column: "${dateColumnName}". First values: ${rawDateValues.slice(0, 5).join(', ')}`;
+      console.error("[IMPORT]", errorMessage);
+      return { success: false, message: errorMessage };
+    }
+
+    // Sort newest first
+    importedRows.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // Merge with existing dailyMetrics
+    if (!systemsData.dailyMetrics) {
+      systemsData.dailyMetrics = [];
+    }
+
+    let newCount = 0;
+    let updateCount = 0;
+    let skipCount = 0;
+
+    importedRows.forEach(importedRow => {
+      const existingMetric = systemsData.dailyMetrics.find(m => m.date === importedRow.date);
+      if (existingMetric) {
+        // Update existing
+        Object.assign(existingMetric, importedRow);
+        existingMetric.updatedAt = new Date().toISOString();
+        updateCount++;
+      } else {
+        // Add new
+        systemsData.dailyMetrics.push(importedRow);
+        newCount++;
+      }
+    });
+
+    // Sort dailyMetrics by date descending
+    systemsData.dailyMetrics.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    saveSystemsData();
+
+    const message = `Import completed: ${rowsRead} rows read, ${rowsWithValidDate} valid dates, ${newCount} new, ${updateCount} updated, ${skipCount} skipped`;
+    console.log("[IMPORT] Daily Metrics CSV:", message);
+
+    return {
+      success: true,
+      message,
+      rowsRead,
+      rowsWithValidDate,
+      newCount,
+      updateCount,
+      skipCount,
+      errors
+    };
+  } catch (e) {
+    console.error("[IMPORT] Daily Metrics CSV import failed:", e);
+    return { success: false, message: "Import failed: " + e.message };
+  }
+}
+
+function parseDurationToMinutes(durationStr) {
+  if (!durationStr) return 0;
+
+  durationStr = durationStr.trim();
+
+  // Handle HH:MM:SS format
+  const timeMatch = durationStr.match(/^(\d+):(\d+):(\d+)$/);
+  if (timeMatch) {
+    const hours = parseInt(timeMatch[1], 10);
+    const minutes = parseInt(timeMatch[2], 10);
+    return hours * 60 + minutes;
+  }
+
+  // Handle HH:MM format
+  const shortTimeMatch = durationStr.match(/^(\d+):(\d+)$/);
+  if (shortTimeMatch) {
+    const hours = parseInt(shortTimeMatch[1], 10);
+    const minutes = parseInt(shortTimeMatch[2], 10);
+    return hours * 60 + minutes;
+  }
+
+  // Handle decimal hours (e.g., "5.5" = 5h 30m)
+  const decimalMatch = durationStr.match(/^(\d+\.?\d*)$/);
+  if (decimalMatch) {
+    const hours = parseFloat(decimalMatch[1]);
+    return Math.round(hours * 60);
+  }
+
+  return 0;
+}
+
+function getDailyMetricsInsights() {
+  if (!systemsData.dailyMetrics || systemsData.dailyMetrics.length === 0) {
+    return null;
+  }
+
+  const today = new Date();
+  const sevenDaysAgo = new Date(today);
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+  const last7Days = systemsData.dailyMetrics.filter(m => {
+    const metricDate = new Date(m.date);
+    return metricDate >= sevenDaysAgo && metricDate <= today;
+  });
+
+  const insights = {
+    avgSleepDurationMinutes: 0,
+    avgScreenTimeMinutes: 0,
+    avgSocialTimeMinutes: 0,
+    avgSocialPercent: 0,
+    useDaysThisWeek: 0,
+    noUseDaysThisWeek: 0,
+    latestBedtime: '',
+    latestWakeTime: ''
+  };
+
+  if (last7Days.length === 0) {
+    return insights;
+  }
+
+  // Calculate averages
+  const sleepDurations = last7Days.map(m => m.sleepDurationMinutes || 0).filter(d => d > 0);
+  const screenTimes = last7Days.map(m => m.screenTimeMinutes || 0).filter(t => t > 0);
+  const socialTimes = last7Days.map(m => m.socialTimeMinutes || 0).filter(t => t > 0);
+  const socialPercents = last7Days.map(m => m.socialPercent || 0).filter(p => p > 0);
+
+  insights.avgSleepDurationMinutes = sleepDurations.length > 0 ? sleepDurations.reduce((a, b) => a + b, 0) / sleepDurations.length : 0;
+  insights.avgScreenTimeMinutes = screenTimes.length > 0 ? screenTimes.reduce((a, b) => a + b, 0) / screenTimes.length : 0;
+  insights.avgSocialTimeMinutes = socialTimes.length > 0 ? socialTimes.reduce((a, b) => a + b, 0) / socialTimes.length : 0;
+  insights.avgSocialPercent = socialPercents.length > 0 ? socialPercents.reduce((a, b) => a + b, 0) / socialPercents.length : 0;
+
+  // Calculate use days
+  insights.useDaysThisWeek = last7Days.filter(m => m.useDay).length;
+  insights.noUseDaysThisWeek = last7Days.length - insights.useDaysThisWeek;
+
+  // Find latest bedtime and wake time
+  const bedtimes = last7Days.filter(m => m.bedtime).map(m => m.bedtime);
+  const wakeTimes = last7Days.filter(m => m.wakeTime).map(m => m.wakeTime);
+
+  insights.latestBedtime = bedtimes.length > 0 ? bedtimes[0] : '';
+  insights.latestWakeTime = wakeTimes.length > 0 ? wakeTimes[0] : '';
+
+  return insights;
+}
+
+function parseUSDate(dateStr) {
+  if (!dateStr) return '';
+  try {
+    const parts = dateStr.split('/');
+    if (parts.length === 3) {
+      const month = parts[0].padStart(2, '0');
+      const day = parts[1].padStart(2, '0');
+      const year = parts[2];
+      return `${year}-${month}-${day}`;
+    }
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return dateStr;
+    return date.toISOString().split('T')[0];
+  } catch (e) {
+    return dateStr;
+  }
+}
+
+function parseTimeAMPM(timeStr) {
+  if (!timeStr) return '';
+  try {
+    const parts = timeStr.trim().split(' ');
+    if (parts.length === 2) {
+      const time = parts[0];
+      const period = parts[1].toUpperCase();
+      const [hours, minutes, seconds] = time.split(':');
+      let hour = parseInt(hours, 10);
+      if (period === 'PM' && hour !== 12) hour += 12;
+      if (period === 'AM' && hour === 12) hour = 0;
+      return `${String(hour).padStart(2, '0')}:${minutes}`;
+    }
+    return timeStr.trim().substring(0, 5);
+  } catch (e) {
+    return timeStr.substring(0, 5);
+  }
+}
+
+function parseDurationHMSToMinutes(durationStr) {
+  if (!durationStr) return '';
+  try {
+    const parts = durationStr.split(':');
+    if (parts.length === 3) {
+      const hours = parseInt(parts[0], 10) || 0;
+      const minutes = parseInt(parts[1], 10) || 0;
+      const seconds = parseInt(parts[2], 10) || 0;
+      return String(hours * 60 + minutes + Math.round(seconds / 60));
+    }
+    return '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function generateSessionId(date, startTime, amount) {
+  const parts = [
+    'session',
+    date || '',
+    startTime || '',
+    String(amount || '')
+  ];
+  return parts.join('-').replace(/-+/g, '-').toLowerCase().replace(/[^a-z0-9-]/g, '');
+}
+
+function showAllZipImportPreview(preview) {
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.id = 'importPreviewModal';
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width: 600px;">
+      <h2>Import Preview</h2>
+      <div class="import-stats">
+        <p><strong>New:</strong> ${preview.newCount}</p>
+        <p><strong>Updated:</strong> ${preview.updateCount}</p>
+        <p><strong>Skipped:</strong> ${preview.skipCount}</p>
+        ${preview.errors.length > 0 ? `<p><strong>Errors:</strong> ${preview.errors.length}</p>` : ''}
+      </div>
+      ${preview.errors.length > 0 ? `
+        <div class="import-errors">
+          <h3>Errors:</h3>
+          <ul>
+            ${preview.errors.map(e => `<li>${e}</li>`).join('')}
+          </ul>
+        </div>
+      ` : ''}
+      <div class="modal-actions">
+        <button onclick="confirmAllZipImport()">Confirm Import</button>
+        <button class="secondary-btn" onclick="closeModal('importPreviewModal')">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function confirmAllZipImport() {
+  if (!window.allZipImportPreviewData || !window.allZipImportPreviewData.data) {
+    alert("No import data to confirm");
+    return;
+  }
+
+  try {
+    const result = mergeAllZipDataSimple(allZipData, window.allZipImportPreviewData.data);
+    DataService.saveAllZipData(allZipData);
+
+    // Also create tracker logs for session data
+    const importType = document.getElementById('allZipImportType').value;
+    if (importType === 'sessions_json') {
+      createTrackerLogsFromSessions(window.allZipImportPreviewData.data);
+    }
+
+    saveAllAppState();
+
+    alert(`Import completed: ${result.newCount} new, ${result.updateCount} updated, ${result.skipCount} skipped`);
+
+    // Clear preview
+    window.allZipImportPreviewData = null;
+    const previewDiv = document.getElementById('allZipImportPreview');
+    if (previewDiv) previewDiv.innerHTML = '';
+    document.getElementById('allZipImportPasteData').value = '';
+
+    // Refresh current page
+    renderSettings();
+  } catch (e) {
+    alert("Import failed: " + e.message);
+  }
+}
+
+function createTrackerLogsFromSessions(sessions) {
+  // Check for existing tracker named "Coke" with unit "g"
+  let sessionTracker = systemsData.trackers.find(t => t.name.toLowerCase() === 'coke' && t.unit === 'g');
+
+  // If no Coke tracker, check for existing Session tracker with same unit
+  if (!sessionTracker) {
+    sessionTracker = systemsData.trackers.find(t => t.name === 'Session' && t.category === 'Taper' && t.unit === 'g');
+  }
+
+  // If still no tracker, create one (prefer Coke naming)
+  if (!sessionTracker) {
+    sessionTracker = {
+      id: createId('tracker'),
+      name: 'Coke',
+      category: 'Taper',
+      unit: 'g',
+      startValue: '0',
+      targetValue: '0',
+      direction: 'decrease',
+      logValueMode: 'increment',
+      resetType: 'No reset',
+      notes: 'Auto-created from session imports',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    systemsData.trackers.push(sessionTracker);
+  }
+
+  // Create tracker logs for each session
+  sessions.forEach(session => {
+    if (session.category === 'Health' && session.type === 'Session') {
+      const existingLog = systemsData.logs.find(l => l.id === session.id);
+      if (!existingLog) {
+        systemsData.logs.push({
+          id: session.id,
+          title: sessionTracker.name,
+          type: 'Taper',
+          valueType: 'Taper',
+          value: session.amount,
+          unit: 'g',
+          date: session.date,
+          startTime: session.startTime || '',
+          endDate: session.endDate || '',
+          endTime: session.endTime || '',
+          durationMinutes: session.durationMinutes || 0,
+          durationHours: (session.durationMinutes || 0) / 60,
+          notes: session.notes || `Duration: ${session.durationMinutes} min`,
+          linkedItemType: 'tracker',
+          linkedTrackerId: sessionTracker.id,
+          logSource: 'import',
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt
+        });
+      }
+    }
+  });
+
+  // Recalculate tracker progress
+  recalculateTrackerFromLogs(sessionTracker.id);
+  saveSystemsData();
+}
+
+function cancelAllZipImport() {
+  window.allZipImportPreviewData = null;
+  const previewDiv = document.getElementById('allZipImportPreview');
+  if (previewDiv) previewDiv.innerHTML = '';
 }
 
 function saveAllZipData() {
@@ -2363,12 +3699,14 @@ function renderSelectedOptionGroup() {
       <div class="option-row ${isDefault ? 'is-default' : ''}" data-option="${escapeHTML(option)}">
         <span class="option-row-name">${escapeHTML(option)}</span>
         <div class="option-row-actions">
-          <button onclick="startEditOption('${escapeHTML(option)}')">Edit</button>
-          <button class="delete-option-btn" onclick="deleteOptionFromManager('${escapeHTML(option)}')">Delete</button>
+          <button>Edit</button>
+          <button class="delete-option-btn">Delete</button>
         </div>
       </div>
     `;
   }).join("");
+  
+  bindManageOptionsEvents();
 }
 
 // Add custom option from manager
@@ -2420,6 +3758,8 @@ function addCustomOptionFromManager() {
   
   if (input) input.value = "";
   renderSelectedOptionGroup();
+  bindManageOptionsEvents();
+  refreshAllDropdowns();
 }
 
 // Start editing option
@@ -2431,10 +3771,12 @@ function startEditOption(option) {
   row.innerHTML = `
     <div class="option-row-edit">
       <input id="editOptionInput" value="${escapeHTML(option)}" placeholder="New name">
-      <button onclick="saveEditOption('${escapeHTML(option)}')">Save</button>
-      <button class="secondary-btn" onclick="renderSelectedOptionGroup()">Cancel</button>
+      <button>Save</button>
+      <button class="secondary-btn">Cancel</button>
     </div>
   `;
+  
+  bindManageOptionsEvents();
   
   const editInput = document.getElementById("editOptionInput");
   if (editInput) {
@@ -2459,8 +3801,29 @@ function saveEditOption(oldValue) {
     return;
   }
   
-  const arrayName = type === 'category' ? 'categories' : type === 'type' ? 'types' : 'units';
-  const allOptions = type === 'category' ? getAllCategories() : type === 'type' ? getAllTypes() : getAllUnits();
+  let arrayName, allOptions;
+  if (type === 'category') {
+    arrayName = 'categories';
+    allOptions = getAllCategories();
+  } else if (type === 'habitTypes') {
+    arrayName = 'habitTypes';
+    allOptions = getHabitTypes();
+  } else if (type === 'trackerTypes') {
+    arrayName = 'trackerTypes';
+    allOptions = getTrackerTypes();
+  } else if (type === 'objectiveTypes') {
+    arrayName = 'objectiveTypes';
+    allOptions = getObjectiveTypes();
+  } else if (type === 'activityTypes') {
+    arrayName = 'activityTypes';
+    allOptions = getActivityTypes();
+  } else if (type === 'socialTypes') {
+    arrayName = 'socialTypes';
+    allOptions = getSocialTypes();
+  } else {
+    arrayName = 'units';
+    allOptions = getAllUnits();
+  }
   
   if (allOptions.map(o => o.toLowerCase()).includes(newValue.toLowerCase())) {
     alert("This option already exists");
@@ -2484,7 +3847,8 @@ function saveEditOption(oldValue) {
   saveAllZipData();
   
   renderSelectedOptionGroup();
-  refreshOpenForms();
+  bindManageOptionsEvents();
+  refreshAllDropdowns();
 }
 
 // Delete option from manager
@@ -2502,8 +3866,29 @@ function deleteOptionFromManager(value) {
     return;
   }
   
-  const arrayName = type === 'category' ? 'categories' : type === 'type' ? 'types' : 'units';
-  const defaults = type === 'category' ? DEFAULT_CATEGORIES : type === 'type' ? DEFAULT_TYPES : DEFAULT_UNITS;
+  let arrayName, defaults;
+  if (type === 'category') {
+    arrayName = 'categories';
+    defaults = DEFAULT_CATEGORIES;
+  } else if (type === 'habitTypes') {
+    arrayName = 'habitTypes';
+    defaults = DEFAULT_HABIT_TYPES;
+  } else if (type === 'trackerTypes') {
+    arrayName = 'trackerTypes';
+    defaults = DEFAULT_TRACKER_TYPES;
+  } else if (type === 'objectiveTypes') {
+    arrayName = 'objectiveTypes';
+    defaults = DEFAULT_OBJECTIVE_TYPES;
+  } else if (type === 'activityTypes') {
+    arrayName = 'activityTypes';
+    defaults = DEFAULT_ACTIVITY_TYPES;
+  } else if (type === 'socialTypes') {
+    arrayName = 'socialTypes';
+    defaults = DEFAULT_SOCIAL_TYPES;
+  } else {
+    arrayName = 'units';
+    defaults = DEFAULT_UNITS;
+  }
   
   // Remove from custom options
   if (allZipCustomOptions[arrayName]) {
@@ -2515,18 +3900,75 @@ function deleteOptionFromManager(value) {
   
   // If it's a default, track it as removed
   if (!allZipCustomOptions.removedDefaults) {
-    allZipCustomOptions.removedDefaults = { categories: [], types: [], units: [] };
+    allZipCustomOptions.removedDefaults = { 
+      categories: [], 
+      habitTypes: [],
+      trackerTypes: [],
+      objectiveTypes: [],
+      activityTypes: [],
+      socialTypes: [],
+      units: [] 
+    };
   }
   
   if (defaults.includes(value)) {
-    const removedArrayName = type === 'category' ? 'categories' : type === 'type' ? 'types' : 'units';
-    if (!allZipCustomOptions.removedDefaults[removedArrayName].includes(value)) {
-      allZipCustomOptions.removedDefaults[removedArrayName].push(value);
+    if (!allZipCustomOptions.removedDefaults[arrayName].includes(value)) {
+      allZipCustomOptions.removedDefaults[arrayName].push(value);
     }
   }
   
   saveAllZipCustomOptions();
   renderSelectedOptionGroup();
+  bindManageOptionsEvents();
+  refreshAllDropdowns();
+}
+
+// Refresh all dropdowns across the app after option changes
+function refreshAllDropdowns() {
+  // Update All Zip Data dropdowns
+  populateAllZipDataDropdowns();
+  
+  // Re-render the currently active form if one is open
+  if (activeSystemsForm) {
+    const currentForm = document.querySelector('.systems-form-content');
+    if (currentForm) {
+      // Re-fill the form to update dropdowns while preserving current values
+      if (activeSystemsForm === 'habit' && editingHabitIndex !== null) {
+        fillEditingHabitForm();
+      } else if (activeSystemsForm === 'tracker' && editingTrackerIndex !== null) {
+        fillEditingTrackerForm();
+      } else if (activeSystemsForm === 'objective' && editingObjectiveIndex !== null) {
+        fillEditingObjectiveForm();
+      } else if (activeSystemsForm === 'log') {
+        fillEditingLogForm();
+      } else if (activeSystemsForm === 'trackerLog') {
+        fillEditingManualLogForm();
+      } else if (activeSystemsForm === 'goal') {
+        fillEditingGoalForm();
+      } else {
+        // If adding a new item, re-render the form fields to show updated options
+        const formContainer = document.querySelector('.systems-form-content');
+        if (formContainer) {
+          if (activeSystemsForm === 'habit') {
+            const habitFields = renderHabitFormFields();
+            const formContent = formContainer.querySelector('.form-fields') || formContainer;
+            formContent.innerHTML = habitFields;
+          } else if (activeSystemsForm === 'tracker') {
+            const trackerFields = renderTrackerFormFields();
+            const formContent = formContainer.querySelector('.form-fields') || formContainer;
+            formContent.innerHTML = trackerFields;
+          } else if (activeSystemsForm === 'objective') {
+            const objectiveFields = renderObjectiveFormFields();
+            const formContent = formContainer.querySelector('.form-fields') || formContainer;
+            formContent.innerHTML = objectiveFields;
+          }
+        }
+      }
+    }
+  }
+  
+  // Update linked item options in log forms
+  updateLogLinkedItemOptions();
 }
 
 // Reset to defaults from manager
@@ -2579,6 +4021,8 @@ function resetOptionsToDefaultsFromManager() {
   
   saveAllZipCustomOptions();
   renderSelectedOptionGroup();
+  bindManageOptionsEvents();
+  refreshAllDropdowns();
 }
 
 // Update records when option is renamed
@@ -3397,20 +4841,21 @@ const pages = {
   `,
 
   Systems: () => `
-    ${renderSubTabs("Systems", ["Overview", "Habits", "Trackers", "Objectives", "Activity"], activeSystemsSection)}
+    ${renderSubTabs("Systems", ["Overview", "Habits", "Trackers", "Objectives", "Activity", "Daily Metrics"], activeSystemsSection)}
     ${renderSystemsSheet()}
     ${systemsAddMenuOpen ? renderSystemsAddMenu() : ""}
     <div class="systems-hero card">
       <div>
         <p class="eyebrow">Systems</p>
         <h2>Systems</h2>
-        <p class="muted-text">A connected Life OS for habits, trackers, goals, objectives, and activity logs.</p>
+        <p class="muted-text">A connected Life OS for habits, trackers, goals, objectives, activity logs, and daily metrics.</p>
         <div class="systems-architecture-info">
           <p class="muted-text small"><strong>Habits</strong> → Recurring behaviors with streaks and consistency</p>
           <p class="muted-text small"><strong>Trackers</strong> → Measure data over time with trends and aggregations</p>
           <p class="muted-text small"><strong>Goals</strong> → Desired outcomes using trackers/habits to measure progress</p>
           <p class="muted-text small"><strong>Objectives</strong> → One-time actionable tasks with due dates</p>
           <p class="muted-text small"><strong>Activity</strong> → Historical entries feeding trackers and analytics</p>
+          <p class="muted-text small"><strong>Daily Metrics</strong> → One entry per day for health/life stats</p>
         </div>
       </div>
       <button onclick="openSystemsAddMenu()">+ Add</button>
@@ -3480,10 +4925,33 @@ const pages = {
           <h3>Activity Log</h3>
           <p class="muted-text">Historical entries. What happened, when, and how much. Feeds trackers and analytics.</p>
         </div>
-        <button onclick="openSystemsForm('log')">Add Log</button>
+        <div class="button-row">
+          <button onclick="openSystemsForm('log')">Add Log</button>
+          <button class="secondary-btn" onclick="openBulkToolsModal()">Bulk Tools</button>
+        </div>
       </div>
       <div class="card">
+        <div class="filter-chips" id="activityFilterChips">
+          <button class="chip active" onclick="filterActivityLogs('All')">All</button>
+          <button class="chip" onclick="filterActivityLogs('Linked')">Linked</button>
+          <button class="chip" onclick="filterActivityLogs('Unlinked')">Unlinked</button>
+          <button class="chip" onclick="filterActivityLogs('Imported')">Imported</button>
+          <button class="chip" onclick="filterActivityLogs('Session')">Session</button>
+          <button class="chip" onclick="filterActivityLogs('Coke')">Coke</button>
+        </div>
         <div id="activityFeed"></div>
+      </div>
+    ` : ""}
+    ${activeSystemsSection === "Daily Metrics" ? `
+      <div class="section-toolbar card">
+        <div>
+          <h3>Daily Metrics</h3>
+          <p class="muted-text">One entry per day for health/life stats.</p>
+        </div>
+        <button onclick="openDailyMetricsForm()">Add Daily Metrics</button>
+      </div>
+      <div class="card">
+        <div id="dailyMetricsList"></div>
       </div>
     ` : ""}
     <button class="floating-add-btn systems-fab" onclick="openSystemsAddMenu()">+</button>
@@ -3781,10 +5249,44 @@ const pages = {
         <button onclick="exportAllZipDataAsJSON()">Export as JSON</button>
         <button onclick="exportAllZipDataAsCSV()">Export as CSV</button>
       </div>
-      <label class="file-upload-box">
-        <span>Import All Zip Data (JSON or CSV)</span>
-        <input id="allZipDataImportFile" type="file" accept=".json,.csv,application/json,text/csv" onchange="handleAllZipDataImport(event)">
-      </label>
+      <div class="form-group">
+        <label>Import Type</label>
+        <select id="allZipImportType" onchange="toggleAllZipImportMode()">
+          <option value="generic">Generic JSON/CSV (Master Log Format)</option>
+          <option value="sessions_json">Sessions JSON</option>
+          <option value="daily_metrics_json">Daily Metrics JSON</option>
+          <option value="daily_metrics_csv">Daily Metrics CSV</option>
+          <option value="inbox_csv">Inbox CSV (Objectives)</option>
+          <option value="calendar_ics">Calendar ICS</option>
+          <option value="session_csv">Session CSV (Google Sheets)</option>
+          <option value="weight">Weight Log CSV</option>
+          <option value="buy">Purchase Log CSV</option>
+          <option value="social">Social Hangouts CSV</option>
+        </select>
+      </div>
+      <div id="allZipImportFileMode">
+        <label class="file-upload-box">
+          <span>Import All Zip Data (JSON, CSV, or ICS)</span>
+          <input id="allZipDataImportFile" type="file" accept=".json,.csv,.ics,application/json,text/csv,text/calendar" onchange="handleAllZipDataImport(event)">
+        </label>
+      </div>
+      <div id="allZipImportPasteMode" class="hidden">
+        <div class="import-mode-grid">
+          <button onclick="showAllZipImportMode('file')">Upload JSON file</button>
+          <button class="secondary-btn" onclick="showAllZipImportMode('paste')">Paste JSON manually</button>
+        </div>
+        <div id="allZipImportFileSubMode">
+          <label class="file-upload-box">
+            <span>Choose a JSON file</span>
+            <input id="allZipImportJsonFile" type="file" accept="application/json,.json" onchange="handleAllZipImportFile(event)">
+          </label>
+        </div>
+        <div id="allZipImportPasteSubMode" class="hidden">
+          <textarea id="allZipImportPasteData" placeholder="Paste JSON or CSV data here..." rows="5"></textarea>
+          <button onclick="handleAllZipDataPaste()">Preview Import</button>
+        </div>
+        <div id="allZipImportPreview" class="import-preview"></div>
+      </div>
     </div>
             <div class="card social-import-card">
       <h3>Social Data Import</h3>
@@ -3954,6 +5456,7 @@ function renderSettings() {
   populateAllZipDataDropdowns();
   populateGoalProgressDropdown();
   renderOptionsLists();
+  bindManageOptionsEvents();
 }
 
 function toggleManageOptions() {
@@ -3966,6 +5469,62 @@ function toggleManageOptions() {
   }
   if (arrow) {
     arrow.textContent = manageOptionsOpen ? "▲" : "▼";
+  }
+}
+
+// Bind delegated event listeners for Manage Options Edit/Delete buttons
+function bindManageOptionsEvents() {
+  const optionsList = document.getElementById("optionsList");
+  if (!optionsList) return;
+  
+  // Remove existing listener to avoid duplicates
+  optionsList.removeEventListener("click", handleOptionsListClick);
+  optionsList.addEventListener("click", handleOptionsListClick);
+}
+
+// Handle clicks on Edit/Delete buttons using event delegation
+function handleOptionsListClick(event) {
+  const target = event.target;
+  
+  // Handle Edit button click
+  if (target.tagName === "BUTTON" && target.textContent.trim() === "Edit") {
+    const row = target.closest(".option-row");
+    if (row) {
+      const option = row.dataset.option;
+      if (option) {
+        startEditOption(option);
+      }
+    }
+  }
+  
+  // Handle Delete button click
+  if (target.tagName === "BUTTON" && target.classList.contains("delete-option-btn")) {
+    const row = target.closest(".option-row");
+    if (row) {
+      const option = row.dataset.option;
+      if (option) {
+        deleteOptionFromManager(option);
+      }
+    }
+  }
+  
+  // Handle Save button in edit mode
+  if (target.tagName === "BUTTON" && target.textContent.trim() === "Save") {
+    const editRow = target.closest(".option-row-edit");
+    if (editRow) {
+      const row = editRow.closest(".option-row");
+      if (row) {
+        const option = row.dataset.option;
+        if (option) {
+          saveEditOption(option);
+        }
+      }
+    }
+  }
+  
+  // Handle Cancel button in edit mode
+  if (target.tagName === "BUTTON" && target.classList.contains("secondary-btn") && target.textContent.trim() === "Cancel") {
+    renderSelectedOptionGroup();
   }
 }
 
@@ -7463,11 +9022,29 @@ function renderLogFormFields() {
       ${renderUnitComboInput("logUnit")}
     </div>
     ${renderSharedUnitDatalist()}
-    <input id="logDate" type="date" placeholder="Date">
+
+    <p class="form-section-label">Time Fields</p>
+    <input id="logDate" type="date" placeholder="Date" onchange="calculateLogDuration()">
+    <div class="habit-meta-row">
+      <div>
+        <label class="muted-text small">Start Time</label>
+        <input id="logStartTime" type="time" onchange="calculateLogDuration()">
+      </div>
+      <div>
+        <label class="muted-text small">End Date (optional)</label>
+        <input id="logEndDate" type="date" placeholder="Same as date" onchange="calculateLogDuration()">
+      </div>
+      <div>
+        <label class="muted-text small">End Time</label>
+        <input id="logEndTime" type="time" onchange="calculateLogDuration()">
+      </div>
+    </div>
+    <div id="logDurationDisplay" class="muted-text small" style="margin-bottom: 12px;"></div>
+
     <textarea id="logNotes" placeholder="Notes"></textarea>
     <input id="logTitle" type="hidden">
     <input id="logType" type="hidden">
-    
+
     <details class="advanced-options link-options">
       <summary>Advanced Links</summary>
       <div id="logLinkedItemSelectWrap" style="display:none"></div>
@@ -7479,10 +9056,358 @@ function renderLogFormFields() {
         `).join("")}
       </select>
     </details>
-    
+
     <button onclick="saveSystemLog()">${editingLogIndex === null ? "Save Log" : "Update Log"}</button>
     <button class="secondary-btn" onclick="closeSystemsForm()">Cancel</button>
   `;
+}
+
+// Daily Metrics
+let editingDailyMetricsIndex = null;
+
+function openDailyMetricsForm(index = null) {
+  editingDailyMetricsIndex = index;
+  const modal = document.createElement('div');
+  modal.id = 'dailyMetricsModal';
+  modal.className = 'modal-backdrop';
+  modal.innerHTML = `
+    <div class="planner-sheet systems-sheet" role="dialog" aria-modal="true">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <h3>${index === null ? "Add Daily Metrics" : "Edit Daily Metrics"}</h3>
+        <button class="icon-btn" onclick="closeDailyMetricsForm()">x</button>
+      </div>
+      ${renderDailyMetricsFormFields()}
+    </div>
+  `;
+  document.body.appendChild(modal);
+  if (index !== null) fillDailyMetricsForm();
+}
+
+function closeDailyMetricsForm() {
+  const modal = document.getElementById('dailyMetricsModal');
+  if (modal) modal.remove();
+  editingDailyMetricsIndex = null;
+}
+
+function renderDailyMetricsFormFields() {
+  const metrics = editingDailyMetricsIndex !== null ? systemsData.dailyMetrics[editingDailyMetricsIndex] : null;
+  const date = metrics?.date || getTodayISO();
+
+  return `
+    <p class="form-section-label">Date</p>
+    <input id="dmDate" type="date" value="${date}">
+
+    <p class="form-section-label">Sleep</p>
+    <div class="habit-meta-row">
+      <div>
+        <label class="muted-text small">Bedtime</label>
+        <input id="dmBedtime" type="time" value="${metrics?.bedtime || ''}" onchange="calculateDailyMetricsDurations()">
+      </div>
+      <div>
+        <label class="muted-text small">Wake-Up</label>
+        <input id="dmWakeTime" type="time" value="${metrics?.wakeTime || ''}" onchange="calculateDailyMetricsDurations()">
+      </div>
+    </div>
+    <div id="dmSleepDuration" class="muted-text small" style="margin-bottom: 12px;"></div>
+
+    <div class="habit-meta-row">
+      <div>
+        <label class="muted-text small">Nap Start</label>
+        <input id="dmNapStart" type="time" value="${metrics?.napStart || ''}" onchange="calculateDailyMetricsDurations()">
+      </div>
+      <div>
+        <label class="muted-text small">Nap End</label>
+        <input id="dmNapEnd" type="time" value="${metrics?.napEnd || ''}" onchange="calculateDailyMetricsDurations()">
+      </div>
+    </div>
+    <div id="dmNapDuration" class="muted-text small" style="margin-bottom: 12px;"></div>
+
+    <p class="form-section-label">Time Tracking</p>
+    <div class="habit-meta-row">
+      <div>
+        <label class="muted-text small">Time Awake (min)</label>
+        <input id="dmTimeAwake" type="number" value="${metrics?.timeAwakeMinutes || ''}">
+      </div>
+      <div>
+        <label class="muted-text small">Last Use → Bed Gap (min)</label>
+        <input id="dmUseToBedGap" type="number" value="${metrics?.lastUseToBedGapMinutes || ''}">
+      </div>
+    </div>
+
+    <p class="form-section-label">Screen & Social</p>
+    <div class="habit-meta-row">
+      <div>
+        <label class="muted-text small">Screen Time (min)</label>
+        <input id="dmScreenTime" type="number" value="${metrics?.screenTimeMinutes || ''}" onchange="calculateSocialPercent()">
+      </div>
+      <div>
+        <label class="muted-text small">Social Time (min)</label>
+        <input id="dmSocialTime" type="number" value="${metrics?.socialTimeMinutes || ''}" onchange="calculateSocialPercent()">
+      </div>
+    </div>
+    <div id="dmSocialPercent" class="muted-text small" style="margin-bottom: 12px;"></div>
+
+    <p class="form-section-label">Health</p>
+    <div class="habit-meta-row">
+      <div>
+        <label class="muted-text small">Weight (lb)</label>
+        <input id="dmWeight" type="number" value="${metrics?.weightLb || ''}">
+      </div>
+      <div>
+        <label class="muted-text small">Calories</label>
+        <input id="dmCalories" type="number" value="${metrics?.calories || ''}">
+      </div>
+      <div>
+        <label class="muted-text small">Water (oz)</label>
+        <input id="dmWater" type="number" value="${metrics?.waterOz || ''}">
+      </div>
+    </div>
+    <div class="habit-meta-row">
+      <div>
+        <label class="muted-text small">Mood</label>
+        <input id="dmMood" value="${metrics?.mood || ''}">
+      </div>
+      <div>
+        <label class="muted-text small">Energy</label>
+        <input id="dmEnergy" value="${metrics?.energy || ''}">
+      </div>
+    </div>
+
+    <p class="form-section-label">Other</p>
+    <label class="muted-text small">
+      <input type="checkbox" id="dmUseDay" ${metrics?.useDay ? 'checked' : ''}>
+      Use Day
+    </label>
+    <textarea id="dmNotes" placeholder="Notes">${metrics?.notes || ''}</textarea>
+
+    <div class="button-row">
+      <button onclick="saveDailyMetrics()">${editingDailyMetricsIndex === null ? "Save" : "Update"}</button>
+      <button class="secondary-btn" onclick="closeDailyMetricsForm()">Cancel</button>
+    </div>
+  `;
+}
+
+function calculateDailyMetricsDurations() {
+  const bedtime = document.getElementById('dmBedtime')?.value || '';
+  const wakeTime = document.getElementById('dmWakeTime')?.value || '';
+  const napStart = document.getElementById('dmNapStart')?.value || '';
+  const napEnd = document.getElementById('dmNapEnd')?.value || '';
+
+  // Calculate sleep duration
+  if (bedtime && wakeTime) {
+    const bed = new Date(`2000-01-01T${bedtime}`);
+    const wake = new Date(`2000-01-01T${wakeTime}`);
+    if (wake <= bed) wake.setDate(wake.getDate() + 1);
+    const diffMinutes = Math.floor((wake - bed) / 60000);
+    const hours = Math.floor(diffMinutes / 60);
+    const minutes = diffMinutes % 60;
+    document.getElementById('dmSleepDuration').textContent = `Sleep Duration: ${hours}h ${minutes}m (${diffMinutes}m)`;
+  } else {
+    document.getElementById('dmSleepDuration').textContent = '';
+  }
+
+  // Calculate nap duration
+  if (napStart && napEnd) {
+    const start = new Date(`2000-01-01T${napStart}`);
+    const end = new Date(`2000-01-01T${napEnd}`);
+    if (end <= start) end.setDate(end.getDate() + 1);
+    const diffMinutes = Math.floor((end - start) / 60000);
+    const hours = Math.floor(diffMinutes / 60);
+    const minutes = diffMinutes % 60;
+    document.getElementById('dmNapDuration').textContent = `Nap Duration: ${hours}h ${minutes}m (${diffMinutes}m)`;
+  } else {
+    document.getElementById('dmNapDuration').textContent = '';
+  }
+}
+
+function calculateSocialPercent() {
+  const screenTime = parseInt(document.getElementById('dmScreenTime')?.value) || 0;
+  const socialTime = parseInt(document.getElementById('dmSocialTime')?.value) || 0;
+  const percent = screenTime > 0 ? ((socialTime / screenTime) * 100).toFixed(1) : 0;
+  document.getElementById('dmSocialPercent').textContent = `Social %: ${percent}%`;
+}
+
+function fillDailyMetricsForm() {
+  if (editingDailyMetricsIndex === null) return;
+  const metrics = systemsData.dailyMetrics[editingDailyMetricsIndex];
+  if (!metrics) return;
+
+  calculateDailyMetricsDurations();
+  calculateSocialPercent();
+}
+
+function saveDailyMetrics() {
+  const date = document.getElementById('dmDate').value;
+  if (!date) {
+    alert('Please enter a date.');
+    return;
+  }
+
+  const bedtime = document.getElementById('dmBedtime')?.value || '';
+  const wakeTime = document.getElementById('dmWakeTime')?.value || '';
+  const napStart = document.getElementById('dmNapStart')?.value || '';
+  const napEnd = document.getElementById('dmNapEnd')?.value || '';
+
+  let sleepDurationMinutes = null;
+  if (bedtime && wakeTime) {
+    const bed = new Date(`2000-01-01T${bedtime}`);
+    const wake = new Date(`2000-01-01T${wakeTime}`);
+    if (wake <= bed) wake.setDate(wake.getDate() + 1);
+    sleepDurationMinutes = Math.floor((wake - bed) / 60000);
+  }
+
+  let napDurationMinutes = null;
+  if (napStart && napEnd) {
+    const start = new Date(`2000-01-01T${napStart}`);
+    const end = new Date(`2000-01-01T${napEnd}`);
+    if (end <= start) end.setDate(end.getDate() + 1);
+    napDurationMinutes = Math.floor((end - start) / 60000);
+  }
+
+  const screenTimeMinutes = parseInt(document.getElementById('dmScreenTime')?.value) || 0;
+  const socialTimeMinutes = parseInt(document.getElementById('dmSocialTime')?.value) || 0;
+  const socialPercent = screenTimeMinutes > 0 ? ((socialTimeMinutes / screenTimeMinutes) * 100).toFixed(1) : 0;
+
+  const payload = {
+    id: `daily-metrics-${date}`,
+    date,
+    bedtime,
+    wakeTime,
+    napStart,
+    napEnd,
+    napDurationMinutes: napDurationMinutes || 0,
+    sleepDurationMinutes,
+    timeAwakeMinutes: parseInt(document.getElementById('dmTimeAwake')?.value) || 0,
+    lastUseToBedGapMinutes: parseInt(document.getElementById('dmUseToBedGap')?.value) || 0,
+    screenTimeMinutes,
+    socialTimeMinutes,
+    socialPercent: parseFloat(socialPercent),
+    weightLb: document.getElementById('dmWeight')?.value || '',
+    calories: document.getElementById('dmCalories')?.value || '',
+    waterOz: document.getElementById('dmWater')?.value || '',
+    mood: document.getElementById('dmMood')?.value || '',
+    energy: document.getElementById('dmEnergy')?.value || '',
+    notes: document.getElementById('dmNotes')?.value || '',
+    useDay: document.getElementById('dmUseDay')?.checked || false,
+    createdAt: editingDailyMetricsIndex !== null ? systemsData.dailyMetrics[editingDailyMetricsIndex].createdAt : new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  if (editingDailyMetricsIndex !== null) {
+    systemsData.dailyMetrics[editingDailyMetricsIndex] = payload;
+  } else {
+    const existingIndex = systemsData.dailyMetrics.findIndex(m => m.date === date);
+    if (existingIndex !== -1) {
+      systemsData.dailyMetrics[existingIndex] = payload;
+    } else {
+      systemsData.dailyMetrics.push(payload);
+    }
+  }
+
+  saveSystemsData();
+  closeDailyMetricsForm();
+  renderDailyMetricsList();
+}
+
+function deleteDailyMetrics(index) {
+  if (!confirm('Delete this daily metrics entry?')) return;
+  systemsData.dailyMetrics.splice(index, 1);
+  saveSystemsData();
+  renderDailyMetricsList();
+}
+
+function renderDailyMetricsList() {
+  const box = document.getElementById("dailyMetricsList");
+  if (!box) return;
+
+  const metrics = [...systemsData.dailyMetrics].sort((a, b) => b.date.localeCompare(a.date));
+
+  if (!metrics.length) {
+    box.innerHTML = `<div class="empty-state small"><p>No daily metrics yet.</p></div>`;
+    return;
+  }
+
+  box.innerHTML = `
+    <div class="daily-metrics-list">
+      ${metrics.map((m, index) => {
+        const masterIndex = systemsData.dailyMetrics.findIndex(item => item.id === m.id);
+        return `
+          <div class="daily-metrics-card">
+            <div class="dm-card-header">
+              <strong>${escapeHTML(m.date)}</strong>
+              <div class="dm-card-actions">
+                <button class="icon-btn" onclick="openDailyMetricsForm(${masterIndex})" title="Edit">✎</button>
+                <button class="icon-btn danger-btn" onclick="deleteDailyMetrics(${masterIndex})" title="Delete">🗑</button>
+              </div>
+            </div>
+            <div class="dm-card-body">
+              <div class="dm-section">
+                <strong>Sleep</strong>
+                <div>Bedtime: ${escapeHTML(m.bedtime || '-')}</div>
+                <div>Wake: ${escapeHTML(m.wakeTime || '-')}</div>
+                <div>Sleep Duration: ${m.sleepDurationMinutes ? formatDuration(m.sleepDurationMinutes) : '-'}</div>
+                ${m.napStart ? `<div>Nap: ${escapeHTML(m.napStart)} → ${escapeHTML(m.napEnd)} (${formatDuration(m.napDurationMinutes)})</div>` : ''}
+              </div>
+              <div class="dm-section">
+                <strong>Screen & Social</strong>
+                <div>Screen Time: ${formatDuration(m.screenTimeMinutes)}</div>
+                <div>Social Time: ${formatDuration(m.socialTimeMinutes)}</div>
+                <div>Social %: ${m.socialPercent}%</div>
+              </div>
+              <div class="dm-section">
+                <strong>Health</strong>
+                <div>Weight: ${escapeHTML(m.weightLb || '-')} lb</div>
+                <div>Calories: ${escapeHTML(m.calories || '-')}</div>
+                <div>Water: ${escapeHTML(m.waterOz || '-')} oz</div>
+                <div>Mood: ${escapeHTML(m.mood || '-')}</div>
+                <div>Energy: ${escapeHTML(m.energy || '-')}</div>
+              </div>
+              ${m.useDay ? '<div class="dm-use-day">Use Day ✓</div>' : ''}
+              ${m.notes ? `<div class="dm-notes">${escapeHTML(m.notes)}</div>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function formatDuration(minutes) {
+  if (!minutes) return '-';
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${hours}h ${mins}m`;
+}
+
+function calculateLogDuration() {
+  const startTime = document.getElementById('logStartTime').value;
+  const endTime = document.getElementById('logEndTime').value;
+  const date = document.getElementById('logDate').value;
+  const endDate = document.getElementById('logEndDate').value || date;
+  const display = document.getElementById('logDurationDisplay');
+
+  if (!startTime || !endTime || !date) {
+    display.textContent = '';
+    return;
+  }
+
+  const startDateTime = new Date(`${date}T${startTime}`);
+  const endDateTime = new Date(`${endDate}T${endTime}`);
+
+  if (endDateTime <= startDateTime) {
+    // Assume end is next day if end time is earlier than start time
+    endDateTime.setDate(endDateTime.getDate() + 1);
+  }
+
+  const diffMs = endDateTime - startDateTime;
+  const diffMinutes = Math.floor(diffMs / 60000);
+  const diffHours = (diffMinutes / 60).toFixed(2);
+
+  const hours = Math.floor(diffMinutes / 60);
+  const minutes = diffMinutes % 60;
+
+  display.textContent = `Duration: ${hours}h ${minutes}m (${diffMinutes}m total)`;
 }
 
 // Milestone helper functions
@@ -7658,10 +9583,9 @@ function renderTrackerFormFields() {
     ${renderSharedUnitDatalist()}
     <div class="habit-meta-row">
       <input id="trackerStartValue" type="number" step="any" placeholder="Start value">
-      <input id="trackerCurrentValue" type="number" step="any" placeholder="Current value">
+      <input id="trackerTargetValue" type="number" step="any" placeholder="Target value (optional)">
     </div>
     <div class="habit-meta-row">
-      <input id="trackerTargetValue" type="number" step="any" placeholder="Target value (optional)">
       <select id="trackerDirection">
         <option value="increase">Increase toward target</option>
         <option value="decrease">Decrease / taper toward target</option>
@@ -8175,6 +10099,7 @@ function renderSystems() {
   renderSystemsObjectives();
   renderActivityFeed();
   renderHabitsList();
+  renderDailyMetricsList();
   renderTrackersSummaryCards();
   renderTrackersUnifiedList();
   fillDefaultLogDate();
@@ -8652,6 +10577,28 @@ function saveSystemLog() {
   const date = document.getElementById("logDate").value || getTodayISO();
   const linkedPlannerBlockId = document.getElementById("logLinkedPlannerBlockId")?.value || "";
   const linkedBlock = linkedPlannerBlockId ? scheduleData.blocks.find(block => block.id === linkedPlannerBlockId) : null;
+
+  // Time fields
+  const startTime = document.getElementById("logStartTime")?.value || "";
+  const endTime = document.getElementById("logEndTime")?.value || "";
+  const endDate = document.getElementById("logEndDate")?.value || date;
+
+  // Calculate duration
+  let durationMinutes = null;
+  let durationHours = null;
+  if (startTime && endTime && date) {
+    const startDateTime = new Date(`${date}T${startTime}`);
+    const endDateTime = new Date(`${endDate}T${endTime}`);
+
+    if (endDateTime <= startDateTime) {
+      endDateTime.setDate(endDateTime.getDate() + 1);
+    }
+
+    const diffMs = endDateTime - startDateTime;
+    durationMinutes = Math.floor(diffMs / 60000);
+    durationHours = (durationMinutes / 60).toFixed(2);
+  }
+
   if (!linkedItemId || !value) {
     alert("Choose a tracker and enter an amount.");
     return;
@@ -8665,6 +10612,11 @@ function saveSystemLog() {
     value,
     unit,
     date,
+    startTime,
+    endDate: endDate !== date ? endDate : "",
+    endTime,
+    durationMinutes,
+    durationHours,
     notes: document.getElementById("logNotes").value.trim(),
     linkedItemType: "tracker",
     linkedHabitId: tracker?.linkedHabitId || "",
@@ -9141,6 +11093,597 @@ function recalcAllTrackerCurrentsFromLogs() {
   systemsData.trackers.forEach(tracker => recalcTrackerCurrentFromLogs(tracker, anchor));
 }
 
+function recalculateTrackerFromLogs(trackerId) {
+  const tracker = systemsData.trackers.find(t => t.id === trackerId);
+  if (!tracker) return;
+
+  const logs = getSortedLogsForTracker(trackerId);
+  const numericLogs = logs.map(l => getLogNumber(l)).filter(v => !isNaN(v));
+
+  if (numericLogs.length === 0) {
+    tracker.currentValue = tracker.startValue || "0";
+  } else if (tracker.logValueMode === "absolute") {
+    // Use latest log value
+    tracker.currentValue = String(numericLogs[numericLogs.length - 1]);
+  } else {
+    // Default: increment mode - sum all values
+    const sum = numericLogs.reduce((a, b) => a + b, 0);
+    const start = Number(tracker.startValue) || 0;
+    tracker.currentValue = String(start + sum);
+  }
+
+  saveSystemsData();
+}
+
+function backfillLogTimeFields() {
+  let updatedCount = 0;
+
+  // Find logs with missing time fields that are session/Coke related
+  systemsData.logs.forEach(log => {
+    if (!log.startTime && !log.endTime && log.unit === 'g' && log.logSource === 'import') {
+      // Try to find matching session in allZipData
+      const matchingSession = allZipData.find(session => {
+        return session.date === log.date &&
+               session.amount == log.value &&
+               session.unit === 'g' &&
+               session.category === 'Health' &&
+               session.type === 'Session';
+      });
+
+      if (matchingSession && matchingSession.startTime) {
+        log.startTime = matchingSession.startTime || '';
+        log.endDate = matchingSession.endDate || matchingSession.date || '';
+        log.endTime = matchingSession.endTime || '';
+        log.durationMinutes = matchingSession.durationMinutes || 0;
+        log.durationHours = (matchingSession.durationMinutes || 0) / 60;
+        log.updatedAt = new Date().toISOString();
+        updatedCount++;
+      }
+    }
+  });
+
+  if (updatedCount > 0) {
+    saveSystemsData();
+    console.log(`[BACKFILL] Updated ${updatedCount} logs with time fields`);
+  }
+
+  return updatedCount;
+}
+
+function getCokeTrackerInsights() {
+  // Find Coke tracker
+  const cokeTracker = systemsData.trackers.find(t =>
+    t.name.toLowerCase() === 'coke' && t.unit === 'g'
+  ) || systemsData.trackers.find(t =>
+    t.name.toLowerCase() === 'session' && t.category === 'Taper' && t.unit === 'g'
+  );
+
+  if (!cokeTracker) {
+    return null;
+  }
+
+  // Find logs linked to Coke tracker
+  const cokeLogs = systemsData.logs.filter(log => {
+    return log.linkedTrackerId === cokeTracker.id ||
+           log.linkedItemType === 'tracker' && log.linkedTrackerId === cokeTracker.id ||
+           (log.title && log.title.toLowerCase() === 'coke' && log.unit === 'g') ||
+           (log.unit === 'g' && (log.type === 'Taper' || log.category === 'Health' || log.category === 'Taper'));
+  });
+
+  if (cokeLogs.length === 0) {
+    return null;
+  }
+
+  const insights = {
+    monthly: {},
+    weekly: {},
+    sessions: {},
+    timing: {},
+    breaks: {},
+    trend: {},
+    warnings: [],
+    suggestions: []
+  };
+
+  const today = new Date();
+  const currentMonth = today.getMonth();
+  const currentYear = today.getFullYear();
+  const currentWeekStart = getWeekStart(today);
+  const lastWeekStart = new Date(currentWeekStart);
+  lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+
+  // Sort logs by date and start time
+  const sortedLogs = [...cokeLogs].sort((a, b) => {
+    const dateA = new Date(a.date + (a.startTime ? 'T' + a.startTime : ''));
+    const dateB = new Date(b.date + (b.startTime ? 'T' + b.startTime : ''));
+    return dateA - dateB;
+  });
+
+  // 1. Monthly total
+  const thisMonthLogs = cokeLogs.filter(log => {
+    const logDate = new Date(log.date);
+    return logDate.getMonth() === currentMonth && logDate.getFullYear() === currentYear;
+  });
+
+  const thisMonthTotal = thisMonthLogs.reduce((sum, log) => sum + (parseFloat(log.value) || 0), 0);
+  const monthlyTarget = parseFloat(cokeTracker.targetValue) || 0;
+  const monthlyOverUnder = thisMonthTotal - monthlyTarget;
+  const monthlyPercent = monthlyTarget > 0 ? (thisMonthTotal / monthlyTarget) * 100 : 0;
+
+  insights.monthly = {
+    total: thisMonthTotal,
+    target: monthlyTarget,
+    overUnder: monthlyOverUnder,
+    percent: monthlyPercent,
+    logCount: thisMonthLogs.length
+  };
+
+  // 2. Weekly total
+  const thisWeekLogs = cokeLogs.filter(log => {
+    const logDate = new Date(log.date);
+    return logDate >= currentWeekStart && logDate <= today;
+  });
+
+  const lastWeekLogs = cokeLogs.filter(log => {
+    const logDate = new Date(log.date);
+    return logDate >= lastWeekStart && logDate < currentWeekStart;
+  });
+
+  const thisWeekTotal = thisWeekLogs.reduce((sum, log) => sum + (parseFloat(log.value) || 0), 0);
+  const lastWeekTotal = lastWeekLogs.reduce((sum, log) => sum + (parseFloat(log.value) || 0), 0);
+  const thisWeekAvg = thisWeekLogs.length > 0 ? thisWeekTotal / thisWeekLogs.length : 0;
+  const weekChange = lastWeekTotal > 0 ? thisWeekTotal - lastWeekTotal : 0;
+  const weekChangePercent = lastWeekTotal > 0 ? ((thisWeekTotal - lastWeekTotal) / lastWeekTotal) * 100 : 0;
+
+  insights.weekly = {
+    total: thisWeekTotal,
+    average: thisWeekAvg,
+    logCount: thisWeekLogs.length,
+    lastWeekTotal: lastWeekTotal,
+    weekChange: weekChange,
+    weekChangePercent: weekChangePercent
+  };
+
+  // 3. Session stats
+  const sessionValues = cokeLogs.map(log => parseFloat(log.value) || 0).filter(v => v > 0);
+  const sessionDurations = cokeLogs.map(log => log.durationMinutes || 0).filter(d => d > 0);
+
+  insights.sessions = {
+    count: cokeLogs.length,
+    avgGrams: sessionValues.length > 0 ? sessionValues.reduce((a, b) => a + b, 0) / sessionValues.length : 0,
+    maxGrams: sessionValues.length > 0 ? Math.max(...sessionValues) : 0,
+    minGrams: sessionValues.length > 0 ? Math.min(...sessionValues) : 0,
+    avgDuration: sessionDurations.length > 0 ? sessionDurations.reduce((a, b) => a + b, 0) / sessionDurations.length : 0,
+    maxDuration: sessionDurations.length > 0 ? Math.max(...sessionDurations) : 0,
+    minDuration: sessionDurations.length > 0 ? Math.min(...sessionDurations) : 0,
+    avgGramsPerHour: sessionDurations.length > 0 && sessionValues.length > 0 ?
+      (sessionValues.reduce((a, b) => a + b, 0) / sessionDurations.reduce((a, b) => a + b, 0)) * 60 : 0
+  };
+
+  // 4. Timing patterns
+  const logsWithStartTime = cokeLogs.filter(log => log.startTime);
+  const startTimes = logsWithStartTime.map(log => {
+    const [hours, minutes] = log.startTime.split(':').map(Number);
+    return hours * 60 + minutes;
+  });
+
+  const timeRanges = { morning: 0, afternoon: 0, evening: 0, overnight: 0 };
+  logsWithStartTime.forEach(log => {
+    const [hours, minutes] = log.startTime.split(':').map(Number);
+    const timeInMinutes = hours * 60 + minutes;
+
+    if (timeInMinutes >= 300 && timeInMinutes < 720) {
+      timeRanges.morning++; // 5am-12pm
+    } else if (timeInMinutes >= 720 && timeInMinutes < 1020) {
+      timeRanges.afternoon++; // 12pm-5pm
+    } else if (timeInMinutes >= 1020 && timeInMinutes < 1320) {
+      timeRanges.evening++; // 5pm-10pm
+    } else {
+      timeRanges.overnight++; // 10pm-5am
+    }
+  });
+
+  const mostCommonRange = Object.entries(timeRanges).sort((a, b) => b[1] - a[1])[0];
+
+  const avgStartMinutes = startTimes.length > 0 ? startTimes.reduce((a, b) => a + b, 0) / startTimes.length : 0;
+  const avgStartHours = Math.floor(avgStartMinutes / 60);
+  const avgStartMins = Math.round(avgStartMinutes % 60);
+
+  const midnightCrossings = cokeLogs.filter(log => {
+    if (!log.startDate || !log.endDate) return false;
+    return log.startDate !== log.endDate;
+  }).length;
+
+  const endTimes = cokeLogs.filter(log => log.endTime).map(log => {
+    const [hours, minutes] = log.endTime.split(':').map(Number);
+    return hours * 60 + minutes;
+  });
+
+  const maxEndMinutes = endTimes.length > 0 ? Math.max(...endTimes) : 0;
+  const maxEndHours = Math.floor(maxEndMinutes / 60);
+  const maxEndMins = Math.round(maxEndMinutes % 60);
+
+  // Longest awake/use window (max duration)
+  const maxAwakeWindow = insights.sessions.maxDuration;
+
+  insights.timing = {
+    timeRanges,
+    mostCommonRange: mostCommonRange ? mostCommonRange[0] : null,
+    mostCommonRangeCount: mostCommonRange ? mostCommonRange[1] : 0,
+    avgStartTime: `${avgStartHours.toString().padStart(2, '0')}:${avgStartMins.toString().padStart(2, '0')}`,
+    midnightCrossings,
+    latestEndTime: `${maxEndHours.toString().padStart(2, '0')}:${maxEndMins.toString().padStart(2, '0')}`,
+    maxAwakeWindow
+  };
+
+  // 5. Breaks between sessions
+  const breaks = [];
+  for (let i = 1; i < sortedLogs.length; i++) {
+    const prevLog = sortedLogs[i - 1];
+    const currLog = sortedLogs[i];
+
+    let prevEnd = new Date(prevLog.date);
+    if (prevLog.endDate) {
+      prevEnd = new Date(prevLog.endDate);
+    }
+    if (prevLog.endTime) {
+      const [hours, minutes] = prevLog.endTime.split(':').map(Number);
+      prevEnd.setHours(hours, minutes, 0, 0);
+    }
+
+    let currStart = new Date(currLog.date);
+    if (currLog.startTime) {
+      const [hours, minutes] = currLog.startTime.split(':').map(Number);
+      currStart.setHours(hours, minutes, 0, 0);
+    }
+
+    const breakMinutes = (currStart - prevEnd) / (1000 * 60);
+    if (breakMinutes > 0) {
+      breaks.push(breakMinutes);
+    }
+  }
+
+  const avgBreak = breaks.length > 0 ? breaks.reduce((a, b) => a + b, 0) / breaks.length : 0;
+  const shortestBreak = breaks.length > 0 ? Math.min(...breaks) : 0;
+  const longestBreak = breaks.length > 0 ? Math.max(...breaks) : 0;
+  const currentBreak = breaks.length > 0 ? breaks[breaks.length - 1] : 0;
+
+  insights.breaks = {
+    avg: avgBreak,
+    shortest: shortestBreak,
+    longest: longestBreak,
+    current: currentBreak,
+    count: breaks.length
+  };
+
+  // 6. Trend stats
+  const sevenDaysAgo = new Date(today);
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+  const fourteenDaysAgo = new Date(today);
+  fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+
+  const thirtyDaysAgo = new Date(today);
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const last7DaysLogs = cokeLogs.filter(log => {
+    const logDate = new Date(log.date);
+    return logDate >= sevenDaysAgo && logDate <= today;
+  });
+
+  const prev7DaysLogs = cokeLogs.filter(log => {
+    const logDate = new Date(log.date);
+    return logDate >= fourteenDaysAgo && logDate < sevenDaysAgo;
+  });
+
+  const last30DaysLogs = cokeLogs.filter(log => {
+    const logDate = new Date(log.date);
+    return logDate >= thirtyDaysAgo && logDate <= today;
+  });
+
+  const last7DaysTotal = last7DaysLogs.reduce((sum, log) => sum + (parseFloat(log.value) || 0), 0);
+  const prev7DaysTotal = prev7DaysLogs.reduce((sum, log) => sum + (parseFloat(log.value) || 0), 0);
+  const trendPercentChange = prev7DaysTotal > 0 ? ((last7DaysTotal - prev7DaysTotal) / prev7DaysTotal) * 100 : 0;
+  const last30DaysTotal = last30DaysLogs.reduce((sum, log) => sum + (parseFloat(log.value) || 0), 0);
+
+  // Calculate use days and no-use days (last 30 days)
+  const useDaysSet = new Set(last30DaysLogs.map(log => log.date));
+  const useDaysCount = useDaysSet.size;
+  const noUseDaysCount = 30 - useDaysCount;
+
+  // Calculate current no-use streak
+  let currentNoUseStreak = 0;
+  const checkDate = new Date(today);
+  while (currentNoUseStreak < 365) {
+    const dateStr = checkDate.toISOString().split('T')[0];
+    if (!useDaysSet.has(dateStr)) {
+      currentNoUseStreak++;
+      checkDate.setDate(checkDate.getDate() - 1);
+    } else {
+      break;
+    }
+  }
+
+  // Calculate longest no-use streak
+  let longestNoUseStreak = 0;
+  let currentStreak = 0;
+  const allDates = [...new Set(cokeLogs.map(log => log.date))].sort();
+  const startDate = allDates.length > 0 ? new Date(allDates[0]) : new Date(today);
+  const endDate = new Date(today);
+
+  const checkDate2 = new Date(startDate);
+  while (checkDate2 <= endDate) {
+    const dateStr = checkDate2.toISOString().split('T')[0];
+    if (!useDaysSet.has(dateStr)) {
+      currentStreak++;
+      longestNoUseStreak = Math.max(longestNoUseStreak, currentStreak);
+    } else {
+      currentStreak = 0;
+    }
+    checkDate2.setDate(checkDate2.getDate() + 1);
+  }
+
+  insights.trend = {
+    last7DaysTotal,
+    prev7DaysTotal,
+    percentChange: trendPercentChange,
+    last30DaysTotal,
+    useDaysCount,
+    noUseDaysCount,
+    currentNoUseStreak,
+    longestNoUseStreak
+  };
+
+  // 7. Risk flags/warnings
+  if (thisMonthTotal > monthlyTarget && monthlyTarget > 0) {
+    insights.warnings.push(`Over monthly limit: ${thisMonthTotal.toFixed(1)}g > ${monthlyTarget}g`);
+  }
+
+  if (insights.sessions.maxDuration > 480) { // 8 hours
+    insights.warnings.push(`Long session detected: ${Math.round(insights.sessions.maxDuration / 60)}h`);
+  }
+
+  if (insights.sessions.maxGrams > 5) { // User-defined max per session
+    insights.warnings.push(`High amount session: ${insights.sessions.maxGrams.toFixed(1)}g`);
+  }
+
+  if (insights.sessions.avgGramsPerHour > 1) { // g/hour threshold
+    insights.warnings.push(`High rate: ${insights.sessions.avgGramsPerHour.toFixed(1)}g/hour`);
+  }
+
+  // Check for back-to-back sessions with break < 24 hours
+  for (let i = 1; i < sortedLogs.length; i++) {
+    const prevLog = sortedLogs[i - 1];
+    const currLog = sortedLogs[i];
+
+    let prevEnd = new Date(prevLog.date);
+    if (prevLog.endDate) {
+      prevEnd = new Date(prevLog.endDate);
+    }
+    if (prevLog.endTime) {
+      const [hours, minutes] = prevLog.endTime.split(':').map(Number);
+      prevEnd.setHours(hours, minutes, 0, 0);
+    }
+
+    let currStart = new Date(currLog.date);
+    if (currLog.startTime) {
+      const [hours, minutes] = currLog.startTime.split(':').map(Number);
+      currStart.setHours(hours, minutes, 0, 0);
+    }
+
+    const breakHours = (currStart - prevEnd) / (1000 * 60 * 60);
+    if (breakHours < 24 && breakHours > 0) {
+      insights.warnings.push(`Back-to-back sessions: ${breakHours.toFixed(1)}h break`);
+      break; // Only add once
+    }
+  }
+
+  // Check for sessions ending after 8 AM
+  const lateEndings = cokeLogs.filter(log => {
+    if (!log.endTime) return false;
+    const [hours, minutes] = log.endTime.split(':').map(Number);
+    return hours >= 8;
+  });
+
+  if (lateEndings.length > 0) {
+    insights.warnings.push(`${lateEndings.length} sessions ending after 8 AM`);
+  }
+
+  // 8. Suggestions
+  if (thisMonthTotal > monthlyTarget && monthlyTarget > 0) {
+    insights.suggestions.push("Pause logging additional use this month or lower next week target.");
+  }
+
+  if (insights.sessions.avgDuration > 360) { // 6 hours
+    insights.suggestions.push("Focus on ending sessions earlier.");
+  }
+
+  if (insights.timing.mostCommonRange === 'overnight' || insights.timing.mostCommonRange === 'evening') {
+    insights.suggestions.push("Set a night cutoff time.");
+  }
+
+  // Check if break duration is shrinking (compare last 3 breaks to average)
+  if (breaks.length >= 4) {
+    const recentBreaks = breaks.slice(-3);
+    const recentAvg = recentBreaks.reduce((a, b) => a + b, 0) / recentBreaks.length;
+    if (recentAvg < avgBreak * 0.8) {
+      insights.suggestions.push("Increase minimum break between sessions.");
+    }
+  }
+
+  if (currentNoUseStreak >= 3) {
+    insights.suggestions.push("Keep the no-use streak going!");
+  }
+
+  if (insights.trend.percentChange > 20) {
+    insights.suggestions.push("Usage is increasing - consider setting a lower weekly target.");
+  }
+
+  if (insights.trend.percentChange < -20) {
+    insights.suggestions.push("Great progress! Keep maintaining the reduction.");
+  }
+
+  return insights;
+}
+
+function getWeekStart(date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  return new Date(d.setDate(diff));
+}
+
+function showCokeInsights() {
+  const insights = getCokeTrackerInsights();
+  if (!insights) {
+    alert("No Coke tracker or logs found.");
+    return;
+  }
+
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Coke Tracker Insights</h2>
+        <button onclick="closeModal(this)" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="insights-container">
+          <div class="insights-section">
+            <h3>Monthly Total</h3>
+            <p><strong>${insights.monthly.total.toFixed(1)} g</strong> / ${insights.monthly.target} g</p>
+            <p>${insights.monthly.overUnder >= 0 ? 'Over' : 'Under'} by <strong>${Math.abs(insights.monthly.overUnder).toFixed(1)} g</strong></p>
+            <p>${insights.monthly.percent.toFixed(0)}% of monthly limit</p>
+            <p class="muted-text">${insights.monthly.logCount} sessions this month</p>
+          </div>
+
+          <div class="insights-section">
+            <h3>Weekly Total</h3>
+            <p><strong>${insights.weekly.total.toFixed(1)} g</strong> this week</p>
+            <p>Average <strong>${insights.weekly.average.toFixed(1)} g</strong> per session</p>
+            <p>${insights.weekly.lastWeekTotal > 0 ? (insights.weekly.weekChange >= 0 ? '+' : '') + insights.weekly.weekChange.toFixed(1) + ' g' : 'N/A'} vs last week</p>
+            <p class="muted-text">${insights.weekly.logCount} sessions this week</p>
+          </div>
+
+          <div class="insights-section">
+            <h3>Session Stats</h3>
+            <p><strong>${insights.sessions.count}</strong> total sessions</p>
+            <p>Average <strong>${insights.sessions.avgGrams.toFixed(1)} g</strong> per session</p>
+            <p>Largest: <strong>${insights.sessions.maxGrams.toFixed(1)} g</strong></p>
+            <p>Smallest: <strong>${insights.sessions.minGrams.toFixed(1)} g</strong></p>
+            <p>Average duration: <strong>${Math.round(insights.sessions.avgDuration)} min</strong></p>
+            <p>Longest: <strong>${Math.round(insights.sessions.maxDuration)} min</strong></p>
+            <p>Shortest: <strong>${Math.round(insights.sessions.minDuration)} min</strong></p>
+            <p>Average: <strong>${insights.sessions.avgGramsPerHour.toFixed(1)} g/hour</strong></p>
+          </div>
+
+          <div class="insights-section">
+            <h3>Timing Patterns</h3>
+            <p>Most common: <strong>${capitalizeFirst(insights.timing.mostCommonRange)}</strong> (${insights.timing.mostCommonRangeCount} sessions)</p>
+            <p>Average start time: <strong>${insights.timing.avgStartTime}</strong></p>
+            <p>Latest end time: <strong>${insights.timing.latestEndTime}</strong></p>
+            <p>Sessions crossing midnight: <strong>${insights.timing.midnightCrossings}</strong></p>
+            <p>Longest awake/use window: <strong>${Math.round(insights.timing.maxAwakeWindow)} min</strong></p>
+            <div class="time-range-bars">
+              <div class="time-range-bar">
+                <span>Morning (5am-12pm)</span>
+                <div class="bar-fill" style="width:${(insights.timing.timeRanges.morning / insights.sessions.count * 100) || 0}%"></div>
+                <span>${insights.timing.timeRanges.morning}</span>
+              </div>
+              <div class="time-range-bar">
+                <span>Afternoon (12pm-5pm)</span>
+                <div class="bar-fill" style="width:${(insights.timing.timeRanges.afternoon / insights.sessions.count * 100) || 0}%"></div>
+                <span>${insights.timing.timeRanges.afternoon}</span>
+              </div>
+              <div class="time-range-bar">
+                <span>Evening (5pm-10pm)</span>
+                <div class="bar-fill" style="width:${(insights.timing.timeRanges.evening / insights.sessions.count * 100) || 0}%"></div>
+                <span>${insights.timing.timeRanges.evening}</span>
+              </div>
+              <div class="time-range-bar">
+                <span>Overnight (10pm-5am)</span>
+                <div class="bar-fill" style="width:${(insights.timing.timeRanges.overnight / insights.sessions.count * 100) || 0}%"></div>
+                <span>${insights.timing.timeRanges.overnight}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="insights-section">
+            <h3>Breaks Between Sessions</h3>
+            <p>Average: <strong>${formatDuration(insights.breaks.avg)}</strong></p>
+            <p>Shortest: <strong>${formatDuration(insights.breaks.shortest)}</strong></p>
+            <p>Longest: <strong>${formatDuration(insights.breaks.longest)}</strong></p>
+            <p>Current: <strong>${formatDuration(insights.breaks.current)}</strong></p>
+            <p class="muted-text">${insights.breaks.count} breaks calculated</p>
+          </div>
+
+          <div class="insights-section">
+            <h3>Trend</h3>
+            <p>Last 7 days: <strong>${insights.trend.last7DaysTotal.toFixed(1)} g</strong></p>
+            <p>Previous 7 days: <strong>${insights.trend.prev7DaysTotal.toFixed(1)} g</strong></p>
+            <p>${insights.trend.percentChange >= 0 ? '+' : ''}${insights.trend.percentChange.toFixed(1)}% change</p>
+            <p>Last 30 days: <strong>${insights.trend.last30DaysTotal.toFixed(1)} g</strong></p>
+            <p>Use days: <strong>${insights.trend.useDaysCount}</strong> / No-use days: <strong>${insights.trend.noUseDaysCount}</strong></p>
+            <p>Current no-use streak: <strong>${insights.trend.currentNoUseStreak}</strong> days</p>
+            <p>Longest no-use streak: <strong>${insights.trend.longestNoUseStreak}</strong> days</p>
+          </div>
+
+          ${insights.warnings.length > 0 ? `
+          <div class="insights-section insights-warnings">
+            <h3>Warnings</h3>
+            ${insights.warnings.map(w => `<p class="warning-item">⚠️ ${w}</p>`).join('')}
+          </div>
+          ` : ''}
+
+          ${insights.suggestions.length > 0 ? `
+          <div class="insights-section insights-suggestions">
+            <h3>Suggestions</h3>
+            ${insights.suggestions.map(s => `<p class="suggestion-item">💡 ${s}</p>`).join('')}
+          </div>
+          ` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.style.display = 'flex';
+}
+
+function formatDuration(minutes) {
+  if (!minutes || minutes === 0) return 'N/A';
+  const hours = Math.floor(minutes / 60);
+  const mins = Math.round(minutes % 60);
+  if (hours > 0) {
+    return `${hours}h ${mins}m`;
+  }
+  return `${mins}m`;
+}
+
+function closeModal(btn) {
+  const modal = btn.closest('.modal-overlay');
+  if (modal) {
+    modal.style.display = 'none';
+    document.body.removeChild(modal);
+  }
+}
+
+function capitalizeFirst(str) {
+  if (!str) return '';
+  return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+// Auto-run backfill on page load
+function initBackfill() {
+  setTimeout(() => {
+    const updated = backfillLogTimeFields();
+    if (updated > 0) {
+      console.log(`[INIT] Backfilled ${updated} logs with time fields`);
+    }
+  }, 1000);
+}
+
 function syncLinkedItemsFromLog(log) {
   const numericValue = getLogNumber(log);
   const trackerId = getLogLinkedTrackerId(log);
@@ -9178,8 +11721,16 @@ function syncLinkedItemsFromLog(log) {
 }
 
 function deleteSystemLog(index) {
+  const log = systemsData.logs[index];
+  if (!log) return;
+
+  const trackerId = getLogLinkedTrackerId(log);
   systemsData.logs.splice(index, 1);
-  recalcAllTrackerCurrentsFromLogs();
+
+  if (trackerId) {
+    recalculateTrackerFromLogs(trackerId);
+  }
+
   saveSystemsData();
   renderSystems();
 }
@@ -9214,12 +11765,22 @@ function renderSystemsDashboard() {
   if (!box) return;
   const today = getTodayISO();
   const weekDates = getLastNDates(7);
-  
+
   const activeHabits = systemsData.habits.filter(habit => !habit.paused);
   const completedToday = activeHabits.filter(habit => habit.completions.includes(today)).length;
   const activeTrackers = systemsData.trackers.filter(t => !isTrackerComplete(t)).length;
   const overdueObjectives = systemsData.objectives.filter(obj => !isObjectiveDone(obj) && obj.dueDate && obj.dueDate < today).length;
   const logsThisWeek = systemsData.logs.filter(log => weekDates.includes(log.date)).length;
+
+  // Daily Metrics summary
+  const weekMetrics = systemsData.dailyMetrics.filter(m => weekDates.includes(m.date));
+  const avgSleep = weekMetrics.length > 0 ? weekMetrics.reduce((sum, m) => sum + (m.sleepDurationMinutes || 0), 0) / weekMetrics.length : 0;
+  const avgScreenTime = weekMetrics.length > 0 ? weekMetrics.reduce((sum, m) => sum + (m.screenTimeMinutes || 0), 0) / weekMetrics.length : 0;
+  const avgSocialTime = weekMetrics.length > 0 ? weekMetrics.reduce((sum, m) => sum + (m.socialTimeMinutes || 0), 0) / weekMetrics.length : 0;
+  const avgSocialPercent = weekMetrics.length > 0 ? weekMetrics.reduce((sum, m) => sum + (m.socialPercent || 0), 0) / weekMetrics.length : 0;
+  const latestWeight = systemsData.dailyMetrics.find(m => m.weightLb)?.weightLb || '-';
+  const useDaysThisWeek = weekMetrics.filter(m => m.useDay).length;
+  const lowSleepWarning = avgSleep < 240 ? '<div class="warning-text">⚠️ Low sleep this week</div>' : '';
   
   const buckets = getSystemBuckets();
   
@@ -9306,6 +11867,27 @@ function renderSystemsSummaryChips() {
       <span class="chip-value">${logsThisWeek}</span>
       <span class="chip-label">Logs this week</span>
     </div>
+    <div class="summary-chip">
+      <span class="chip-value">${formatDuration(Math.round(avgSleep))}</span>
+      <span class="chip-label">Avg sleep (7d)</span>
+    </div>
+    <div class="summary-chip">
+      <span class="chip-value">${formatDuration(Math.round(avgScreenTime))}</span>
+      <span class="chip-label">Avg screen time (7d)</span>
+    </div>
+    <div class="summary-chip">
+      <span class="chip-value">${formatDuration(Math.round(avgSocialTime))}</span>
+      <span class="chip-label">Avg social time (7d)</span>
+    </div>
+    <div class="summary-chip">
+      <span class="chip-value">${latestWeight}</span>
+      <span class="chip-label">Latest weight (lb)</span>
+    </div>
+    <div class="summary-chip">
+      <span class="chip-value">${useDaysThisWeek}</span>
+      <span class="chip-label">Use days this week</span>
+    </div>
+    ${lowSleepWarning}
   `;
 }
 
@@ -9433,19 +12015,18 @@ function getUnifiedActivityFeed(limit = 40) {
 function renderActivityFeed() {
   const box = document.getElementById("activityFeed");
   if (!box) return;
-  const events = getUnifiedActivityFeed();
+
   const isOverview = box.closest('.activity-feed-card') !== null;
-  
-  if (!events.length) {
-    box.innerHTML = `<div class="empty-state small"><p>No activity yet.</p><button onclick="openSystemsForm('log')">Add first log</button></div>`;
-    return;
-  }
-  
+
   if (isOverview) {
-    // Overview: limit to 8 items with date grouping
+    // Overview: show unified activity feed
+    const events = getUnifiedActivityFeed();
+    if (!events.length) {
+      box.innerHTML = `<div class="empty-state small"><p>No activity yet.</p><button onclick="openSystemsForm('log')">Add first log</button></div>`;
+      return;
+    }
+
     const limitedEvents = events.slice(0, 8);
-    const groupedEvents = groupEventsByDate(limitedEvents);
-    
     box.innerHTML = `
       <div class="activity-feed-list">
         ${limitedEvents.map(event => `
@@ -9462,20 +12043,537 @@ function renderActivityFeed() {
       <button class="secondary-btn" onclick="activeSystemsSection='Activity'; main.innerHTML=getPageHTML('Systems'); renderSystems();" style="width:100%;margin-top:12px">View all activity</button>
     `;
   } else {
-    // Activity tab: show all events
-    box.innerHTML = `<div class="activity-feed-list">${events.map(event => `
-      <div class="activity-feed-item">
-        <span class="activity-dot"></span>
-        <div>
-          <div class="activity-feed-head">
-            <strong>${escapeHTML(event.title)}</strong>
-            <span>${escapeHTML(event.date)} ${escapeHTML(event.time || "")}</span>
-          </div>
-          <p>${escapeHTML(event.type)}${event.detail ? ` • ${escapeHTML(event.detail)}` : ""}</p>
-          ${renderConnectionBadges(event.links)}
-        </div>
+    // Activity tab: show logs as cards with edit/link/delete buttons
+    renderLogsList();
+  }
+}
+
+let activityLogFilter = 'All';
+let linkingLogIndex = null;
+
+function filterActivityLogs(filter) {
+  activityLogFilter = filter;
+  // Update chip active states
+  const chips = document.querySelectorAll('#activityFilterChips .chip');
+  chips.forEach(chip => {
+    chip.classList.toggle('active', chip.textContent === filter);
+  });
+  renderLogsList();
+}
+
+function openLinkTrackerModal(logIndex) {
+  linkingLogIndex = logIndex;
+  const modal = document.createElement('div');
+  modal.id = 'linkTrackerModal';
+  modal.className = 'modal-backdrop';
+  modal.innerHTML = `
+    <div class="planner-sheet systems-sheet" role="dialog" aria-modal="true">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <h3>Link Tracker</h3>
+        <button class="icon-btn" onclick="closeLinkTrackerModal()">x</button>
       </div>
-    `).join("")}</div>`;
+      <label class="muted-text small">Select a tracker to link this log to</label>
+      <select id="linkTrackerSelect">
+        <option value="">None (Unlink)</option>
+        ${systemsData.trackers.map(t => `<option value="${t.id}">${escapeHTML(t.name)} (${escapeHTML(t.unit || '')})</option>`).join('')}
+      </select>
+      <div class="button-row">
+        <button onclick="saveLogTrackerLink()">Save</button>
+        <button class="secondary-btn" onclick="closeLinkTrackerModal()">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  // Pre-select current tracker if linked
+  const log = systemsData.logs[logIndex];
+  const currentTrackerId = getLogLinkedTrackerId(log);
+  const select = document.getElementById('linkTrackerSelect');
+  if (select && currentTrackerId) {
+    select.value = currentTrackerId;
+  }
+}
+
+function closeLinkTrackerModal() {
+  const modal = document.getElementById('linkTrackerModal');
+  if (modal) modal.remove();
+  linkingLogIndex = null;
+}
+
+function saveLogTrackerLink() {
+  if (linkingLogIndex === null) return;
+
+  const log = systemsData.logs[linkingLogIndex];
+  const trackerId = document.getElementById('linkTrackerSelect').value;
+
+  const oldTrackerId = getLogLinkedTrackerId(log);
+
+  if (trackerId) {
+    const tracker = systemsData.trackers.find(t => t.id === trackerId);
+    if (tracker) {
+      log.linkedTrackerId = trackerId;
+      log.linkedItemType = 'tracker';
+      log.title = log.title || tracker.name;
+      log.type = log.type || tracker.category || tracker.type || 'Custom';
+      log.unit = log.unit || tracker.unit || '';
+    }
+  } else {
+    log.linkedTrackerId = '';
+    log.linkedItemType = '';
+  }
+
+  saveSystemsData();
+
+  // Recalculate trackers
+  if (oldTrackerId) recalculateTrackerFromLogs(oldTrackerId);
+  if (trackerId) recalculateTrackerFromLogs(trackerId);
+
+  closeLinkTrackerModal();
+  renderLogsList();
+}
+
+function openBulkToolsModal() {
+  const modal = document.createElement('div');
+  modal.id = 'bulkToolsModal';
+  modal.className = 'modal-backdrop';
+  modal.innerHTML = `
+    <div class="planner-sheet systems-sheet" role="dialog" aria-modal="true">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <h3>Bulk Tools</h3>
+        <button class="icon-btn" onclick="closeBulkToolsModal()">x</button>
+      </div>
+      <div class="bulk-tools-section">
+        <h4>Bulk Delete</h4>
+        <button class="secondary-btn" onclick="bulkDeleteLogs('session')">Delete all "Session" logs</button>
+        <button class="secondary-btn" onclick="bulkDeleteLogs('imported')">Delete all imported logs</button>
+        <button class="secondary-btn" onclick="bulkDeleteLogs('unlinked')">Delete all unlinked logs</button>
+      </div>
+      <div class="bulk-tools-section">
+        <h4>Bulk Link</h4>
+        <button class="secondary-btn" onclick="bulkLinkToCoke()">Link all Session/Coke logs to Coke tracker</button>
+      </div>
+      <div class="bulk-tools-section">
+        <h4>Duplicate Cleanup</h4>
+        <button class="secondary-btn" onclick="deleteDuplicateLogs()">Delete Duplicate Logs</button>
+        <button class="secondary-btn" onclick="deleteEmptyDuplicateTrackers()">Delete Empty Duplicate Trackers</button>
+      </div>
+      <div class="bulk-tools-section">
+        <h4>Cleanup</h4>
+        <button class="secondary-btn" onclick="cleanupEmptySessionTrackers()">Delete empty Session trackers</button>
+      </div>
+      <div class="button-row">
+        <button class="secondary-btn" onclick="closeBulkToolsModal()">Close</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function closeBulkToolsModal() {
+  const modal = document.getElementById('bulkToolsModal');
+  if (modal) modal.remove();
+}
+
+function bulkDeleteLogs(type) {
+  let count = 0;
+  const affectedTrackers = new Set();
+
+  if (type === 'session') {
+    systemsData.logs = systemsData.logs.filter(log => {
+      if (log.title === 'Session' || log.title === 'Coke') {
+        const trackerId = getLogLinkedTrackerId(log);
+        if (trackerId) affectedTrackers.add(trackerId);
+        count++;
+        return false;
+      }
+      return true;
+    });
+  } else if (type === 'imported') {
+    systemsData.logs = systemsData.logs.filter(log => {
+      if (log.logSource === 'import') {
+        const trackerId = getLogLinkedTrackerId(log);
+        if (trackerId) affectedTrackers.add(trackerId);
+        count++;
+        return false;
+      }
+      return true;
+    });
+  } else if (type === 'unlinked') {
+    systemsData.logs = systemsData.logs.filter(log => {
+      if (!getLogLinkedTrackerId(log)) {
+        count++;
+        return false;
+      }
+      return true;
+    });
+  }
+
+  // Recalculate affected trackers
+  affectedTrackers.forEach(trackerId => recalculateTrackerFromLogs(trackerId));
+
+  saveSystemsData();
+  alert(`Deleted ${count} log(s).`);
+  closeBulkToolsModal();
+  renderLogsList();
+}
+
+function bulkLinkToCoke() {
+  // Find Coke tracker
+  let cokeTracker = systemsData.trackers.find(t => t.name.toLowerCase() === 'coke' && t.unit === 'g');
+
+  if (!cokeTracker) {
+    alert('No Coke tracker found. Please create a Coke tracker first.');
+    return;
+  }
+
+  let count = 0;
+  const affectedTrackers = new Set();
+
+  systemsData.logs.forEach(log => {
+    if ((log.title === 'Session' || log.title === 'Coke' || log.logSource === 'import') && log.unit === 'g') {
+      const oldTrackerId = getLogLinkedTrackerId(log);
+      if (oldTrackerId) affectedTrackers.add(oldTrackerId);
+
+      log.linkedTrackerId = cokeTracker.id;
+      log.linkedItemType = 'tracker';
+      log.title = 'Coke';
+      log.type = 'Taper';
+      log.valueType = 'Taper';
+      log.unit = 'g';
+      count++;
+    }
+  });
+
+  // Recalculate affected trackers
+  affectedTrackers.forEach(trackerId => recalculateTrackerFromLogs(trackerId));
+  recalculateTrackerFromLogs(cokeTracker.id);
+
+  saveSystemsData();
+  alert(`Linked ${count} log(s) to Coke tracker.`);
+  closeBulkToolsModal();
+  renderLogsList();
+}
+
+function cleanupEmptySessionTrackers() {
+  let count = 0;
+
+  systemsData.trackers = systemsData.trackers.filter(tracker => {
+    if ((tracker.name === 'Session' || tracker.name === 'Coke') && tracker.unit === 'g') {
+      // Check if tracker has any linked logs
+      const hasLogs = systemsData.logs.some(log => getLogLinkedTrackerId(log) === tracker.id);
+      if (!hasLogs) {
+        count++;
+        return false;
+      }
+    }
+    return true;
+  });
+
+  saveSystemsData();
+  alert(`Deleted ${count} empty Session/Coke tracker(s).`);
+  closeBulkToolsModal();
+  renderSystems();
+}
+
+function normalizeLogForDuplicateCheck(log) {
+  // Normalize fields for duplicate detection
+  const date = log.date || '';
+  const normalizedDate = date ? date.split('T')[0] : '';
+
+  const title = (log.title || '').trim().toLowerCase();
+  const unit = (log.unit || '').trim().toLowerCase();
+  const value = String(log.value || log.amount || '');
+  const normalizedValue = value ? parseFloat(value).toString() : '';
+
+  const trackerId = getLogLinkedTrackerId(log) || '';
+
+  const startTime = (log.startTime || '').trim();
+  const endTime = (log.endTime || '').trim();
+  const notes = (log.notes || '').trim();
+
+  return {
+    date: normalizedDate,
+    title: title,
+    value: normalizedValue,
+    unit: unit,
+    trackerId: trackerId,
+    startTime: startTime,
+    endTime: endTime,
+    notes: notes
+  };
+}
+
+function findDuplicateLogs(logs) {
+  const groups = new Map();
+  const keyToLogs = new Map();
+
+  logs.forEach((log, index) => {
+    const normalized = normalizeLogForDuplicateCheck(log);
+    // Create a key from normalized fields
+    const key = JSON.stringify([
+      normalized.date,
+      normalized.title,
+      normalized.value,
+      normalized.unit,
+      normalized.trackerId,
+      normalized.startTime,
+      normalized.endTime,
+      normalized.notes
+    ]);
+
+    if (!keyToLogs.has(key)) {
+      keyToLogs.set(key, []);
+    }
+    keyToLogs.get(key).push({ log, index });
+  });
+
+  // Find groups with more than one log (duplicates)
+  const duplicateGroups = [];
+  keyToLogs.forEach((group, key) => {
+    if (group.length > 1) {
+      duplicateGroups.push(group);
+    }
+  });
+
+  return duplicateGroups;
+}
+
+function recalculateAllTrackerValuesFromLogs() {
+  const affectedTrackers = new Set();
+  systemsData.logs.forEach(log => {
+    const trackerId = getLogLinkedTrackerId(log);
+    if (trackerId) affectedTrackers.add(trackerId);
+  });
+
+  affectedTrackers.forEach(trackerId => recalculateTrackerFromLogs(trackerId));
+}
+
+function deleteDuplicateLogs() {
+  const duplicateGroups = findDuplicateLogs(systemsData.logs);
+
+  if (duplicateGroups.length === 0) {
+    alert('No duplicate logs found.');
+    return;
+  }
+
+  let toDelete = [];
+  let toKeep = [];
+
+  duplicateGroups.forEach(group => {
+    // Score each log to find the best one
+    const scored = group.map(item => {
+      const log = item.log;
+      let score = 0;
+
+      // Prefer logs with linkedTrackerId
+      if (getLogLinkedTrackerId(log)) score += 100;
+
+      // Prefer logs with source/logSource
+      if (log.logSource) score += 50;
+
+      // Prefer logs with notes
+      if (log.notes && log.notes.trim()) score += 30;
+
+      // Prefer newer updatedAt/createdAt
+      const updatedAt = new Date(log.updatedAt || log.createdAt || 0).getTime();
+      score += updatedAt / 1000000000; // Small weight for recency
+
+      return { log, index: item.index, score };
+    });
+
+    // Sort by score descending
+    scored.sort((a, b) => b.score - a.score);
+
+    // Keep the best, mark others for deletion
+    toKeep.push(scored[0]);
+    for (let i = 1; i < scored.length; i++) {
+      toDelete.push(scored[i]);
+    }
+  });
+
+  // Show preview
+  const previewModal = document.createElement('div');
+  previewModal.id = 'duplicateLogPreviewModal';
+  previewModal.className = 'modal-backdrop';
+  previewModal.innerHTML = `
+    <div class="planner-sheet systems-sheet" role="dialog" aria-modal="true">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <h3>Delete Duplicate Logs</h3>
+        <button class="icon-btn" onclick="document.getElementById('duplicateLogPreviewModal').remove()">x</button>
+      </div>
+      <div class="duplicate-preview">
+        <p><strong>Total logs:</strong> ${systemsData.logs.length}</p>
+        <p><strong>Duplicate groups found:</strong> ${duplicateGroups.length}</p>
+        <p><strong>Logs to delete:</strong> ${toDelete.length}</p>
+        <p><strong>Logs to keep:</strong> ${toKeep.length}</p>
+      </div>
+      <div class="button-row">
+        <button onclick="confirmDeleteDuplicates()">Confirm Delete Duplicates</button>
+        <button class="secondary-btn" onclick="document.getElementById('duplicateLogPreviewModal').remove()">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(previewModal);
+
+  // Store indices to delete for confirmation
+  window.duplicateLogIndicesToDelete = toDelete.map(item => item.index);
+}
+
+function confirmDeleteDuplicates() {
+  if (!window.duplicateLogIndicesToDelete || window.duplicateLogIndicesToDelete.length === 0) {
+    document.getElementById('duplicateLogPreviewModal').remove();
+    return;
+  }
+
+  const affectedTrackers = new Set();
+
+  // Sort indices in descending order to avoid index shifting issues
+  const indicesToDelete = [...window.duplicateLogIndicesToDelete].sort((a, b) => b - a);
+
+  indicesToDelete.forEach(index => {
+    const log = systemsData.logs[index];
+    const trackerId = getLogLinkedTrackerId(log);
+    if (trackerId) affectedTrackers.add(trackerId);
+    systemsData.logs.splice(index, 1);
+  });
+
+  // Recalculate affected trackers
+  affectedTrackers.forEach(trackerId => recalculateTrackerFromLogs(trackerId));
+
+  saveSystemsData();
+  console.log(`[DUPLICATE CLEANUP] Deleted ${indicesToDelete.length} duplicate logs`);
+
+  alert(`Deleted ${indicesToDelete.length} duplicate log(s).`);
+  document.getElementById('duplicateLogPreviewModal').remove();
+  closeBulkToolsModal();
+  renderLogsList();
+}
+
+function deleteEmptyDuplicateTrackers() {
+  let count = 0;
+  const protectedNames = ['coke', 'real estate', 'weight'];
+
+  systemsData.trackers = systemsData.trackers.filter(tracker => {
+    const nameLower = (tracker.name || '').toLowerCase();
+
+    // Check if protected name
+    if (protectedNames.some(protected => nameLower.includes(protected))) {
+      return true;
+    }
+
+    // Check if empty Session tracker
+    if (nameLower === 'session') {
+      const currentValue = tracker.currentValue || '0';
+      const hasLogs = systemsData.logs.some(log => getLogLinkedTrackerId(log) === tracker.id);
+
+      if (!hasLogs && (currentValue === '0' || currentValue === '' || currentValue === '0.0')) {
+        count++;
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  saveSystemsData();
+  console.log(`[DUPLICATE CLEANUP] Deleted ${count} empty duplicate tracker(s)`);
+  alert(`Deleted ${count} empty duplicate tracker(s).`);
+  closeBulkToolsModal();
+  renderSystems();
+}
+
+function renderLogsList() {
+  const box = document.getElementById("activityFeed");
+  if (!box) return;
+
+  let logs = [...systemsData.logs].filter(log => !log.inactive);
+
+  // Apply filter
+  if (activityLogFilter === 'Linked') {
+    logs = logs.filter(log => getLogLinkedTrackerId(log));
+  } else if (activityLogFilter === 'Unlinked') {
+    logs = logs.filter(log => !getLogLinkedTrackerId(log));
+  } else if (activityLogFilter === 'Imported') {
+    logs = logs.filter(log => log.logSource === 'import');
+  } else if (activityLogFilter === 'Session') {
+    logs = logs.filter(log => log.title === 'Session' || log.title === 'Coke');
+  } else if (activityLogFilter === 'Coke') {
+    logs = logs.filter(log => log.title === 'Coke');
+  }
+
+  // Sort by date descending
+  logs.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+  if (!logs.length) {
+    box.innerHTML = `<div class="empty-state small"><p>No logs found.</p></div>`;
+    return;
+  }
+
+  box.innerHTML = `
+    <div class="activity-logs-list">
+      ${logs.map((log, index) => {
+        const masterIndex = systemsData.logs.findIndex(l => l.id === log.id);
+        const trackerId = getLogLinkedTrackerId(log);
+        const tracker = trackerId ? systemsData.trackers.find(t => t.id === trackerId) : null;
+        const trackerName = tracker ? tracker.name : '';
+
+        // Format time display
+        let timeDisplay = '';
+        let durationDisplay = '';
+        if (log.startTime && log.endTime) {
+          const startFormatted = formatTimeForDisplay(log.startTime);
+          const endFormatted = formatTimeForDisplay(log.endTime);
+          const endDate = log.endDate && log.endDate !== log.date ? log.endDate : '';
+          timeDisplay = `${startFormatted} → ${endFormatted}${endDate ? ` (${endDate})` : ''}`;
+
+          if (log.durationMinutes) {
+            const hours = Math.floor(log.durationMinutes / 60);
+            const minutes = log.durationMinutes % 60;
+            durationDisplay = `${hours}h ${minutes}m`;
+          }
+        }
+
+        return `
+          <div class="activity-log-card">
+            <div class="log-card-left">
+              <div class="log-card-header">
+                <strong>${escapeHTML(log.title)}</strong>
+                ${trackerName ? `<span class="log-tracker-pill">${escapeHTML(trackerName)}</span>` : ''}
+              </div>
+              <div class="log-card-meta">
+                <span class="log-category">${escapeHTML(log.type || 'Custom')}</span>
+                <span class="log-value">${escapeHTML(log.value || '')}${log.unit ? ` ${escapeHTML(log.unit)}` : ''}</span>
+                <span class="log-date">${escapeHTML(log.date)}</span>
+              </div>
+              ${timeDisplay ? `<div class="log-time-info">${escapeHTML(timeDisplay)}</div>` : ''}
+              ${durationDisplay ? `<div class="log-duration">Duration: ${escapeHTML(durationDisplay)}</div>` : ''}
+              ${log.notes ? `<p class="log-notes">${escapeHTML(log.notes)}</p>` : ''}
+            </div>
+            <div class="log-card-actions">
+              <button class="icon-btn" onclick="editSystemLog(${masterIndex})" title="Edit">✎</button>
+              <button class="icon-btn" onclick="openLinkTrackerModal(${masterIndex})" title="Link Tracker">🔗</button>
+              <button class="icon-btn danger-btn" onclick="deleteSystemLog(${masterIndex})" title="Delete">🗑</button>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function formatTimeForDisplay(timeStr) {
+  if (!timeStr) return '';
+  try {
+    const [hours, minutes] = timeStr.split(':');
+    const hour = parseInt(hours, 10);
+    const ampm = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour % 12 || 12;
+    return `${hour12}:${minutes} ${ampm}`;
+  } catch (e) {
+    return timeStr;
   }
 }
 
@@ -9870,16 +12968,82 @@ function getTrackerProgress(tracker) {
   if (isNaN(current) || isNaN(target)) return 0;
   const decrease = tracker.direction === "decrease";
   if (decrease) {
-    const s = isNaN(start) ? current : start;
-    const denom = s - target;
-    if (denom === 0) return current <= target ? 100 : 0;
-    return Math.min(100, Math.max(0, Math.round(((s - current) / denom) * 100)));
+    // Check if it's limit mode (start <= target) or reduction mode (start > target)
+    const isLimitMode = isNaN(start) || start <= target;
+
+    if (isLimitMode) {
+      // Limit mode: current / target, can exceed 100%
+      if (target === 0) return current > 0 ? 100 : 0;
+      return Math.round((current / target) * 100);
+    } else {
+      // Reduction mode: (start - current) / (start - target)
+      const denom = start - target;
+      if (denom === 0) return current <= target ? 100 : 0;
+      const progress = ((start - current) / denom) * 100;
+      return Math.min(100, Math.max(0, Math.round(progress)));
+    }
   }
   if (!isNaN(start) && !isNaN(target) && target !== start) {
     return Math.min(100, Math.max(0, Math.round(((current - start) / (target - start)) * 100)));
   }
   if (!target) return 0;
   return Math.min(100, Math.max(0, Math.round((current / target) * 100)));
+}
+
+function isTrackerLimitMode(tracker) {
+  if (tracker.direction !== "decrease") return false;
+  const start = Number(tracker.startValue);
+  const target = Number(tracker.targetValue);
+  return isNaN(start) || start <= target;
+}
+
+function getTrackerProgressLabel(tracker) {
+  const current = Number(tracker.currentValue);
+  const target = Number(tracker.targetValue);
+  const start = Number(tracker.startValue);
+  const unit = tracker.unit || "";
+
+  if (tracker.direction === "decrease") {
+    if (isTrackerLimitMode(tracker)) {
+      // Limit mode: "X unit / Y unit used" and "Over limit by Z unit" if over
+      if (current > target) {
+        const overage = (current - target).toFixed(1);
+        const percent = Math.round((current / target) * 100);
+        return {
+          primary: `${current} ${unit} / ${target} ${unit}`,
+          secondary: `Over limit by ${overage} ${unit}`,
+          percent: `${percent}% of monthly limit`,
+          isOverLimit: true
+        };
+      } else {
+        const percent = target > 0 ? Math.round((current / target) * 100) : 0;
+        return {
+          primary: `${current} ${unit} / ${target} ${unit}`,
+          secondary: `${percent}% of monthly limit`,
+          percent: `${percent}%`,
+          isOverLimit: false
+        };
+      }
+    } else {
+      // Reduction mode: "X% toward reduction target"
+      const progress = getTrackerProgress(tracker);
+      return {
+        primary: `${progress}% toward reduction target`,
+        secondary: `${current} ${unit} (target: ${target} ${unit})`,
+        percent: `${progress}%`,
+        isOverLimit: false
+      };
+    }
+  }
+
+  // Increase trackers use existing logic
+  const progress = getTrackerProgress(tracker);
+  return {
+    primary: `${progress}% toward target`,
+    secondary: `${current} ${unit} / ${target} ${unit}`,
+    percent: `${progress}%`,
+    isOverLimit: false
+  };
 }
 
 function logTrackerById(id) {
@@ -10776,7 +13940,24 @@ function setTrackerCategoryFilter(value) {
 }
 
 function isTrackerComplete(tracker) {
-  return getTrackerProgress(tracker) >= 100;
+  const current = Number(tracker.currentValue);
+  const target = Number(tracker.targetValue);
+  const start = Number(tracker.startValue);
+
+  if (isNaN(current) || isNaN(target)) return false;
+
+  if (tracker.direction === "decrease") {
+    if (isTrackerLimitMode(tracker)) {
+      // Limit mode: not completed even if within limit
+      return false;
+    } else {
+      // Reduction mode: completed when current <= target
+      return current <= target;
+    }
+  }
+
+  // Increase mode: completed when current >= target
+  return current >= target;
 }
 
 function isTrackerBehind(tracker) {
@@ -10788,17 +13969,35 @@ function renderTrackersSummaryCards() {
   const box = document.getElementById("trackersSummaryCards");
   if (!box) return;
   const weekDates = getLastNDates(7);
-  const trackers = systemsData.trackers;
-  const active = trackers.filter(t => !isTrackerComplete(t)).length;
+
+  // Filter out archived/deleted/empty imported Session trackers
+  const trackers = systemsData.trackers.filter(t => {
+    if (t.archived === true) return false;
+    // Filter out empty imported Session trackers (category: Taper, name: Session, no logs)
+    if (t.category === 'Taper' && t.name === 'Session' && t.source === 'import') {
+      const logs = getSortedLogsForTracker(t.id);
+      if (logs.length === 0) return false;
+    }
+    return true;
+  });
+
+  // Active: all non-archived trackers
+  const active = trackers.length;
+
+  // Completed: based on mode
   const completedGoals = trackers.filter(t => isTrackerComplete(t)).length;
-  const thisWeek = trackers.filter(t =>
-    getSortedLogsForTracker(t.id).some(log => weekDates.includes(log.date))
-  ).length;
+
+  // This week: count logs dated within current week
+  const thisWeek = trackers.reduce((count, t) => {
+    const logs = getSortedLogsForTracker(t.id);
+    return count + logs.filter(log => weekDates.includes(log.date)).length;
+  }, 0);
+
+  // Streak-linked: trackers with linkedHabitId or streak-linked setting
   const streakLinked = trackers.filter(t => {
-    if (!t.linkedHabitId) return false;
-    const habit = systemsData.habits.find(h => h.id === t.linkedHabitId);
-    if (!habit) return false;
-    return getHabitStreak(habit) > 0 && getSortedLogsForTracker(t.id).some(log => weekDates.includes(log.date));
+    if (t.linkedHabitId) return true;
+    if (t.streakLinked === true) return true;
+    return false;
   }).length;
 
   box.innerHTML = `
@@ -10815,12 +14014,37 @@ function renderTrackersSummaryCards() {
 function renderTrackerLogEntryRow(tracker, log) {
   const masterIndex = systemsData.logs.findIndex(l => l.id === log.id);
   const src = getLogSourceDisplay(log.logSource || inferLegacyLogSource(log));
+
+  // Build time info string
+  let timeInfo = '';
+  if (log.startTime && log.endTime) {
+    const endDateStr = log.endDate && log.endDate !== log.date ? ` (${escapeHTML(log.endDate)})` : '';
+    timeInfo = `<span class="muted-text"> • ${escapeHTML(log.startTime)} → ${escapeHTML(log.endTime)}${endDateStr}</span>`;
+  } else if (log.startTime) {
+    timeInfo = `<span class="muted-text"> • ${escapeHTML(log.startTime)}</span>`;
+  }
+
+  // Build duration string
+  let durationStr = '';
+  if (log.durationMinutes || log.durationHours) {
+    const minutes = log.durationMinutes || 0;
+    const hours = log.durationHours || minutes / 60;
+    if (hours >= 1) {
+      const h = Math.floor(hours);
+      const m = Math.round((hours - h) * 60);
+      durationStr = `<span class="muted-text"> • ${h}h ${m}m</span>`;
+    } else {
+      durationStr = `<span class="muted-text"> • ${minutes} min</span>`;
+    }
+  }
+
   return `
     <div class="tracker-log-row">
       <div>
         <strong>${escapeHTML(log.date || "")}</strong>
         <span class="log-source-pill">${escapeHTML(src)}</span>
         <span>${escapeHTML(log.value || "")} ${escapeHTML(log.unit || tracker.unit || "")}</span>
+        ${timeInfo}${durationStr}
         ${log.notes ? `<p class="muted-text">${escapeHTML(log.notes)}</p>` : ""}
       </div>
       <div class="button-row">
@@ -10848,14 +14072,30 @@ function renderSingleTrackerCard(tracker) {
     ? `<div class="tracker-log-history">${tLogs.slice().reverse().map(log => renderTrackerLogEntryRow(tracker, log)).join("")}</div>`
     : `<p class="muted-text small">No log entries yet.</p>`;
 
+  const progressLabel = hasTarget ? getTrackerProgressLabel(tracker) : null;
+  const isOverLimit = progressLabel?.isOverLimit || false;
+
+  // Determine type label for decrease limit mode trackers
+  let typeLabel = tracker.category || "Custom";
+  if (tracker.direction === "decrease" && isTrackerLimitMode(tracker)) {
+    if (tracker.resetType === "Monthly") {
+      typeLabel = "Monthly Limit";
+    } else {
+      typeLabel = "Limit";
+    }
+  }
+
+  // Check if this is a Coke tracker for insights button
+  const isCokeTracker = tracker.name.toLowerCase() === 'coke' && tracker.unit === 'g';
+
   return `
-    <div class="system-item tracker-card">
+    <div class="system-item tracker-card ${isOverLimit ? 'tracker-over-limit' : ''}">
       <div class="tracker-card-header">
         <div>
           <strong>${escapeHTML(tracker.name)}</strong>
           <div class="habit-pill-row">
-            <span class="metric-type-pill">${escapeHTML(tracker.category || "Custom")}</span>
-            ${tracker.resetType && tracker.resetType !== "No reset" ? `<span class="metric-type-pill">${escapeHTML(tracker.resetType)}</span>` : ""}
+            <span class="metric-type-pill">${escapeHTML(typeLabel)}</span>
+            ${tracker.resetType && tracker.resetType !== "No reset" && typeLabel !== "Monthly Limit" && typeLabel !== "Limit" ? `<span class="metric-type-pill">${escapeHTML(tracker.resetType)}</span>` : ""}
             ${habit ? `<span class="metric-type-pill">Habit: ${escapeHTML(habit.name)}</span>` : ""}
             ${streak ? `<span class="streak-badge">${streak} streak</span>` : ""}
           </div>
@@ -10869,17 +14109,20 @@ function renderSingleTrackerCard(tracker) {
         routineId: tracker.linkedRoutineId,
         objectiveId: tracker.linkedObjectiveId
       })}
-      ${hasTarget ? `
-        <div class="tracker-progress-bar">
-          <div class="tracker-progress-fill" style="width:${pct}%"></div>
+      ${hasTarget ? (() => {
+        return `
+        <div class="tracker-progress-bar ${isOverLimit ? 'tracker-progress-over-limit' : ''}">
+          <div class="tracker-progress-fill ${isOverLimit ? 'tracker-progress-fill-over-limit' : ''}" style="width:${Math.min(pct, 100)}%"></div>
         </div>
         <div class="tracker-scale-row">
           <span>${startLabel}</span>
           <strong>${currentLabel}</strong>
           <span>${targetLabel}</span>
         </div>
-        <p class="tracker-pct">${pct}% ${tracker.direction === "decrease" ? "toward reduction target" : "toward target"}</p>
-      ` : `<p class="muted-text small">Current value: <strong>${currentLabel}</strong></p>`}
+        <p class="tracker-pct ${isOverLimit ? 'tracker-pct-over-limit' : ''}">${progressLabel.primary}</p>
+        ${progressLabel.secondary ? `<p class="tracker-pct ${isOverLimit ? 'tracker-pct-over-limit' : ''}">${progressLabel.secondary}</p>` : ''}
+      `;
+      })() : `<p class="muted-text small">Current value: <strong>${currentLabel}</strong></p>`}
       ${mini.length ? renderMiniBars(mini) : ""}
       ${tracker.startDate || tracker.targetDate ? `<p class="muted-text">${escapeHTML(tracker.startDate || "—")} → ${escapeHTML(tracker.targetDate || "—")}</p>` : ""}
       ${milestones.length ? `
@@ -10896,6 +14139,7 @@ function renderSingleTrackerCard(tracker) {
         <button onclick="openSystemsForm('trackerLog', '${tracker.id}')">Log</button>
         <button class="secondary-btn" onclick="openSystemsForm('tracker', ${idx})">Edit</button>
         <button class="secondary-btn" onclick="toggleTrackerLogs('${tracker.id}')">View Logs</button>
+        ${isCokeTracker ? `<button class="secondary-btn" onclick="showCokeInsights()">Insights</button>` : ""}
         <button class="danger-btn" onclick="deleteTrackerById('${tracker.id}')">Delete</button>
       </div>
       <div id="trackerLogs-${escapeHTML(tracker.id)}" class="tracker-logs-collapsed">
@@ -10969,7 +14213,6 @@ function saveUnifiedTrackerFromModal() {
     type,
     unit,
     startValue: document.getElementById("trackerStartValue").value,
-    currentValue: document.getElementById("trackerCurrentValue").value,
     targetValue: document.getElementById("trackerTargetValue").value,
     direction: document.getElementById("trackerDirection").value,
     logValueMode: document.getElementById("trackerLogValueMode").value,
@@ -11023,7 +14266,6 @@ function fillEditingTrackerForm() {
     unitIn.value = t.unit || "";
   }
   el("trackerStartValue").value = t.startValue ?? "";
-  el("trackerCurrentValue").value = t.currentValue ?? "";
   el("trackerTargetValue").value = t.targetValue ?? "";
   el("trackerDirection").value = t.direction === "decrease" ? "decrease" : "increase";
   el("trackerLogValueMode").value = t.logValueMode === "absolute" ? "absolute" : "increment";
@@ -11077,6 +14319,10 @@ function fillEditingLogForm() {
   document.getElementById("logUnit").value = log.unit || "";
   document.getElementById("logDate").value = log.date || getTodayISO();
   document.getElementById("logNotes").value = log.notes || "";
+  document.getElementById("logStartTime").value = log.startTime || "";
+  document.getElementById("logEndTime").value = log.endTime || "";
+  document.getElementById("logEndDate").value = log.endDate || "";
+  calculateLogDuration();
   const lt = log.linkedGoalId ? "goal" : log.linkedHabitId ? "habit" : getLogLinkedTrackerId(log) ? "tracker" : "";
   const li = document.getElementById("logLinkedItemType");
   if (li) li.value = lt;
@@ -12492,12 +15738,18 @@ function startPeriodicAutosync() {
 
 // Initialize cloud sync on app load
 function initializeCloudSync() {
-  console.log("[SYNC] Initializing cloud sync");
-  checkCloudConnection();
-  startPeriodicAutosync();
-  
-  // Update sync timestamp display every minute
+  if (!supabase) {
+    console.log("[CLOUD] Supabase not configured");
+    return;
+  }
+
+  console.log("[CLOUD] Initializing cloud sync");
+  loadCloudSyncSettings();
+  setupCloudSyncUI();
+  startCloudSync();
+  updateSyncStatusDisplay();
   setInterval(updateSyncStatusDisplay, 60000);
+  initBackfill();
 }
 
 // Initialize when DOM is ready

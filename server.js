@@ -20,6 +20,9 @@ const server = http.createServer((req, res) => {
   let filePath = '.' + req.url;
   if (filePath === './') filePath = './index.html';
 
+  // Strip query parameters for file serving
+  filePath = filePath.split('?')[0];
+
   const ext = path.extname(filePath);
   const contentType = mimeTypes[ext] || 'application/octet-stream';
 
