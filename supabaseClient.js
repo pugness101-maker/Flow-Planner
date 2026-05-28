@@ -281,14 +281,8 @@ function mergeCloudAndLocalData(localData, cloudData) {
     if (cloudData.systemsData.logs) {
       merged.systemsData.logs = mergeArraysById(localData.systemsData?.logs, cloudData.systemsData.logs, "logs");
     }
-    if (cloudData.systemsData.trackers) {
-      merged.systemsData.trackers = mergeArraysById(localData.systemsData?.trackers, cloudData.systemsData.trackers, "trackers");
-    }
-    if (cloudData.systemsData.metrics) {
-      merged.systemsData.metrics = mergeArraysById(localData.systemsData?.metrics, cloudData.systemsData.metrics, "metrics");
-    }
-    if (cloudData.systemsData.objectives) {
-      merged.systemsData.objectives = mergeArraysById(localData.systemsData?.objectives, cloudData.systemsData.objectives, "objectives");
+    if (cloudData.systemsData.tasks) {
+      merged.systemsData.tasks = mergeArraysById(localData.systemsData?.tasks, cloudData.systemsData.tasks, "tasks");
     }
   }
 
