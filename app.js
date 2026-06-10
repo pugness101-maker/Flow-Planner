@@ -1056,6 +1056,89 @@ function normalizeFriendFields(friend = {}) {
   };
 }
 
+function collectFriendDeletionTargets(friendIds = []) {
+  const idSet = new Set(friendIds.filter(Boolean));
+  const deletedFriends = socialData.friends.filter(friend => idSet.has(friend.id));
+  const removeNameKeys = new Set(deletedFriends.map(friend => friendNameKey(friend.name)));
+  return { idSet, removeNameKeys };
+}
+
+function removeFriendsFromHangoutsAndIdeas(idSet, removeNameKeys) {
+  if (!idSet.size) return;
+
+  socialData.hangouts = socialData.hangouts.map(hangout => {
+    const nextFriendIds = (hangout.friendIds || []).filter(id => !idSet.has(id));
+    const nextPeople = normalizePeopleNames(hangout.people).filter(name => !removeNameKeys.has(friendNameKey(name)));
+    const idsChanged = nextFriendIds.length !== (hangout.friendIds || []).length;
+    const peopleChanged = nextPeople.length !== normalizePeopleNames(hangout.people).length;
+    if (!idsChanged && !peopleChanged) return hangout;
+    const updated = normalizeHangoutFields({
+      ...hangout,
+      friendIds: nextFriendIds,
+      people: nextPeople,
+      updatedAt: nowISO()
+    });
+    syncLinkedHangoutBlock(updated);
+    return updated;
+  });
+
+  socialData.ideas = socialData.ideas.map(idea => {
+    const currentLinkedIds = [...(idea.linkedFriendIds || idea.friendIds || [])];
+    const currentLinkedFriends = [...(idea.linkedFriends || [])];
+    const nextLinkedIds = currentLinkedIds.filter(id => !idSet.has(id));
+    const nextLinkedFriends = currentLinkedFriends.filter(name => !removeNameKeys.has(friendNameKey(name)));
+    const nextFriendIds = (idea.friendIds || []).filter(id => !idSet.has(id));
+    const changed = nextLinkedIds.length !== currentLinkedIds.length
+      || nextLinkedFriends.length !== currentLinkedFriends.length
+      || nextFriendIds.length !== (idea.friendIds || []).length;
+    if (!changed) return idea;
+    return normalizeIdeaFields({
+      ...idea,
+      linkedFriendIds: nextLinkedIds,
+      linkedFriends: nextLinkedFriends,
+      friendIds: nextFriendIds,
+      updatedAt: nowISO()
+    }, socialData.friends);
+  });
+}
+
+function purgeDeletedFriendsFromUiState(idSet) {
+  if (!idSet.size) return;
+  if (idSet.has(editingFriendId)) editingFriendId = null;
+  hangoutFormFriendIds = hangoutFormFriendIds.filter(id => !idSet.has(id));
+  editHangoutFriendIds = editHangoutFriendIds.filter(id => !idSet.has(id));
+  ideaFormFriendIds = ideaFormFriendIds.filter(id => !idSet.has(id));
+  editIdeaFriendIds = editIdeaFriendIds.filter(id => !idSet.has(id));
+  bulkHangoutActionFriendIds = bulkHangoutActionFriendIds.filter(id => !idSet.has(id));
+  socialBulkSelectedIds = socialBulkSelectedIds.filter(id => !idSet.has(id));
+}
+
+function deleteFriendsFromSocial(friendIds = []) {
+  const { idSet, removeNameKeys } = collectFriendDeletionTargets(friendIds);
+  if (!idSet.size) return 0;
+  const removedCount = socialData.friends.filter(friend => idSet.has(friend.id)).length;
+  if (!removedCount) return 0;
+  socialData.friends = socialData.friends.filter(friend => !idSet.has(friend.id));
+  removeFriendsFromHangoutsAndIdeas(idSet, removeNameKeys);
+  purgeDeletedFriendsFromUiState(idSet);
+  saveSocialData();
+  return removedCount;
+}
+
+function refreshUIAfterFriendDeletion() {
+  if (activePage === "Social") {
+    if (socialTab === "Friends") {
+      if (document.getElementById("socialList")) refreshSocialBulkUI();
+      else renderFriends();
+    } else if (socialTab === "Hangouts") {
+      renderHangouts();
+    } else if (socialTab === "Ideas") {
+      renderIdeas();
+    }
+  }
+  if (activePage === "Calendar") renderCalendar();
+}
+
 function syncFriendNameReferences(friendId, oldName, newName) {
   if (!friendId || !oldName || friendNameKey(oldName) === friendNameKey(newName)) return;
   socialData.hangouts.forEach(hangout => {
@@ -1862,13 +1945,10 @@ function refreshSocialBulkUI() {
 function bulkDeleteFriends() {
   const ids = getSelectedFriendIds();
   if (!ids.length) return showToast("Select friends first.");
-  if (!confirm(`Delete ${ids.length} friend${ids.length === 1 ? "" : "s"}?`)) return;
-  const idSet = new Set(ids);
-  socialData.friends = socialData.friends.filter(friend => !idSet.has(friend.id));
-  if (idSet.has(editingFriendId)) editingFriendId = null;
-  socialBulkSelectedIds = socialBulkSelectedIds.filter(id => !idSet.has(id));
-  saveSocialData();
-  refreshSocialBulkUI();
+  if (!confirm(`Delete ${ids.length} friend${ids.length === 1 ? "" : "s"}? They will also be removed from all hangouts and ideas.`)) return;
+  const removed = deleteFriendsFromSocial(ids);
+  if (!removed) return;
+  refreshUIAfterFriendDeletion();
   showToast("Friends deleted.");
 }
 
@@ -3763,11 +3843,10 @@ function saveFriendEdit(event, id) {
 }
 
 function deleteFriend(id) {
-  if (!confirm("Delete this friend?")) return;
-  if (editingFriendId === id) editingFriendId = null;
-  socialData.friends = socialData.friends.filter(item => item.id !== id);
-  saveSocialData();
-  renderFriends();
+  if (!confirm("Delete this friend? They will also be removed from all hangouts and ideas.")) return;
+  const removed = deleteFriendsFromSocial([id]);
+  if (!removed) return;
+  refreshUIAfterFriendDeletion();
 }
 
 function captureHangoutFormDraft() {
