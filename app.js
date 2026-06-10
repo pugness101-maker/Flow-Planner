@@ -1446,6 +1446,7 @@ let editIdeaFriendPickerOpen = false;
 let editIdeaFriendSearch = "";
 let taskFormExpanded = false;
 let editingTaskId = null;
+const TASKS_LIST_COLLAPSED_KEY = "flowPlannerTasksListCollapsed";
 
 function loadAppStateFromStorage() {
   plannerData = normalizePlannerData(DataService.get(DataService.KEYS.PLANNER_DATA) || {});
@@ -1522,6 +1523,31 @@ function renderTaskStats(stats) {
   return `<div class="card task-stats-card"><div class="stats-grid stats-grid-5"><div><strong>${stats.total}</strong><span>Total Tasks</span></div><div><strong>${stats.notStarted}</strong><span>Not Started</span></div><div><strong>${stats.inProgress}</strong><span>In Progress</span></div><div><strong>${stats.complete}</strong><span>Complete</span></div><div><strong>${stats.overdue}</strong><span>Overdue</span></div></div></div>`;
 }
 
+function isTasksListCollapsed() {
+  try { return localStorage.getItem(TASKS_LIST_COLLAPSED_KEY) === "true"; } catch { return false; }
+}
+
+function setTasksListCollapsed(collapsed) {
+  try { localStorage.setItem(TASKS_LIST_COLLAPSED_KEY, collapsed ? "true" : "false"); } catch {}
+}
+
+function renderTasksList(tasks) {
+  const listOpen = !isTasksListCollapsed();
+  const body = tasks.length
+    ? `<div class="item-list task-list">${tasks.map(renderTaskItem).join("")}</div>`
+    : `<p class="muted-text">No tasks yet.</p>`;
+  return `<div class="card collapsible-card ${listOpen ? "is-open" : "is-collapsed"}">
+    <button type="button" class="collapse-trigger" onclick="toggleTasksList()" aria-expanded="${listOpen}">
+      <h3>Tasks</h3>
+      <div class="collapse-trigger-meta">
+        <span class="collapse-count">${tasks.length}</span>
+        <span class="collapse-caret" aria-hidden="true">${listOpen ? "▾" : "▸"}</span>
+      </div>
+    </button>
+    ${listOpen ? body : ""}
+  </div>`;
+}
+
 function renderTaskForm(editingTask = null) {
   return `<form onsubmit="saveTask(event)" class="stack">
     <input id="taskTitle" placeholder="Task or objective" value="${escapeHTML(editingTask?.title || "")}" required>
@@ -1550,7 +1576,7 @@ function renderTasks() {
       ${formOpen ? renderTaskForm(editingTask) : ""}
     </div>
     ${renderTaskStats(stats)}
-    ${card("Tasks", tasks.length ? `<div class="item-list task-list">${tasks.map(renderTaskItem).join("")}</div>` : `<p class="muted-text">No tasks yet.</p>`)}
+    ${renderTasksList(tasks)}
     ${card("Completed History", complete.length ? `<div class="item-list compact">${complete.map(task => `<div class="item"><strong>${escapeHTML(task.title)}</strong><span>${escapeHTML((task.completedAt || "").slice(0, 10))}</span></div>`).join("")}</div>` : `<p class="muted-text">Completed tasks will appear here.</p>`)}
   `;
 }
@@ -1570,6 +1596,11 @@ function toggleTaskForm() {
   if (!systemsData.tasks.length) return;
   taskFormExpanded = !taskFormExpanded;
   if (!taskFormExpanded) editingTaskId = null;
+  renderTasks();
+}
+
+function toggleTasksList() {
+  setTasksListCollapsed(!isTasksListCollapsed());
   renderTasks();
 }
 

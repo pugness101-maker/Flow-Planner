@@ -48,6 +48,8 @@ p { line-height: 1.45; }
 .collapsible-card .collapse-trigger { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; background: transparent; color: var(--text); min-height: auto; padding: 0; }
 .collapsible-card.is-open .collapse-trigger { margin-bottom: 10px; }
 .collapse-caret { color: var(--muted); font-size: 14px; line-height: 1; }
+.collapse-trigger-meta { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.collapse-count { color: var(--muted); font-size: 14px; font-weight: 700; min-width: 1.5em; text-align: right; }
 .task-actions { width: auto; min-width: 240px; flex-wrap: wrap; justify-content: flex-end; }
 .page-tasks #pageRoot { padding-bottom: 100px; }
 input, select, textarea { width: 100%; min-height: 42px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); padding: 10px 11px; font-size: 14px; }
