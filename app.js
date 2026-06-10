@@ -1444,6 +1444,8 @@ let editingIdeaId = null;
 let editIdeaFriendIds = [];
 let editIdeaFriendPickerOpen = false;
 let editIdeaFriendSearch = "";
+let taskFormExpanded = false;
+let editingTaskId = null;
 
 function loadAppStateFromStorage() {
   plannerData = normalizePlannerData(DataService.get(DataService.KEYS.PLANNER_DATA) || {});
@@ -1501,19 +1503,54 @@ function optionList(values, selected = "") {
   return values.map(value => `<option value="${escapeHTML(value)}" ${value === selected ? "selected" : ""}>${escapeHTML(value)}</option>`).join("");
 }
 
+function getTaskStats(tasks = []) {
+  const today = todayISO();
+  return {
+    total: tasks.length,
+    notStarted: tasks.filter(task => task.status === "Not Started").length,
+    inProgress: tasks.filter(task => task.status === "In Progress").length,
+    complete: tasks.filter(task => task.status === "Complete").length,
+    overdue: tasks.filter(task => task.dueDate && task.dueDate < today && task.status !== "Complete").length
+  };
+}
+
+function isTaskFormOpen(tasks = []) {
+  return tasks.length === 0 || taskFormExpanded || Boolean(editingTaskId);
+}
+
+function renderTaskStats(stats) {
+  return `<div class="card task-stats-card"><div class="stats-grid stats-grid-5"><div><strong>${stats.total}</strong><span>Total Tasks</span></div><div><strong>${stats.notStarted}</strong><span>Not Started</span></div><div><strong>${stats.inProgress}</strong><span>In Progress</span></div><div><strong>${stats.complete}</strong><span>Complete</span></div><div><strong>${stats.overdue}</strong><span>Overdue</span></div></div></div>`;
+}
+
+function renderTaskForm(editingTask = null) {
+  return `<form onsubmit="saveTask(event)" class="stack">
+    <input id="taskTitle" placeholder="Task or objective" value="${escapeHTML(editingTask?.title || "")}" required>
+    <div class="grid-2"><input id="taskDueDate" type="date" value="${escapeHTML(editingTask?.dueDate || "")}"><select id="taskPriority">${optionList(allZipCustomOptions.taskPriorities || ["Low", "Medium", "High"], editingTask?.priority || "Medium")}</select></div>
+    <select id="taskStatus">${optionList(["Not Started", "In Progress", "Complete"], editingTask?.status || "Not Started")}</select>
+    <textarea id="taskNotes" placeholder="Notes">${escapeHTML(editingTask?.notes || "")}</textarea>
+    <div class="button-row">
+      <button>${editingTask ? "Save Task" : "Add Task"}</button>
+      ${editingTask ? `<button type="button" class="secondary-btn" onclick="cancelTaskEdit()">Cancel</button>` : ""}
+    </div>
+  </form>`;
+}
+
 function renderTasks() {
   const tasks = [...systemsData.tasks].sort(byDate);
   const complete = tasks.filter(task => task.status === "Complete").slice(-12).reverse();
+  const stats = getTaskStats(tasks);
+  const formOpen = isTaskFormOpen(tasks);
+  const editingTask = editingTaskId ? tasks.find(task => task.id === editingTaskId) : null;
   document.getElementById("pageRoot").innerHTML = `
-    ${card("New Task", `
-      <form onsubmit="saveTask(event)" class="stack">
-        <input id="taskTitle" placeholder="Task or objective" required>
-        <div class="grid-2"><input id="taskDueDate" type="date"><select id="taskPriority">${optionList(allZipCustomOptions.taskPriorities || ["Low", "Medium", "High"], "Medium")}</select></div>
-        <select id="taskStatus">${optionList(["Not Started", "In Progress", "Complete"])}</select>
-        <textarea id="taskNotes" placeholder="Notes"></textarea>
-        <button>Add Task</button>
-      </form>`)}
-    ${card("Tasks", tasks.length ? `<div class="item-list">${tasks.map(renderTaskItem).join("")}</div>` : `<p class="muted-text">No tasks yet.</p>`)}
+    <div class="card collapsible-card ${formOpen ? "is-open" : "is-collapsed"}">
+      <button type="button" class="collapse-trigger" onclick="toggleTaskForm()" aria-expanded="${formOpen}">
+        <h3>${editingTask ? "Edit Task" : "New Task"}</h3>
+        <span class="collapse-caret" aria-hidden="true">${formOpen ? "▾" : "▸"}</span>
+      </button>
+      ${formOpen ? renderTaskForm(editingTask) : ""}
+    </div>
+    ${renderTaskStats(stats)}
+    ${card("Tasks", tasks.length ? `<div class="item-list task-list">${tasks.map(renderTaskItem).join("")}</div>` : `<p class="muted-text">No tasks yet.</p>`)}
     ${card("Completed History", complete.length ? `<div class="item-list compact">${complete.map(task => `<div class="item"><strong>${escapeHTML(task.title)}</strong><span>${escapeHTML((task.completedAt || "").slice(0, 10))}</span></div>`).join("")}</div>` : `<p class="muted-text">Completed tasks will appear here.</p>`)}
   `;
 }
@@ -1521,16 +1558,46 @@ function renderTasks() {
 function renderTaskItem(task) {
   return `<div class="item ${task.status === "Complete" ? "is-done" : ""}">
     <div><strong>${escapeHTML(task.title)}</strong><span>${escapeHTML(task.dueDate || "No due date")} · ${escapeHTML(task.priority)} · ${escapeHTML(task.status)}</span></div>
-    <div class="mini-actions">
+    <div class="mini-actions task-actions">
       <button onclick="cycleTaskStatus('${task.id}')">Status</button>
+      <button class="secondary-btn" onclick="editTask('${task.id}')">Edit</button>
       <button class="secondary-btn" onclick="deleteTask('${task.id}')">Delete</button>
     </div>
   </div>`;
 }
 
+function toggleTaskForm() {
+  if (!systemsData.tasks.length) return;
+  taskFormExpanded = !taskFormExpanded;
+  if (!taskFormExpanded) editingTaskId = null;
+  renderTasks();
+}
+
+function editTask(id) {
+  editingTaskId = id;
+  taskFormExpanded = true;
+  renderTasks();
+}
+
+function cancelTaskEdit() {
+  editingTaskId = null;
+  renderTasks();
+}
+
 function saveTask(event) {
   event.preventDefault();
-  systemsData.tasks.push(normalizeTask({ title: taskTitle.value, dueDate: taskDueDate.value, priority: taskPriority.value, status: taskStatus.value, notes: taskNotes.value }));
+  const payload = { title: taskTitle.value, dueDate: taskDueDate.value, priority: taskPriority.value, status: taskStatus.value, notes: taskNotes.value };
+  if (editingTaskId) {
+    const index = systemsData.tasks.findIndex(item => item.id === editingTaskId);
+    if (index !== -1) {
+      const existing = systemsData.tasks[index];
+      systemsData.tasks[index] = normalizeTask({ ...existing, ...payload, id: editingTaskId, updatedAt: nowISO() });
+    }
+    editingTaskId = null;
+  } else {
+    systemsData.tasks.push(normalizeTask(payload));
+  }
+  if (systemsData.tasks.length) taskFormExpanded = false;
   saveSystemsData();
   renderTasks();
 }
@@ -1552,6 +1619,7 @@ function cycleTaskStatus(id) {
 
 function deleteTask(id) {
   if (!confirm("Delete this task?")) return;
+  if (editingTaskId === id) editingTaskId = null;
   systemsData.tasks = systemsData.tasks.filter(item => item.id !== id);
   saveSystemsData();
   renderTasks();

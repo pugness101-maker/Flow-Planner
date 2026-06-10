@@ -40,9 +40,16 @@ p { line-height: 1.45; }
 .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.stats-grid-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .stats-grid div { background: var(--soft); border-radius: 8px; padding: 12px; display: grid; gap: 2px; }
 .stats-grid strong { font-size: 22px; }
 .stats-grid span { color: var(--muted); font-size: 12px; }
+.task-stats-card { padding: 12px; }
+.collapsible-card .collapse-trigger { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; background: transparent; color: var(--text); min-height: auto; padding: 0; }
+.collapsible-card.is-open .collapse-trigger { margin-bottom: 10px; }
+.collapse-caret { color: var(--muted); font-size: 14px; line-height: 1; }
+.task-actions { width: auto; min-width: 240px; flex-wrap: wrap; justify-content: flex-end; }
+.page-tasks #pageRoot { padding-bottom: 100px; }
 input, select, textarea { width: 100%; min-height: 42px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); padding: 10px 11px; font-size: 14px; }
 input[type="checkbox"] { width: auto; min-height: 0; padding: 0; accent-color: var(--good); }
 textarea { resize: vertical; min-height: 84px; }
@@ -196,7 +203,7 @@ button { min-height: 42px; width: 100%; border: 0; border-radius: 8px; padding: 
 .duration-tools button { width: auto; min-height: 34px; padding: 7px 10px; }
 
 @media (max-width: 620px) {
-  .grid-2, .grid-3, .stats-grid { grid-template-columns: 1fr; }
+  .grid-2, .grid-3, .stats-grid, .stats-grid-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .item { grid-template-columns: 1fr; }
   .mini-actions { width: 100%; }
   .weekday-picker { grid-template-columns: repeat(4, minmax(0, 1fr)); }
