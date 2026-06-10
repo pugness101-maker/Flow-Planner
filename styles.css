@@ -87,8 +87,54 @@ button { min-height: 42px; width: 100%; border: 0; border-radius: 8px; padding: 
 .habit-card { align-items: start; }
 .habit-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .habit-meta span { padding: 4px 7px; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: 12px; }
+.habit-schedule-list { display: grid; gap: 6px; }
+.habit-schedule-header,
+.habit-schedule-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) minmax(0, 1fr) 72px minmax(88px, auto); gap: 8px; align-items: center; }
+.habit-schedule-header { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.habit-schedule-day { font-weight: 700; font-size: 13px; }
+.habit-schedule-row.hidden { display: none; }
+.habit-schedule-sync { min-height: 38px; font-size: 11px; }
 .habit-actions { width: 330px; flex-wrap: wrap; justify-content: flex-end; }
 .habit-actions button { min-width: 92px; }
+.goal-card { align-items: start; }
+.goal-card-body { display: grid; gap: 8px; width: 100%; }
+.goal-meta-line, .goal-progress-summary { font-size: 13px; color: var(--muted); }
+.goal-progress-summary { font-weight: 600; color: var(--text); }
+.goal-card-actions { width: 100%; flex-wrap: wrap; justify-content: flex-end; }
+.goal-filters { display: grid; gap: 8px; margin-bottom: 12px; }
+.goal-inline-log-form { margin-top: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); }
+.goal-log-history { display: grid; gap: 8px; margin-top: 8px; }
+.goal-log-entry { display: flex; justify-content: space-between; gap: 10px; align-items: start; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); font-size: 12px; }
+.goal-log-entry.is-editing { display: block; }
+.goal-log-entry .mini-actions { width: auto; flex-shrink: 0; }
+.goal-log-entry p { margin-top: 4px; color: var(--muted); }
+.muted-text.small { font-size: 12px; margin: 0; }
+.hangouts-import-row { margin-bottom: 12px; }
+.calendar-import-panel { gap: 12px; }
+.stack-label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.danger-btn { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); }
+.app-toast { position: fixed; left: 50%; bottom: calc(78px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; z-index: 1000; padding: 10px 14px; border-radius: 999px; background: rgba(20, 24, 32, 0.92); color: #fff; font-size: 13px; font-weight: 600; transition: opacity 0.2s ease, transform 0.2s ease; }
+.app-toast.is-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+.hangout-duration-display { display: flex; align-items: center; justify-content: center; min-height: 42px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); font-size: 13px; font-weight: 700; color: var(--muted); }
+.friend-picker { display: grid; gap: 8px; }
+.friend-picker-toggle { width: 100%; justify-content: flex-start; }
+.friend-picker-panel { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); }
+.friend-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.friend-chip { width: auto; min-height: 32px; padding: 6px 10px; background: var(--card); color: var(--text); border: 1px solid var(--line); box-shadow: none; font-size: 12px; font-weight: 600; }
+.friend-picker-list { display: grid; gap: 6px; max-height: 180px; overflow: auto; }
+.friend-picker-option { width: 100%; min-height: 36px; text-align: left; background: var(--card); color: var(--text); border: 1px solid var(--line); box-shadow: none; font-weight: 600; }
+.friend-picker-option.is-selected { border-color: var(--good); color: var(--good); }
+.hangout-item.is-done { opacity: 0.72; }
+.hangout-item.is-editing { display: block; align-items: start; }
+.hangout-edit-form { width: 100%; }
+.item.is-favorite strong::after { content: " ★"; color: var(--good); font-size: 12px; }
+.idea-card { align-items: start; }
+.idea-card span { display: block; font-size: 13px; color: var(--muted); margin-top: 4px; }
+.idea-card.is-editing { display: block; }
+.idea-edit-form { width: 100%; }
+.friend-card { align-items: start; }
+.friend-card.is-editing { display: block; }
+.friend-edit-form { width: 100%; }
 .page-calendar { gap: 0; }
 .page-calendar .card { display: none; }
 .calendar-shell { display: grid; gap: 12px; }

@@ -86,8 +86,9 @@ function mapGoal(goal, index) {
     local_id: String(goal.id || `goal-${index}`),
     name: goal.name || "",
     category: goal.category || "Custom",
-    deadline: goal.deadline || null,
+    deadline: goal.targetDate || goal.deadline || null,
     status: goal.status || "",
+    unit: goal.unit || "",
     notes: goal.notes || "",
     payload: goal
   };
@@ -137,8 +138,9 @@ function mapLog(log, index) {
   return {
     local_id: String(log.id || `log-${index}`),
     title: log.title || "",
-    type: log.type || log.valueType || "Custom",
-    value: log.value || "",
+    type: log.type || log.valueType || log.source || "Custom",
+    value: log.value ?? "",
+    unit: log.unit || log.valueType || "",
     date: log.date || null,
     notes: log.notes || "",
     payload: log

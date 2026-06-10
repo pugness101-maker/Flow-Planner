@@ -113,28 +113,6 @@ console.log("Flow Import/Export Module Loaded");
     if (preview) preview.innerHTML = "";
   }
 
-  function exportFullBackup() {
-    const blob = new Blob([DataService.exportAllData()], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `flow-planner-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function importFullBackup(jsonString) {
-    DataService.importAllData(jsonString);
-    return { success: true, message: "Import successful. Old data was migrated into the simplified planner structure." };
-  }
-
-  function handleFullBackupImport() {
-    const json = document.getElementById("fullBackupImportJson")?.value.trim();
-    if (!json) return alert("Paste backup JSON first.");
-    const result = importFullBackup(json);
-    alert(result.message);
-  }
-
   function handleAllZipImport() {
     const text = document.getElementById("allZipImportData")?.value.trim();
     if (!text) return alert("Paste JSON or CSV first.");
@@ -144,13 +122,5 @@ console.log("Flow Import/Export Module Loaded");
     else alert(result.message);
   }
 
-  function addSettingsUI() {
-    const settingsContent = document.querySelector(".settings-content");
-    if (!settingsContent || document.getElementById("flowImportExportSection")) return false;
-    settingsContent.innerHTML = `<div id="flowImportExportSection" class="card"><h3>Planning Import</h3><p class="muted-text">Import simple JSON arrays or CSV rows into the app backup area.</p><textarea id="allZipImportData" rows="5" placeholder="Paste JSON array or CSV"></textarea><div class="button-row"><button onclick="flowImportExport.handleAllZipImport()">Preview Import</button><button class="secondary-btn" onclick="flowImportExport.exportFullBackup()">Export Backup</button></div><textarea id="fullBackupImportJson" rows="5" placeholder="Paste full backup JSON"></textarea><button onclick="flowImportExport.handleFullBackupImport()">Import Full Backup</button><div id="importPreview" class="import-preview"></div></div>`;
-    return true;
-  }
-
-  window.flowImportExport = { addSettingsUI, exportFullBackup, importFullBackup, importAllZipDataJSON, importGoogleSheetsCSV, confirmImport, cancelImport, handleFullBackupImport, handleAllZipImport, generateStableId, parsePlanningCSV, mergeAllZipData };
-  document.addEventListener("DOMContentLoaded", addSettingsUI);
+  window.flowImportExport = { importAllZipDataJSON, importGoogleSheetsCSV, confirmImport, cancelImport, handleAllZipImport, generateStableId, parsePlanningCSV, mergeAllZipData };
 })();
