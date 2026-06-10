@@ -147,6 +147,10 @@ button { min-height: 42px; width: 100%; border: 0; border-radius: 8px; padding: 
 .friend-card { align-items: start; }
 .friend-card.is-editing { display: block; }
 .friend-edit-form { width: 100%; }
+.social-search-card { padding: 12px; margin-bottom: 12px; }
+.social-search-row { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 8px; align-items: center; }
+.social-body { padding-bottom: 100px; }
+.page-social #pageRoot { padding-bottom: 24px; }
 .page-calendar { gap: 0; }
 .page-calendar .card { display: none; }
 .calendar-shell { display: grid; gap: 12px; }
@@ -220,6 +224,7 @@ button { min-height: 42px; width: 100%; border: 0; border-radius: 8px; padding: 
 .duration-tools button { width: auto; min-height: 34px; padding: 7px 10px; }
 
 @media (max-width: 620px) {
+  .social-search-row { grid-template-columns: 1fr; }
   .grid-2, .grid-3, .stats-grid, .stats-grid-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .item { grid-template-columns: 1fr; }
   .mini-actions { width: 100%; }

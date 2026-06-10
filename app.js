@@ -1432,18 +1432,244 @@ function clearSocialData() {
   showToast("Social data cleared.");
 }
 
-function getSortedHangouts() {
-  return [...socialData.hangouts].sort((a, b) => {
+function loadSocialSortPreferences() {
+  try {
+    socialFriendsSort = localStorage.getItem(SOCIAL_FRIENDS_SORT_KEY) || "name-asc";
+    socialHangoutsSort = localStorage.getItem(SOCIAL_HANGOUTS_SORT_KEY) || "date-newest";
+    socialIdeasSort = localStorage.getItem(SOCIAL_IDEAS_SORT_KEY) || "recent";
+  } catch {
+    socialFriendsSort = "name-asc";
+    socialHangoutsSort = "date-newest";
+    socialIdeasSort = "recent";
+  }
+}
+
+function persistSocialSortPreference(tab, value) {
+  const key = tab === "Friends" ? SOCIAL_FRIENDS_SORT_KEY : tab === "Hangouts" ? SOCIAL_HANGOUTS_SORT_KEY : SOCIAL_IDEAS_SORT_KEY;
+  try { localStorage.setItem(key, value); } catch {}
+  if (tab === "Friends") socialFriendsSort = value;
+  if (tab === "Hangouts") socialHangoutsSort = value;
+  if (tab === "Ideas") socialIdeasSort = value;
+}
+
+function setSocialSortPreference(tab, value) {
+  persistSocialSortPreference(tab, value);
+  refreshSocialList();
+}
+
+function matchesSocialSearch(query, ...fields) {
+  const value = String(query || "").trim().toLowerCase();
+  if (!value) return true;
+  const haystack = fields.map(field => String(field ?? "")).join(" ").toLowerCase();
+  return haystack.includes(value);
+}
+
+function parseIdeaCostValue(cost = "") {
+  const num = parseFloat(String(cost).replace(/[^0-9.]/g, ""));
+  return Number.isNaN(num) ? null : num;
+}
+
+function sortFriendsList(friends = []) {
+  const sort = socialFriendsSort;
+  return [...friends].sort((a, b) => {
+    if (sort === "name-desc") return String(b.name || "").localeCompare(String(a.name || ""));
+    if (sort === "priority") {
+      const rank = (FRIEND_PRIORITY_RANK[a.priority] ?? 2) - (FRIEND_PRIORITY_RANK[b.priority] ?? 2);
+      return rank || String(a.name || "").localeCompare(String(b.name || ""));
+    }
+    if (sort === "relationship") {
+      return getFriendRelationshipType(a).localeCompare(getFriendRelationshipType(b))
+        || String(a.name || "").localeCompare(String(b.name || ""));
+    }
+    if (sort === "recent") return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+}
+
+function sortHangoutsList(hangouts = []) {
+  const sort = socialHangoutsSort;
+  return [...hangouts].sort((a, b) => {
     if (highlightHangoutId) {
       if (a.id === highlightHangoutId) return -1;
       if (b.id === highlightHangoutId) return 1;
     }
+    if (sort === "date-oldest") {
+      const dateCompare = String(a.date || "").localeCompare(String(b.date || ""));
+      if (dateCompare) return dateCompare;
+      return String(a.startTime || a.time || "").localeCompare(String(b.startTime || b.time || ""));
+    }
+    if (sort === "name-asc") {
+      return String(a.activity || a.title || "").localeCompare(String(b.activity || b.title || ""));
+    }
+    if (sort === "recent") return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
     const dateCompare = String(b.date || "").localeCompare(String(a.date || ""));
     if (dateCompare) return dateCompare;
     const timeCompare = String(b.startTime || b.time || "").localeCompare(String(a.startTime || a.time || ""));
     if (timeCompare) return timeCompare;
     return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
   });
+}
+
+function sortIdeasList(ideas = []) {
+  const sort = socialIdeasSort;
+  return [...ideas].sort((a, b) => {
+    if (sort === "name-asc") return String(a.title || "").localeCompare(String(b.title || ""));
+    if (sort === "category") {
+      return String(a.category || "").localeCompare(String(b.category || ""))
+        || String(a.title || "").localeCompare(String(b.title || ""));
+    }
+    if (sort === "favorites-first") {
+      const favoriteCompare = Number(Boolean(b.favorite)) - Number(Boolean(a.favorite));
+      if (favoriteCompare) return favoriteCompare;
+      return String(a.title || "").localeCompare(String(b.title || ""));
+    }
+    if (sort === "cost-low") {
+      const aCost = parseIdeaCostValue(a.cost);
+      const bCost = parseIdeaCostValue(b.cost);
+      const aValue = aCost === null ? Number.POSITIVE_INFINITY : aCost;
+      const bValue = bCost === null ? Number.POSITIVE_INFINITY : bCost;
+      return aValue - bValue || String(a.title || "").localeCompare(String(b.title || ""));
+    }
+    if (sort === "cost-high") {
+      const aCost = parseIdeaCostValue(a.cost);
+      const bCost = parseIdeaCostValue(b.cost);
+      const aValue = aCost === null ? Number.NEGATIVE_INFINITY : aCost;
+      const bValue = bCost === null ? Number.NEGATIVE_INFINITY : bCost;
+      return bValue - aValue || String(a.title || "").localeCompare(String(b.title || ""));
+    }
+    return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+  });
+}
+
+function getFilteredFriends() {
+  const filtered = socialData.friends.filter(friend => matchesSocialSearch(
+    socialSearch,
+    friend.name,
+    getFriendRelationshipType(friend),
+    friend.relationshipType,
+    friend.priority,
+    friend.notes
+  ));
+  const withEditing = editingFriendId && !filtered.some(item => item.id === editingFriendId)
+    ? [socialData.friends.find(item => item.id === editingFriendId), ...filtered].filter(Boolean)
+    : filtered;
+  return sortFriendsList(withEditing);
+}
+
+function getFilteredHangouts() {
+  const filtered = socialData.hangouts.filter(hangout => {
+    const people = getHangoutPeopleNames(hangout, socialData.friends).join(" ");
+    return matchesSocialSearch(
+      socialSearch,
+      hangout.activity,
+      hangout.title,
+      people,
+      hangout.category,
+      hangout.notes,
+      hangout.date
+    );
+  });
+  const withEditing = editingHangoutId && !filtered.some(item => item.id === editingHangoutId)
+    ? [socialData.hangouts.find(item => item.id === editingHangoutId), ...filtered].filter(Boolean)
+    : filtered;
+  return sortHangoutsList(withEditing);
+}
+
+function getFilteredIdeas() {
+  const filtered = socialData.ideas.filter(idea => {
+    const friends = getIdeaLinkedFriendNames(idea, socialData.friends).join(" ");
+    return matchesSocialSearch(
+      socialSearch,
+      idea.title,
+      idea.category,
+      idea.cost,
+      friends,
+      idea.notes,
+      idea.timing,
+      idea.favorite ? "favorite" : ""
+    );
+  });
+  const withEditing = editingIdeaId && !filtered.some(item => item.id === editingIdeaId)
+    ? [socialData.ideas.find(item => item.id === editingIdeaId), ...filtered].filter(Boolean)
+    : filtered;
+  return sortIdeasList(withEditing);
+}
+
+function getSortedHangouts() {
+  return getFilteredHangouts();
+}
+
+function renderSocialSortOptions(tab) {
+  const selected = tab === "Friends" ? socialFriendsSort : tab === "Hangouts" ? socialHangoutsSort : socialIdeasSort;
+  const options = tab === "Friends"
+    ? [["name-asc", "Name A–Z"], ["name-desc", "Name Z–A"], ["priority", "Priority"], ["relationship", "Relationship"], ["recent", "Recently Added"]]
+    : tab === "Hangouts"
+      ? [["date-newest", "Date Newest"], ["date-oldest", "Date Oldest"], ["name-asc", "Name A–Z"], ["recent", "Recently Added"]]
+      : [["recent", "Recently Added"], ["name-asc", "Name A–Z"], ["category", "Category"], ["favorites-first", "Favorites First"], ["cost-low", "Cost Low–High"], ["cost-high", "Cost High–Low"]];
+  return options.map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${escapeHTML(label)}</option>`).join("");
+}
+
+function renderSocialSearchBar() {
+  const placeholder = socialTab === "Friends" ? "Search friends…" : socialTab === "Hangouts" ? "Search hangouts…" : "Search ideas…";
+  return `<div class="card social-search-card">
+    <div class="social-search-row">
+      <input type="search" id="socialSearchInput" placeholder="${placeholder}" value="${escapeHTML(socialSearch)}" oninput="socialSearch=this.value; refreshSocialList();">
+      <select aria-label="Sort ${socialTab}" onchange="setSocialSortPreference('${socialTab}', this.value)">${renderSocialSortOptions(socialTab)}</select>
+    </div>
+  </div>`;
+}
+
+function renderSocialEmptyListMessage(hasAny) {
+  return hasAny ? `<p class="muted-text">No results found.</p>` : "";
+}
+
+function renderFriendsListContent() {
+  const filteredFriends = getFilteredFriends();
+  if (!filteredFriends.length) {
+    return socialData.friends.length
+      ? renderSocialEmptyListMessage(true)
+      : `<p class="muted-text">No friends yet.</p>`;
+  }
+  return `<div class="item-list">${filteredFriends.map(renderFriendItem).join("")}</div>`;
+}
+
+function renderHangoutsListContent() {
+  const filteredHangouts = getFilteredHangouts();
+  if (!filteredHangouts.length) {
+    return socialData.hangouts.length
+      ? renderSocialEmptyListMessage(true)
+      : `<p class="muted-text">No hangouts yet.</p>`;
+  }
+  return `<div class="item-list">${filteredHangouts.map(renderHangoutItem).join("")}</div>`;
+}
+
+function renderIdeasListContent() {
+  const filteredIdeas = getFilteredIdeas();
+  if (!filteredIdeas.length) {
+    return socialData.ideas.length
+      ? renderSocialEmptyListMessage(true)
+      : `<p class="muted-text">No ideas yet.</p>`;
+  }
+  return `<div class="item-list">${filteredIdeas.map(renderIdeaItem).join("")}</div>`;
+}
+
+function refreshSocialList() {
+  if (socialTab === "Hangouts") captureHangoutFormDraft();
+  if (socialTab === "Ideas") captureIdeaFormDraft();
+  const listEl = document.getElementById("socialList");
+  if (!listEl) {
+    renderSocial();
+    return;
+  }
+  if (socialTab === "Friends") listEl.innerHTML = renderFriendsListContent();
+  if (socialTab === "Hangouts") listEl.innerHTML = renderHangoutsListContent();
+  if (socialTab === "Ideas") listEl.innerHTML = renderIdeasListContent();
+}
+
+function setSocialTab(tab) {
+  socialTab = tab;
+  socialSearch = "";
+  renderSocial();
 }
 
 function normalizeScheduleData(raw = {}) {
@@ -1517,6 +1743,14 @@ let customStartDate = todayISO();
 let customEndDate = todayISO();
 let productivityTab = "Habits";
 let socialTab = "Friends";
+let socialSearch = "";
+let socialFriendsSort = "name-asc";
+let socialHangoutsSort = "date-newest";
+let socialIdeasSort = "recent";
+const SOCIAL_FRIENDS_SORT_KEY = "flowPlannerSocialFriendsSort";
+const SOCIAL_HANGOUTS_SORT_KEY = "flowPlannerSocialHangoutsSort";
+const SOCIAL_IDEAS_SORT_KEY = "flowPlannerSocialIdeasSort";
+const FRIEND_PRIORITY_RANK = { High: 0, Medium: 1, Low: 2 };
 let goalSearch = "";
 let goalCategoryFilter = "All";
 let goalTypeFilter = "All";
@@ -1571,6 +1805,7 @@ function loadAppStateFromStorage() {
 
 function initializeApp() {
   loadAppStateFromStorage();
+  loadSocialSortPreferences();
   setPage(activePage);
 }
 
@@ -2993,8 +3228,9 @@ function deleteGoalLog(logId, goalId) {
 function renderSocial() {
   document.getElementById("pageRoot").innerHTML = `
     ${renderSocialToolbar()}
-    <div class="segmented page-tabs">${["Friends", "Hangouts", "Ideas"].map(tab => `<button class="${socialTab === tab ? "active" : ""}" onclick="socialTab='${tab}'; renderSocial();">${tab}</button>`).join("")}</div>
-    <div id="socialBody"></div>`;
+    <div class="segmented page-tabs">${["Friends", "Hangouts", "Ideas"].map(tab => `<button class="${socialTab === tab ? "active" : ""}" onclick="setSocialTab('${tab}')">${tab}</button>`).join("")}</div>
+    ${renderSocialSearchBar()}
+    <div id="socialBody" class="social-body"></div>`;
   if (socialTab === "Friends") renderFriends();
   if (socialTab === "Hangouts") renderHangouts();
   if (socialTab === "Ideas") renderIdeas();
@@ -3041,7 +3277,7 @@ function renderFriendItem(friend) {
 }
 
 function renderFriends() {
-  document.getElementById("socialBody").innerHTML = `${card("New Friend", `<form onsubmit="saveFriend(event)" class="stack"><input id="friendName" placeholder="Name" required><select id="friendRelationship">${friendRelationshipOptionList("Friend")}</select><input id="friendReminder" type="date"><textarea id="friendNotes" placeholder="Relationship notes"></textarea><button>Add Friend</button></form>`)}${card("Friends", socialData.friends.length ? `<div class="item-list">${socialData.friends.map(renderFriendItem).join("")}</div>` : `<p class="muted-text">No friends yet.</p>`)}`;
+  document.getElementById("socialBody").innerHTML = `${card("New Friend", `<form onsubmit="saveFriend(event)" class="stack"><input id="friendName" placeholder="Name" required><select id="friendRelationship">${friendRelationshipOptionList("Friend")}</select><input id="friendReminder" type="date"><textarea id="friendNotes" placeholder="Relationship notes"></textarea><button>Add Friend</button></form>`)}${card("Friends", `<div id="socialList">${renderFriendsListContent()}</div>`)}`;
 }
 
 function saveFriend(event) {
@@ -3330,7 +3566,6 @@ function saveHangoutEdit(event, id) {
 }
 
 function renderHangouts() {
-  const hangouts = getSortedHangouts();
   const draft = hangoutFormDraft || {};
   const durationPreview = draft.startTime && draft.endTime
     ? `${Math.max(0, parseTimeToMinutes(draft.endTime) - parseTimeToMinutes(draft.startTime))} min`
@@ -3348,7 +3583,7 @@ function renderHangouts() {
     <textarea id="hangoutNotes" placeholder="Notes">${escapeHTML(draft.notes || "")}</textarea>
     <label class="toggle-row"><input id="hangoutCompleted" type="checkbox" ${draft.completed ? "checked" : ""}>Completed</label>
     <button type="submit">Add Hangout</button>
-  </form>`)}${card("Import Calendar Events as Hangouts (Date Range)", renderCalendarImportPanel())}${card("Hangout History", `<div class="button-row hangouts-import-row"><button type="button" class="secondary-btn" onclick="handleAddAllHangoutsToCalendar()">Add all dated hangouts to Calendar</button></div>${hangouts.length ? `<div class="item-list">${hangouts.map(renderHangoutItem).join("")}</div>` : `<p class="muted-text">No hangouts yet.</p>`}`)}`;
+  </form>`)}${card("Import Calendar Events as Hangouts (Date Range)", renderCalendarImportPanel())}${card("Hangout History", `<div class="button-row hangouts-import-row"><button type="button" class="secondary-btn" onclick="handleAddAllHangoutsToCalendar()">Add all dated hangouts to Calendar</button></div><div id="socialList">${renderHangoutsListContent()}</div>`)}`;
   syncHangoutDuration();
 }
 
@@ -3589,7 +3824,7 @@ function renderIdeas() {
     <textarea id="ideaNotes" placeholder="Notes">${escapeHTML(draft.notes || "")}</textarea>
     <label class="toggle-row"><input id="ideaFavorite" type="checkbox" ${draft.favorite ? "checked" : ""}>Favorite</label>
     <button type="submit">Add Idea</button>
-  </form>`)}${card("Ideas", socialData.ideas.length ? `<div class="item-list">${socialData.ideas.map(renderIdeaItem).join("")}</div>` : `<p class="muted-text">No ideas yet.</p>`)}`;
+  </form>`)}${card("Ideas", `<div id="socialList">${renderIdeasListContent()}</div>`)}`;
 }
 
 function saveIdea(event) {
