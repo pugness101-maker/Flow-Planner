@@ -58,6 +58,7 @@ textarea { resize: vertical; min-height: 84px; }
 label { display: block; margin: 10px 0 4px; font-size: 13px; font-weight: 650; }
 button { min-height: 42px; width: 100%; border: 0; border-radius: 8px; padding: 10px 12px; background: var(--accent); color: var(--card); font-weight: 700; cursor: pointer; }
 .secondary-btn { background: var(--soft); color: var(--text); border: 1px solid var(--line); }
+.secondary-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .segmented { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding: 5px; background: var(--soft); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; }
 .segmented button { min-height: 36px; background: transparent; color: var(--muted); margin: 0; }
 .segmented button.active { background: var(--card); color: var(--text); box-shadow: 0 1px 6px var(--shadow); }
@@ -141,6 +142,8 @@ button { min-height: 42px; width: 100%; border: 0; border-radius: 8px; padding: 
 .idea-card span { display: block; font-size: 13px; color: var(--muted); margin-top: 4px; }
 .idea-card.is-editing { display: block; }
 .idea-edit-form { width: 100%; }
+.idea-actions { width: auto; min-width: 280px; flex-wrap: wrap; justify-content: flex-end; }
+.hangout-item.is-highlighted { border-color: color-mix(in srgb, var(--good) 55%, var(--line)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--good) 18%, transparent); }
 .friend-card { align-items: start; }
 .friend-card.is-editing { display: block; }
 .friend-edit-form { width: 100%; }
@@ -155,7 +158,13 @@ button { min-height: 42px; width: 100%; border: 0; border-radius: 8px; padding: 
 .calendar-nav-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) 110px; gap: 8px; align-items: center; }
 .calendar-nav-row .segmented { margin-bottom: 0; }
 .calendar-board { background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; box-shadow: 0 8px 24px var(--shadow); }
-.calendar-day-title { padding: 12px 14px; font-weight: 800; border-bottom: 1px solid var(--line); }
+.calendar-day-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; font-weight: 800; border-bottom: 1px solid var(--line); }
+.calendar-day-title strong { font-size: 16px; }
+.calendar-all-day-row { display: grid; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--soft) 65%, var(--card)); }
+.calendar-all-day-row.compact { padding: 6px; gap: 4px; position: relative; z-index: 2; background: color-mix(in srgb, var(--soft) 55%, var(--card)); border-bottom: 1px solid var(--line); }
+.day-item-badge { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.calendar-item-type { display: inline-block; width: fit-content; margin-bottom: 2px; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--event-color, #f59e0b) 18%, var(--card)); color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; }
+.calendar-hangout { cursor: pointer; }
 .time-grid { display: grid; grid-template-columns: 72px minmax(0, 1fr); max-height: 680px; overflow: auto; }
 .week-grid { display: grid; grid-template-columns: 64px repeat(7, minmax(120px, 1fr)); max-height: 680px; overflow: auto; }
 .time-gutter { background: var(--soft); border-right: 1px solid var(--line); }
@@ -167,10 +176,10 @@ button { min-height: 42px; width: 100%; border: 0; border-radius: 8px; padding: 
 .now-line { position: absolute; left: 0; right: 0; height: 2px; background: #df3b3b; z-index: 4; pointer-events: none; }
 .now-line span { position: absolute; left: -5px; top: -4px; width: 10px; height: 10px; border-radius: 50%; background: #df3b3b; }
 .week-header { display: grid; grid-template-columns: 64px repeat(7, minmax(120px, 1fr)); border-bottom: 1px solid var(--line); background: var(--soft); overflow-x: auto; }
-.week-header button { background: transparent; color: var(--text); border-left: 1px solid var(--line); border-radius: 0; min-height: 58px; padding: 8px; }
-.week-header button span { display: block; color: var(--muted); font-size: 12px; }
-.week-header button strong { font-size: 18px; }
-.week-header .is-today strong, .month-cell.is-today .month-date { color: var(--good); }
+.week-header button, .week-day-head { background: transparent; color: var(--text); border-left: 1px solid var(--line); border-radius: 0; min-height: 58px; padding: 8px; display: grid; gap: 4px; align-content: center; justify-items: start; }
+.week-header button span, .week-day-head span { display: block; color: var(--text); font-size: 12px; font-weight: 700; }
+.week-header .is-today, .week-day-column.is-today, .day-board.is-today { background: color-mix(in srgb, var(--good) 6%, var(--card)); }
+.week-header .is-today span, .month-cell.is-today .month-date, .month-cell.is-today .month-day-label { color: var(--good); }
 .calendar-event { position: absolute; z-index: 3; display: block; min-height: 24px; overflow: hidden; text-align: left; border-radius: 7px; border: 1px solid color-mix(in srgb, var(--event-color) 70%, #000 10%); background: color-mix(in srgb, var(--event-color) 18%, var(--card)); color: var(--text); padding: 5px 7px; box-shadow: 0 4px 12px var(--shadow); font-size: 12px; line-height: 1.15; cursor: grab; }
 .calendar-event strong, .calendar-event span, .calendar-event em { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .calendar-event span, .calendar-event em { color: var(--muted); font-style: normal; font-size: 11px; }
@@ -184,17 +193,23 @@ button { min-height: 42px; width: 100%; border: 0; border-radius: 8px; padding: 
 [data-category="Custom"] { --event-color: #64748b; }
 .month-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); background: var(--soft); border-bottom: 1px solid var(--line); }
 .month-weekdays span { padding: 10px; color: var(--muted); font-size: 12px; font-weight: 700; text-align: center; }
-.month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-auto-rows: minmax(112px, auto); }
-.month-cell { min-width: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 6px; }
-.month-cell.is-outside { opacity: 0.48; background: color-mix(in srgb, var(--soft) 50%, transparent); }
-.month-date { width: 30px; min-width: 30px; min-height: 28px; padding: 0; border-radius: 999px; background: transparent; color: var(--text); }
-.month-cell.is-today .month-date { background: color-mix(in srgb, var(--good) 12%, var(--card)); }
-.month-events { display: grid; gap: 2px; margin-top: 4px; }
+.month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-auto-rows: minmax(124px, auto); gap: 6px; padding: 6px; background: var(--soft); }
+.month-cell { min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); box-shadow: 0 4px 14px var(--shadow); }
+.month-cell.is-outside { opacity: 0.55; background: color-mix(in srgb, var(--soft) 70%, var(--card)); }
+.month-cell.is-today { border-color: color-mix(in srgb, var(--good) 55%, var(--line)); background: color-mix(in srgb, var(--good) 8%, var(--card)); box-shadow: 0 6px 18px color-mix(in srgb, var(--good) 16%, var(--shadow)); }
+.month-cell-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.month-date { width: 30px; min-width: 30px; min-height: 28px; padding: 0; border-radius: 999px; background: transparent; color: var(--text); font-weight: 800; }
+.month-day-label { color: var(--muted); font-size: 11px; font-weight: 700; }
+.month-cell.is-today .month-date { background: color-mix(in srgb, var(--good) 14%, var(--card)); }
+.month-events { display: grid; gap: 4px; }
 .more-events { width: auto; min-height: 24px; padding: 2px 4px; background: transparent; color: var(--muted); font-size: 11px; text-align: left; }
 .custom-board { padding: 12px; }
-.custom-day-groups { display: grid; gap: 10px; }
-.custom-day { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--card); }
-.custom-day > button { width: auto; min-height: 32px; padding: 6px 10px; background: var(--soft); color: var(--text); margin-bottom: 8px; }
+.custom-day-groups { display: grid; gap: 12px; }
+.custom-day { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--card); box-shadow: 0 4px 14px var(--shadow); }
+.custom-day.is-today { border-color: color-mix(in srgb, var(--good) 55%, var(--line)); background: color-mix(in srgb, var(--good) 8%, var(--card)); box-shadow: 0 6px 18px color-mix(in srgb, var(--good) 16%, var(--shadow)); }
+.custom-day-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.custom-day-head > button { width: auto; min-height: 32px; padding: 6px 10px; background: var(--soft); color: var(--text); font-weight: 700; }
+.custom-day-hangouts { display: grid; gap: 6px; margin-bottom: 8px; }
 .calendar-block-card { border-left: 5px solid var(--event-color, var(--line)); cursor: pointer; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 18px; background: rgba(0, 0, 0, 0.42); }
 .modal { width: min(560px, 100%); max-height: min(760px, calc(100vh - 36px)); overflow: auto; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28); }

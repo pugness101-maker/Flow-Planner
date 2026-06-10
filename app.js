@@ -223,6 +223,7 @@ function normalizeHabit(item = {}) {
 const DEFAULT_GOAL_UNITS = ["%", "mi", "km", "lbs", "kg", "pages", "hours", "sessions", "reps"];
 const DEFAULT_LOG_UNITS = ["%", "mi", "km", "lbs", "kg", "pages", "hours", "sessions", "reps", "count"];
 const DEFAULT_GOAL_TYPES = ["Outcome", "Habit", "Project", "Health", "Other"];
+const FRIEND_RELATIONSHIP_TYPES = ["Family", "Friend", "Good Friend", "Acquaintance", "Other"];
 
 function getGoalUnits() {
   const units = allZipCustomOptions?.goalUnits;
@@ -1001,19 +1002,34 @@ function normalizeHangoutFields(hangout = {}) {
     location: timed.location || "",
     notes: timed.notes || "",
     cost: timed.cost || "",
+    category: timed.category || "",
     followUpReminder: timed.followUpReminder || "",
+    sourceIdeaId: timed.sourceIdeaId || "",
     completed: parseCompletedFlag(timed.completed),
     createdAt: timed.createdAt || nowISO(),
     updatedAt: timed.updatedAt || nowISO()
   };
 }
 
+function getFriendRelationshipType(friend = {}) {
+  return friend.relationship || friend.relationshipType || "Friend";
+}
+
+function friendRelationshipOptionList(selected = "Friend") {
+  const value = selected || "Friend";
+  const options = [...FRIEND_RELATIONSHIP_TYPES];
+  if (value && !options.includes(value)) options.push(value);
+  return optionList(options, value);
+}
+
 function normalizeFriendFields(friend = {}) {
   const lastSeen = friend.lastSeen || friend.lastContacted || "";
+  const relationshipType = getFriendRelationshipType(friend);
   return {
     id: friend.id || createId("friend"),
     name: friend.name || "Friend",
-    relationship: friend.relationship || friend.relationshipType || "Friend",
+    relationship: relationshipType,
+    relationshipType,
     priority: friend.priority || "Medium",
     lastContacted: friend.lastContacted || lastSeen,
     lastSeen,
@@ -1107,11 +1123,88 @@ function normalizeIdeaFields(idea = {}, friends = []) {
     linkedFriendIds: linked.linkedFriendIds,
     linkedFriends: linked.linkedFriends,
     friendIds: linked.linkedFriendIds,
-    notes: idea.notes || "",
+    notes: idea.notes || idea.details || "",
+    timing: idea.timing || "",
     favorite: Boolean(idea.favorite),
     createdAt: idea.createdAt || nowISO(),
     updatedAt: idea.updatedAt || nowISO()
   };
+}
+
+function parseIdeaTiming(timing = "") {
+  if (!timing) return { date: "", startTime: "", endTime: "" };
+  const value = String(timing).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return { date: value, startTime: "", endTime: "" };
+  const rangeMatch = value.match(/(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})/);
+  if (rangeMatch) {
+    return {
+      date: "",
+      startTime: normalizeTimeValue(rangeMatch[1]),
+      endTime: normalizeTimeValue(rangeMatch[2])
+    };
+  }
+  const timeMatch = value.match(/\b(\d{1,2}:\d{2})\b/);
+  if (timeMatch) return { date: "", startTime: normalizeTimeValue(timeMatch[1]), endTime: "" };
+  return { date: "", startTime: "", endTime: "" };
+}
+
+function buildHangoutNotesFromIdea(idea = {}) {
+  const parts = [];
+  if (idea.category && idea.category !== "General") parts.push(`Category: ${idea.category}`);
+  if (idea.cost) parts.push(`Cost: ${idea.cost}`);
+  if (idea.timing && !parseIdeaTiming(idea.timing).date) parts.push(`Timing: ${idea.timing}`);
+  if (idea.notes) parts.push(idea.notes);
+  return parts.join("\n").trim();
+}
+
+function findHangoutBySourceIdeaId(ideaId) {
+  return socialData.hangouts.find(hangout => hangout.sourceIdeaId === ideaId) || null;
+}
+
+function createHangoutFromIdea(idea) {
+  const timing = parseIdeaTiming(idea.timing);
+  const linkedFriends = getIdeaLinkedFriendNames(idea, socialData.friends);
+  const draft = {
+    activity: idea.title,
+    title: idea.title,
+    category: idea.category || "",
+    date: timing.date || "",
+    startTime: timing.startTime || "",
+    endTime: timing.endTime || "",
+    time: timing.startTime || "",
+    people: linkedFriends,
+    friendIds: [...(idea.linkedFriendIds || idea.friendIds || [])],
+    notes: buildHangoutNotesFromIdea(idea),
+    cost: idea.cost || "",
+    completed: false,
+    sourceIdeaId: idea.id,
+    createdAt: nowISO(),
+    updatedAt: nowISO()
+  };
+  applyHangoutFriendLinks(draft);
+  return normalizeHangoutFields(draft);
+}
+
+function addIdeaToHangouts(ideaId) {
+  const idea = socialData.ideas.find(item => item.id === ideaId);
+  if (!idea) return;
+  if (findHangoutBySourceIdeaId(ideaId)) {
+    showToast("Already added to Hangouts");
+    return;
+  }
+  const hangout = createHangoutFromIdea(idea);
+  socialData.hangouts.push(hangout);
+  highlightHangoutId = hangout.id;
+  saveSocialData();
+  socialTab = "Hangouts";
+  renderSocial();
+  showToast("Added to Hangouts");
+}
+
+function openHangoutFromCalendar(hangoutId) {
+  highlightHangoutId = hangoutId;
+  socialTab = "Hangouts";
+  setPage("Social");
 }
 
 function normalizeImportedFriend(raw = {}) {
@@ -1264,8 +1357,8 @@ function exportSocialData() {
   const payload = {
     friends: socialData.friends.map(friend => ({
       name: friend.name,
-      relationship: friend.relationship,
-      relationshipType: friend.relationship,
+      relationship: getFriendRelationshipType(friend),
+      relationshipType: getFriendRelationshipType(friend),
       priority: friend.priority || "Medium",
       lastSeen: friend.lastSeen || friend.lastContacted || "",
       lastContacted: friend.lastContacted || friend.lastSeen || "",
@@ -1287,13 +1380,16 @@ function exportSocialData() {
         location: hangout.location || "",
         notes: hangout.notes || "",
         completed: Boolean(hangout.completed),
-        cost: hangout.cost || ""
+        cost: hangout.cost || "",
+        category: hangout.category || "",
+        sourceIdeaId: hangout.sourceIdeaId || ""
       })),
     ideas: socialData.ideas.map(idea => ({
       title: idea.title,
       category: idea.category || "",
       cost: idea.cost || "",
       notes: idea.notes || "",
+      timing: idea.timing || "",
       favorite: Boolean(idea.favorite),
       linkedFriendIds: idea.linkedFriendIds || idea.friendIds || [],
       linkedFriends: getIdeaLinkedFriendNames(idea, socialData.friends)
@@ -1338,9 +1434,15 @@ function clearSocialData() {
 
 function getSortedHangouts() {
   return [...socialData.hangouts].sort((a, b) => {
+    if (highlightHangoutId) {
+      if (a.id === highlightHangoutId) return -1;
+      if (b.id === highlightHangoutId) return 1;
+    }
     const dateCompare = String(b.date || "").localeCompare(String(a.date || ""));
     if (dateCompare) return dateCompare;
-    return String(b.startTime || b.time || "").localeCompare(String(a.startTime || a.time || ""));
+    const timeCompare = String(b.startTime || b.time || "").localeCompare(String(a.startTime || a.time || ""));
+    if (timeCompare) return timeCompare;
+    return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
   });
 }
 
@@ -1435,6 +1537,7 @@ let ideaFormDraft = null;
 let ideaFormFriendIds = [];
 let ideaFriendPickerOpen = false;
 let ideaFriendSearch = "";
+let highlightHangoutId = null;
 let editingFriendId = null;
 let editingHangoutId = null;
 let editHangoutFriendIds = [];
@@ -1715,6 +1818,68 @@ function formatDisplayDate(dateString) {
   return new Date(`${dateString}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+function formatCalendarDayLabel(dateString) {
+  if (!dateString) return "No date";
+  return new Date(`${dateString}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+function getTasksForDate(date) {
+  return systemsData.tasks.filter(task => task.dueDate === date);
+}
+
+function getHangoutsForDate(date) {
+  return socialData.hangouts.filter(hangout => {
+    if ((hangout.date || "") !== date) return false;
+    return !getBlockByLinkedHangoutId(hangout.id);
+  });
+}
+
+function getCalendarDayItemCount(date) {
+  const blocks = scheduleData.blocks.filter(block => block.date === date).length;
+  const hangouts = getHangoutsForDate(date).length;
+  const tasks = getTasksForDate(date).length;
+  return blocks + hangouts + tasks;
+}
+
+function renderDayItemBadge(count) {
+  if (!count) return "";
+  return `<span class="day-item-badge">${count} item${count === 1 ? "" : "s"}</span>`;
+}
+
+function hangoutToLayoutItem(hangout) {
+  const startTime = getHangoutStartTime(hangout);
+  return {
+    id: hangout.id,
+    startTime,
+    endTime: getHangoutEndTime(hangout) || minutesToTime(parseTimeToMinutes(startTime) + 60)
+  };
+}
+
+function getHangoutDurationMinutes(hangout = {}) {
+  const startTime = getHangoutStartTime(hangout);
+  const endTime = getHangoutEndTime(hangout);
+  if (startTime && endTime) return Math.max(15, parseTimeToMinutes(endTime) - parseTimeToMinutes(startTime));
+  return 60;
+}
+
+function renderCalendarHangout(hangout, compact = false, layout = null) {
+  const people = getHangoutPeopleNames(hangout, socialData.friends);
+  const startTime = getHangoutStartTime(hangout);
+  const start = startTime ? parseTimeToMinutes(startTime) : 0;
+  const height = Math.max(26, getHangoutDurationMinutes(hangout) * (64 / 60));
+  const top = start * (64 / 60);
+  const width = layout ? `calc(${100 / layout.cols}% - 6px)` : "calc(100% - 8px)";
+  const left = layout ? `calc(${(100 / layout.cols) * layout.col}% + 4px)` : "4px";
+  const style = compact || !startTime ? "" : `style="top:${top}px;height:${height}px;left:${left};width:${width}"`;
+  const timeLabel = startTime ? formatCalendarBlockTime({ startTime, endTime: getHangoutEndTime(hangout) }) : "All day";
+  return `<button type="button" class="calendar-event calendar-hangout ${compact ? "compact" : ""} ${hangout.completed ? "is-complete" : ""}" ${style} data-category="Social" onclick="openHangoutFromCalendar('${hangout.id}')">
+    <span class="calendar-item-type">Hangout</span>
+    <strong>${escapeHTML(hangout.activity || hangout.title)}</strong>
+    <span>${escapeHTML(timeLabel)}</span>
+    ${people.length ? `<em>${escapeHTML(people.join(", "))}</em>` : ""}
+  </button>`;
+}
+
 function renderCalendar() {
   const range = getCalendarRange();
   const blocks = getBlocksForRange(range.start, range.end);
@@ -1891,6 +2056,7 @@ function renderCalendarBlock(block, compact = false, layout = null) {
   const left = layout ? `calc(${(100 / layout.cols) * layout.col}% + 4px)` : "4px";
   const style = compact ? "" : `style="top:${top}px;height:${height}px;left:${left};width:${width}"`;
   return `<button class="calendar-event ${compact ? "compact" : ""} ${block.completed ? "is-complete" : ""}" ${style} data-category="${escapeHTML(getBlockCategory(block))}" draggable="true" ondragstart="startBlockDrag(event, '${block.id}')" onclick="openBlockModal('${block.id}')">
+    ${hangout ? `<span class="calendar-item-type">Hangout</span>` : ""}
     <strong>${escapeHTML(block.title)}</strong>
     <span>${escapeHTML(formatCalendarBlockTime(block))}</span>
     ${people.length ? `<em>${escapeHTML(people.join(", "))}</em>` : ""}
@@ -1901,36 +2067,56 @@ function renderCalendarBlock(block, compact = false, layout = null) {
 }
 
 function renderDayCalendar(date, blocks) {
-  const layout = layoutOverlappingBlocks(blocks);
+  const hangouts = getHangoutsForDate(date);
+  const allDayHangouts = hangouts.filter(hangout => !getHangoutStartTime(hangout));
+  const timedHangouts = hangouts.filter(hangout => getHangoutStartTime(hangout));
+  const layout = layoutOverlappingBlocks([...blocks, ...timedHangouts.map(hangoutToLayoutItem)]);
+  const itemCount = getCalendarDayItemCount(date);
   const currentTime = new Date();
   const showNow = date === todayISO();
   const nowTop = ((currentTime.getHours() * 60) + currentTime.getMinutes()) * (64 / 60);
-  return `<div class="calendar-board day-board">
-    <div class="calendar-day-title">${escapeHTML(getDayLabel(date, { weekday: "long", month: "long", day: "numeric" }))}</div>
+  return `<div class="calendar-board day-board ${date === todayISO() ? "is-today" : ""}">
+    <div class="calendar-day-title">
+      <strong>${escapeHTML(formatCalendarDayLabel(date))}</strong>
+      ${renderDayItemBadge(itemCount)}
+    </div>
+    ${allDayHangouts.length ? `<div class="calendar-all-day-row">${allDayHangouts.map(hangout => renderCalendarHangout(hangout, true)).join("")}</div>` : ""}
     <div class="time-grid day-grid" ondragover="allowCalendarDrop(event)" ondrop="dropBlockOnTimeline(event, '${date}')">
       <div class="time-gutter">${renderHourLabels()}</div>
       <div class="time-canvas">
         ${renderHourRows(date)}
         ${showNow ? `<div class="now-line" style="top:${nowTop}px"><span></span></div>` : ""}
         ${blocks.map(block => renderCalendarBlock(block, false, layout.get(block.id))).join("")}
+        ${timedHangouts.map(hangout => renderCalendarHangout(hangout, false, layout.get(hangout.id))).join("")}
       </div>
     </div>
-    ${blocks.length ? "" : `<div class="empty-state small"><p>No blocks scheduled for this range.</p></div>`}
+    ${itemCount ? "" : `<div class="empty-state small"><p>No blocks scheduled for this range.</p></div>`}
   </div>`;
 }
 
 function renderWeekCalendar(startDate, blocks) {
   const dates = getWeekDates(startDate);
   return `<div class="calendar-board week-board">
-    <div class="week-header"><div></div>${dates.map(date => `<button class="${date === todayISO() ? "is-today" : ""}" onclick="calendarDate='${date}'; calendarView='Day'; renderCalendar();"><span>${escapeHTML(getDayLabel(date, { weekday: "short" }))}</span><strong>${new Date(`${date}T00:00:00`).getDate()}</strong></button>`).join("")}</div>
+    <div class="week-header"><div></div>${dates.map(date => {
+      const itemCount = getCalendarDayItemCount(date);
+      return `<button class="week-day-head ${date === todayISO() ? "is-today" : ""}" onclick="calendarDate='${date}'; calendarView='Day'; renderCalendar();">
+        <span>${escapeHTML(formatCalendarDayLabel(date))}</span>
+        ${renderDayItemBadge(itemCount)}
+      </button>`;
+    }).join("")}</div>
     <div class="week-grid">
       <div class="time-gutter">${renderHourLabels()}</div>
       ${dates.map(date => {
         const dayBlocks = blocks.filter(block => block.date === date);
-        const layout = layoutOverlappingBlocks(dayBlocks);
-        return `<div class="time-canvas week-day-column" ondragover="allowCalendarDrop(event)" ondrop="dropBlockOnTimeline(event, '${date}')">
+        const hangouts = getHangoutsForDate(date);
+        const allDayHangouts = hangouts.filter(hangout => !getHangoutStartTime(hangout));
+        const timedHangouts = hangouts.filter(hangout => getHangoutStartTime(hangout));
+        const layout = layoutOverlappingBlocks([...dayBlocks, ...timedHangouts.map(hangoutToLayoutItem)]);
+        return `<div class="time-canvas week-day-column ${date === todayISO() ? "is-today" : ""}" ondragover="allowCalendarDrop(event)" ondrop="dropBlockOnTimeline(event, '${date}')">
+          ${allDayHangouts.length ? `<div class="calendar-all-day-row compact">${allDayHangouts.map(hangout => renderCalendarHangout(hangout, true)).join("")}</div>` : ""}
           ${renderHourRows(date)}
           ${dayBlocks.map(block => renderCalendarBlock(block, false, layout.get(block.id))).join("")}
+          ${timedHangouts.map(hangout => renderCalendarHangout(hangout, false, layout.get(hangout.id))).join("")}
         </div>`;
       }).join("")}
     </div>
@@ -1953,10 +2139,21 @@ function renderMonthCalendar() {
     <div class="month-grid">
       ${dates.map(date => {
         const dayBlocks = scheduleData.blocks.filter(block => block.date === date).sort((a, b) => a.startTime.localeCompare(b.startTime));
+        const dayHangouts = getHangoutsForDate(date);
+        const dayItems = [...dayBlocks.map(block => ({ type: "block", item: block })), ...dayHangouts.map(hangout => ({ type: "hangout", item: hangout }))];
+        const itemCount = getCalendarDayItemCount(date);
         const isOutside = new Date(`${date}T00:00:00`).getMonth() !== base.getMonth();
+        const preview = dayItems.slice(0, 3).map(entry => entry.type === "block"
+          ? renderCalendarBlock(entry.item, true)
+          : renderCalendarHangout(entry.item, true)).join("");
+        const overflow = dayItems.length > 3 ? dayItems.length - 3 : 0;
         return `<div class="month-cell ${isOutside ? "is-outside" : ""} ${date === todayISO() ? "is-today" : ""}" ondragover="allowCalendarDrop(event)" ondrop="dropBlockOnDate(event, '${date}')">
-          <button class="month-date" onclick="calendarDate='${date}'; calendarView='Day'; renderCalendar();">${new Date(`${date}T00:00:00`).getDate()}</button>
-          <div class="month-events">${dayBlocks.slice(0, 3).map(block => renderCalendarBlock(block, true)).join("")}${dayBlocks.length > 3 ? `<button class="more-events" onclick="calendarDate='${date}'; calendarView='Day'; renderCalendar();">+${dayBlocks.length - 3} more</button>` : ""}</div>
+          <div class="month-cell-head">
+            <button class="month-date" onclick="calendarDate='${date}'; calendarView='Day'; renderCalendar();">${new Date(`${date}T00:00:00`).getDate()}</button>
+            <span class="month-day-label">${escapeHTML(getDayLabel(date, { weekday: "short" }))}</span>
+            ${renderDayItemBadge(itemCount)}
+          </div>
+          <div class="month-events">${preview}${overflow ? `<button class="more-events" onclick="calendarDate='${date}'; calendarView='Day'; renderCalendar();">+${overflow} more</button>` : ""}</div>
         </div>`;
       }).join("")}
     </div>
@@ -1971,9 +2168,15 @@ function renderCustomCalendar(range, blocks) {
     <div class="custom-day-groups">
       ${days.map(date => {
         const dayBlocks = blocks.filter(block => block.date === date);
-        return `<section class="custom-day" ondragover="allowCalendarDrop(event)" ondrop="dropBlockOnDate(event, '${date}')">
-          <button onclick="calendarDate='${date}'; calendarView='Day'; renderCalendar();">${escapeHTML(getDayLabel(date, { weekday: "short", month: "short", day: "numeric" }))}</button>
-          ${dayBlocks.length ? dayBlocks.map(block => renderBlockItem(block)).join("") : `<p class="muted-text">No blocks scheduled.</p>`}
+        const dayHangouts = getHangoutsForDate(date);
+        const itemCount = getCalendarDayItemCount(date);
+        return `<section class="custom-day ${date === todayISO() ? "is-today" : ""}" ondragover="allowCalendarDrop(event)" ondrop="dropBlockOnDate(event, '${date}')">
+          <div class="custom-day-head">
+            <button onclick="calendarDate='${date}'; calendarView='Day'; renderCalendar();">${escapeHTML(formatCalendarDayLabel(date))}</button>
+            ${renderDayItemBadge(itemCount)}
+          </div>
+          ${dayHangouts.length ? `<div class="custom-day-hangouts">${dayHangouts.map(hangout => renderCalendarHangout(hangout, true)).join("")}</div>` : ""}
+          ${dayBlocks.length ? dayBlocks.map(block => renderBlockItem(block)).join("") : dayHangouts.length ? "" : `<p class="muted-text">No blocks scheduled.</p>`}
         </section>`;
       }).join("")}
     </div>
@@ -2804,7 +3007,7 @@ function formatFriendDate(value = "") {
 function renderFriendEditForm(friend) {
   return `<form onsubmit="saveFriendEdit(event, '${friend.id}')" class="stack friend-edit-form">
     <input name="editFriendName" placeholder="Name" value="${escapeHTML(friend.name)}" required>
-    <input name="editFriendRelationship" placeholder="Relationship type" value="${escapeHTML(friend.relationship || "Friend")}">
+    <select name="editFriendRelationship">${friendRelationshipOptionList(getFriendRelationshipType(friend))}</select>
     <select name="editFriendPriority">${optionList(["Low", "Medium", "High"], friend.priority || "Medium")}</select>
     <div class="grid-2">
       <input name="editFriendLastSeen" type="date" value="${escapeHTML(formatFriendDate(friend.lastSeen || friend.lastContacted))}">
@@ -2826,7 +3029,7 @@ function renderFriendItem(friend) {
   return `<div class="item friend-card">
     <div>
       <strong>${escapeHTML(friend.name)}</strong>
-      <span>${escapeHTML(friend.relationship || "Friend")} · ${escapeHTML(friend.priority || "Medium")} priority</span>
+      <span>${escapeHTML(getFriendRelationshipType(friend))} · ${escapeHTML(friend.priority || "Medium")} priority</span>
       <span>Last seen ${escapeHTML(friend.lastSeen || friend.lastContacted || "not set")} · Follow-up ${escapeHTML(friend.followUpReminder || "not set")}</span>
       ${friend.notes ? `<p>${escapeHTML(friend.notes)}</p>` : ""}
     </div>
@@ -2838,13 +3041,15 @@ function renderFriendItem(friend) {
 }
 
 function renderFriends() {
-  document.getElementById("socialBody").innerHTML = `${card("New Friend", `<form onsubmit="saveFriend(event)" class="stack"><input id="friendName" placeholder="Name" required><input id="friendReminder" type="date"><textarea id="friendNotes" placeholder="Relationship notes"></textarea><button>Add Friend</button></form>`)}${card("Friends", socialData.friends.length ? `<div class="item-list">${socialData.friends.map(renderFriendItem).join("")}</div>` : `<p class="muted-text">No friends yet.</p>`)}`;
+  document.getElementById("socialBody").innerHTML = `${card("New Friend", `<form onsubmit="saveFriend(event)" class="stack"><input id="friendName" placeholder="Name" required><select id="friendRelationship">${friendRelationshipOptionList("Friend")}</select><input id="friendReminder" type="date"><textarea id="friendNotes" placeholder="Relationship notes"></textarea><button>Add Friend</button></form>`)}${card("Friends", socialData.friends.length ? `<div class="item-list">${socialData.friends.map(renderFriendItem).join("")}</div>` : `<p class="muted-text">No friends yet.</p>`)}`;
 }
 
 function saveFriend(event) {
   event.preventDefault();
   socialData.friends.push(normalizeFriendFields({
     name: friendName.value,
+    relationship: friendRelationship.value,
+    relationshipType: friendRelationship.value,
     followUpReminder: friendReminder.value,
     notes: friendNotes.value
   }));
@@ -2872,7 +3077,8 @@ function saveFriendEdit(event, id) {
   const updated = normalizeFriendFields({
     ...friend,
     name: form.querySelector('[name="editFriendName"]')?.value || friend.name,
-    relationship: form.querySelector('[name="editFriendRelationship"]')?.value || "Friend",
+    relationship: form.querySelector('[name="editFriendRelationship"]')?.value || getFriendRelationshipType(friend),
+    relationshipType: form.querySelector('[name="editFriendRelationship"]')?.value || getFriendRelationshipType(friend),
     priority: form.querySelector('[name="editFriendPriority"]')?.value || "Medium",
     lastSeen,
     lastContacted: lastSeen,
@@ -3055,12 +3261,12 @@ function renderHangoutItem(hangout) {
   const completed = parseCompletedFlag(hangout.completed);
   const onCalendar = Boolean(getBlockByLinkedHangoutId(hangout.id));
   const canAdd = canAddHangoutToCalendar(hangout);
-  return `<div class="item hangout-item ${completed ? "is-done" : ""}">
+  return `<div class="item hangout-item ${completed ? "is-done" : ""} ${hangout.id === highlightHangoutId ? "is-highlighted" : ""}">
     <div>
       <strong>${escapeHTML(hangout.activity || hangout.title)}</strong>
       <span>${escapeHTML(hangout.date || "No date")}${schedule ? ` · ${escapeHTML(schedule)}` : ""}</span>
       <span>${people.length ? `Friends: ${escapeHTML(people.join(", "))}` : "No friends listed"}${hangout.location ? ` · ${escapeHTML(hangout.location)}` : ""}</span>
-      <span>${completed ? "Completed" : "Planned"}${onCalendar ? " · On calendar" : ""}</span>
+      <span>${completed ? "Completed" : "Planned"}${onCalendar ? " · On calendar" : ""}${hangout.sourceIdeaId ? " · From idea" : ""}</span>
       ${hangout.notes ? `<p>${escapeHTML(hangout.notes)}</p>` : ""}
     </div>
     <div class="mini-actions">
@@ -3312,15 +3518,17 @@ function renderIdeaItem(idea) {
     return `<div class="item idea-card is-editing ${idea.favorite ? "is-favorite" : ""}">${renderIdeaEditForm(idea)}</div>`;
   }
   const friends = getIdeaLinkedFriendNames(idea, socialData.friends);
+  const hasHangout = Boolean(findHangoutBySourceIdeaId(idea.id));
   return `<div class="item idea-card ${idea.favorite ? "is-favorite" : ""}">
     <div>
       <strong>${escapeHTML(idea.title)}</strong>
       <span>Category: ${escapeHTML(idea.category || "General")}${idea.cost ? ` · Cost: ${escapeHTML(idea.cost)}` : ""}</span>
       <span>${friends.length ? `Friends: ${escapeHTML(friends.join(", "))}` : "No friends linked"}</span>
-      <span>${idea.favorite ? "Favorite" : "Not favorited"}</span>
+      <span>${idea.favorite ? "Favorite" : "Not favorited"}${hasHangout ? " · In Hangouts" : ""}</span>
       ${idea.notes ? `<p>${escapeHTML(idea.notes)}</p>` : ""}
     </div>
-    <div class="mini-actions">
+    <div class="mini-actions idea-actions">
+      <button type="button" class="secondary-btn" onclick="addIdeaToHangouts('${idea.id}')" ${hasHangout ? "disabled title=\"Already added to Hangouts\"" : ""}>Plan Hangout</button>
       <button type="button" class="secondary-btn" onclick="editIdea('${idea.id}')">Edit</button>
       <button type="button" class="secondary-btn" onclick="deleteIdea('${idea.id}')">Delete</button>
     </div>

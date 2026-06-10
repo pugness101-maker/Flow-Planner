@@ -98,7 +98,7 @@ function mapFriend(friend, index) {
   return {
     local_id: String(friend.id || `friend-${index}`),
     name: friend.name || "",
-    relationship_type: friend.relationshipType || "Friend",
+    relationship_type: friend.relationshipType || friend.relationship || "Friend",
     priority: friend.priority || "Medium",
     birthday: friend.birthday || null,
     phone_handle: friend.phoneHandle || friend.contactNotes || "",
