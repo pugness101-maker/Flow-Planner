@@ -3783,9 +3783,147 @@ function captureHangoutFormDraft() {
   };
 }
 
-function hangoutFormRefresh() {
-  captureHangoutFormDraft();
-  renderHangouts();
+function withPreservedScroll(run) {
+  const scrollY = window.scrollY;
+  run();
+  window.scrollTo(0, scrollY);
+}
+
+function resolveFriendPickerContext(pickerId) {
+  if (pickerId === "hangout-form") {
+    return {
+      selectedIds: hangoutFormFriendIds,
+      getSearch: () => hangoutFriendSearch,
+      setSearch: (value) => { hangoutFriendSearch = value; },
+      isOpen: () => hangoutFriendPickerOpen,
+      togglePickerFn: "toggleHangoutFriendPicker",
+      toggleSelectionFn: "toggleHangoutFriendSelection"
+    };
+  }
+  if (pickerId.startsWith("hangout-edit-")) {
+    return {
+      selectedIds: editHangoutFriendIds,
+      getSearch: () => editHangoutFriendSearch,
+      setSearch: (value) => { editHangoutFriendSearch = value; },
+      isOpen: () => editHangoutFriendPickerOpen,
+      togglePickerFn: "toggleEditHangoutFriendPicker",
+      toggleSelectionFn: "toggleEditHangoutFriendSelection"
+    };
+  }
+  if (pickerId === "idea-form") {
+    return {
+      selectedIds: ideaFormFriendIds,
+      getSearch: () => ideaFriendSearch,
+      setSearch: (value) => { ideaFriendSearch = value; },
+      isOpen: () => ideaFriendPickerOpen,
+      togglePickerFn: "toggleIdeaFriendPicker",
+      toggleSelectionFn: "toggleIdeaFriendSelection"
+    };
+  }
+  if (pickerId.startsWith("idea-edit-")) {
+    return {
+      selectedIds: editIdeaFriendIds,
+      getSearch: () => editIdeaFriendSearch,
+      setSearch: (value) => { editIdeaFriendSearch = value; },
+      isOpen: () => editIdeaFriendPickerOpen,
+      togglePickerFn: "toggleEditIdeaFriendPicker",
+      toggleSelectionFn: "toggleEditIdeaFriendSelection"
+    };
+  }
+  return null;
+}
+
+function getFriendPickerRenderOptions(pickerId) {
+  const ctx = resolveFriendPickerContext(pickerId);
+  if (!ctx) return { pickerId };
+  return {
+    pickerId,
+    selectedIds: ctx.selectedIds,
+    isOpen: ctx.isOpen(),
+    search: ctx.getSearch(),
+    togglePickerFn: ctx.togglePickerFn,
+    toggleSelectionFn: ctx.toggleSelectionFn
+  };
+}
+
+function renderFriendPickerChipsInner(selectedIds, toggleSelectionFn) {
+  const selectedFriends = selectedIds
+    .map(id => socialData.friends.find(friend => friend.id === id))
+    .filter(Boolean);
+  return selectedFriends.map(friend => `<button type="button" class="friend-chip" onclick="${toggleSelectionFn}('${friend.id}')">${escapeHTML(friend.name)} ×</button>`).join("");
+}
+
+function renderFriendPickerListInner(selectedIds, searchValue, toggleSelectionFn) {
+  const availableFriends = socialData.friends.filter(friend => !searchValue || friend.name.toLowerCase().includes(searchValue));
+  if (!availableFriends.length) {
+    return `<p class="muted-text small">${socialData.friends.length ? "No friends match this search." : "Add friends first in the Friends tab."}</p>`;
+  }
+  return availableFriends.map(friend => {
+    const isSelected = selectedIds.includes(friend.id);
+    return `<button type="button" class="friend-picker-option ${isSelected ? "is-selected" : ""}" onclick="${toggleSelectionFn}('${friend.id}')">${escapeHTML(friend.name)}${isSelected ? " ✓" : ""}</button>`;
+  }).join("");
+}
+
+function updateFriendPickerToggleLabel(pickerId) {
+  const ctx = resolveFriendPickerContext(pickerId);
+  const toggle = document.getElementById(`friendPickerToggle-${pickerId}`);
+  if (!ctx || !toggle) return;
+  const count = ctx.selectedIds.length;
+  toggle.textContent = `${ctx.isOpen() ? "▾" : "▸"} Friends${count ? ` (${count})` : ""}`;
+}
+
+function refreshFriendPickerList(pickerId) {
+  const ctx = resolveFriendPickerContext(pickerId);
+  if (!ctx) return;
+  const searchValue = String(ctx.getSearch()).trim().toLowerCase();
+  const listEl = document.getElementById(`friendPickerList-${pickerId}`);
+  if (listEl) {
+    listEl.innerHTML = renderFriendPickerListInner(ctx.selectedIds, searchValue, ctx.toggleSelectionFn);
+  }
+  const chipsEl = document.getElementById(`friendPickerChips-${pickerId}`);
+  if (chipsEl) {
+    const chipsHtml = renderFriendPickerChipsInner(ctx.selectedIds, ctx.toggleSelectionFn);
+    chipsEl.innerHTML = chipsHtml;
+    chipsEl.hidden = !chipsHtml;
+  }
+  updateFriendPickerToggleLabel(pickerId);
+}
+
+function filterFriendPicker(pickerId, searchValue) {
+  const ctx = resolveFriendPickerContext(pickerId);
+  if (!ctx) return;
+  ctx.setSearch(searchValue);
+  refreshFriendPickerList(pickerId);
+}
+
+function refreshFriendPickerShell(pickerId) {
+  const root = document.getElementById(`friendPicker-${pickerId}`);
+  if (!root) return;
+  withPreservedScroll(() => {
+    root.outerHTML = renderFriendPicker(getFriendPickerRenderOptions(pickerId));
+  });
+}
+
+function renderFriendPicker(options = {}) {
+  const pickerId = options.pickerId || "hangout-form";
+  const selectedIds = options.selectedIds || resolveFriendPickerContext(pickerId)?.selectedIds || [];
+  const isOpen = options.isOpen ?? resolveFriendPickerContext(pickerId)?.isOpen() ?? false;
+  const search = options.search ?? resolveFriendPickerContext(pickerId)?.getSearch() ?? "";
+  const togglePickerFn = options.togglePickerFn || resolveFriendPickerContext(pickerId)?.togglePickerFn || "toggleHangoutFriendPicker";
+  const toggleSelectionFn = options.toggleSelectionFn || resolveFriendPickerContext(pickerId)?.toggleSelectionFn || "toggleHangoutFriendSelection";
+  const searchValue = String(search).trim().toLowerCase();
+  const selectedFriends = selectedIds
+    .map(id => socialData.friends.find(friend => friend.id === id))
+    .filter(Boolean);
+  const chipsHtml = selectedFriends.length ? renderFriendPickerChipsInner(selectedIds, toggleSelectionFn) : "";
+  return `<div class="friend-picker" id="friendPicker-${pickerId}">
+    <button type="button" id="friendPickerToggle-${pickerId}" class="friend-picker-toggle secondary-btn" onclick="${togglePickerFn}()">${isOpen ? "▾" : "▸"} Friends${selectedFriends.length ? ` (${selectedFriends.length})` : ""}</button>
+    ${isOpen ? `<div class="friend-picker-panel" id="friendPickerPanel-${pickerId}">
+      <div id="friendPickerChips-${pickerId}" class="friend-chips" ${chipsHtml ? "" : "hidden"}>${chipsHtml}</div>
+      <input type="search" id="friendPickerSearch-${pickerId}" placeholder="Search friends" value="${escapeHTML(search)}" oninput="filterFriendPicker('${pickerId}', this.value)">
+      <div id="friendPickerList-${pickerId}" class="friend-picker-list">${renderFriendPickerListInner(selectedIds, searchValue, toggleSelectionFn)}</div>
+    </div>` : ""}
+  </div>`;
 }
 
 function getHangoutFormFriendPeople() {
@@ -3797,7 +3935,9 @@ function getHangoutFormFriendPeople() {
 
 function toggleHangoutFriendPicker() {
   hangoutFriendPickerOpen = !hangoutFriendPickerOpen;
-  hangoutFormRefresh();
+  if (!hangoutFriendPickerOpen) hangoutFriendSearch = "";
+  captureHangoutFormDraft();
+  refreshFriendPickerShell("hangout-form");
 }
 
 function toggleHangoutFriendSelection(friendId) {
@@ -3805,12 +3945,14 @@ function toggleHangoutFriendSelection(friendId) {
   if (selected.has(friendId)) selected.delete(friendId);
   else selected.add(friendId);
   hangoutFormFriendIds = [...selected];
-  hangoutFormRefresh();
+  refreshFriendPickerList("hangout-form");
 }
 
 function toggleEditHangoutFriendPicker() {
   editHangoutFriendPickerOpen = !editHangoutFriendPickerOpen;
-  renderHangouts();
+  if (!editHangoutFriendPickerOpen) editHangoutFriendSearch = "";
+  if (!editingHangoutId) return;
+  refreshFriendPickerShell(`hangout-edit-${editingHangoutId}`);
 }
 
 function toggleEditHangoutFriendSelection(friendId) {
@@ -3818,7 +3960,8 @@ function toggleEditHangoutFriendSelection(friendId) {
   if (selected.has(friendId)) selected.delete(friendId);
   else selected.add(friendId);
   editHangoutFriendIds = [...selected];
-  renderHangouts();
+  if (!editingHangoutId) return;
+  refreshFriendPickerList(`hangout-edit-${editingHangoutId}`);
 }
 
 function getHangoutFriendIdsFromHangout(hangout = {}) {
@@ -3862,28 +4005,7 @@ function syncEditHangoutDuration(hangoutId) {
 }
 
 function renderHangoutFriendPicker(options = {}) {
-  const selectedIds = options.selectedIds || hangoutFormFriendIds;
-  const isOpen = options.isOpen ?? hangoutFriendPickerOpen;
-  const search = options.search ?? hangoutFriendSearch;
-  const togglePickerFn = options.togglePickerFn || "toggleHangoutFriendPicker";
-  const toggleSelectionFn = options.toggleSelectionFn || "toggleHangoutFriendSelection";
-  const refreshFn = options.refreshFn || "hangoutFormRefresh";
-  const selectedFriends = selectedIds
-    .map(id => socialData.friends.find(friend => friend.id === id))
-    .filter(Boolean);
-  const searchValue = String(search).trim().toLowerCase();
-  const availableFriends = socialData.friends.filter(friend => !searchValue || friend.name.toLowerCase().includes(searchValue));
-  return `<div class="friend-picker">
-    <button type="button" class="friend-picker-toggle secondary-btn" onclick="${togglePickerFn}()">${isOpen ? "▾" : "▸"} Friends${selectedFriends.length ? ` (${selectedFriends.length})` : ""}</button>
-    ${isOpen ? `<div class="friend-picker-panel">
-      ${selectedFriends.length ? `<div class="friend-chips">${selectedFriends.map(friend => `<button type="button" class="friend-chip" onclick="${toggleSelectionFn}('${friend.id}')">${escapeHTML(friend.name)} ×</button>`).join("")}</div>` : ""}
-      <input type="search" placeholder="Search friends" value="${escapeHTML(search)}" oninput="${options.searchField || "hangoutFriendSearch"}=this.value; ${refreshFn}();">
-      <div class="friend-picker-list">${availableFriends.length ? availableFriends.map(friend => {
-        const isSelected = selectedIds.includes(friend.id);
-        return `<button type="button" class="friend-picker-option ${isSelected ? "is-selected" : ""}" onclick="${toggleSelectionFn}('${friend.id}')">${escapeHTML(friend.name)}${isSelected ? " ✓" : ""}</button>`;
-      }).join("") : `<p class="muted-text small">${socialData.friends.length ? "No friends match this search." : "Add friends first in the Friends tab."}</p>`}</div>
-    </div>` : ""}
-  </div>`;
+  return renderFriendPicker({ pickerId: "hangout-form", ...options });
 }
 
 function renderHangoutEditForm(hangout) {
@@ -3901,14 +4023,13 @@ function renderHangoutEditForm(hangout) {
       <input name="editHangoutEndTime" type="time" value="${escapeHTML(displayEnd)}" oninput="syncEditHangoutDuration('${hangout.id}')" onchange="syncEditHangoutDuration('${hangout.id}')">
       <div class="hangout-duration-display">${escapeHTML(durationPreview)}</div>
     </div>
-    ${renderHangoutFriendPicker({
+    ${renderFriendPicker({
+      pickerId: `hangout-edit-${hangout.id}`,
       selectedIds: editHangoutFriendIds,
       isOpen: editHangoutFriendPickerOpen,
       search: editHangoutFriendSearch,
       togglePickerFn: "toggleEditHangoutFriendPicker",
-      toggleSelectionFn: "toggleEditHangoutFriendSelection",
-      refreshFn: "renderHangouts",
-      searchField: "editHangoutFriendSearch"
+      toggleSelectionFn: "toggleEditHangoutFriendSelection"
     })}
     <input name="editHangoutLocation" placeholder="Location" value="${escapeHTML(hangout.location || "")}">
     <textarea name="editHangoutNotes" placeholder="Notes">${escapeHTML(hangout.notes || "")}</textarea>
@@ -4080,11 +4201,6 @@ function captureIdeaFormDraft() {
   };
 }
 
-function ideaFormRefresh() {
-  captureIdeaFormDraft();
-  renderIdeas();
-}
-
 function getIdeaFormLinkedFriends() {
   return ideaFormFriendIds
     .map(id => socialData.friends.find(friend => friend.id === id)?.name || "")
@@ -4094,7 +4210,9 @@ function getIdeaFormLinkedFriends() {
 
 function toggleIdeaFriendPicker() {
   ideaFriendPickerOpen = !ideaFriendPickerOpen;
-  ideaFormRefresh();
+  if (!ideaFriendPickerOpen) ideaFriendSearch = "";
+  captureIdeaFormDraft();
+  refreshFriendPickerShell("idea-form");
 }
 
 function toggleIdeaFriendSelection(friendId) {
@@ -4102,12 +4220,14 @@ function toggleIdeaFriendSelection(friendId) {
   if (selected.has(friendId)) selected.delete(friendId);
   else selected.add(friendId);
   ideaFormFriendIds = [...selected];
-  ideaFormRefresh();
+  refreshFriendPickerList("idea-form");
 }
 
 function toggleEditIdeaFriendPicker() {
   editIdeaFriendPickerOpen = !editIdeaFriendPickerOpen;
-  renderIdeas();
+  if (!editIdeaFriendPickerOpen) editIdeaFriendSearch = "";
+  if (!editingIdeaId) return;
+  refreshFriendPickerShell(`idea-edit-${editingIdeaId}`);
 }
 
 function toggleEditIdeaFriendSelection(friendId) {
@@ -4115,7 +4235,8 @@ function toggleEditIdeaFriendSelection(friendId) {
   if (selected.has(friendId)) selected.delete(friendId);
   else selected.add(friendId);
   editIdeaFriendIds = [...selected];
-  renderIdeas();
+  if (!editingIdeaId) return;
+  refreshFriendPickerList(`idea-edit-${editingIdeaId}`);
 }
 
 function getIdeaFriendIdsFromIdea(idea = {}) {
@@ -4132,28 +4253,7 @@ function getEditIdeaLinkedFriends() {
 }
 
 function renderIdeaFriendPicker(options = {}) {
-  const selectedIds = options.selectedIds || ideaFormFriendIds;
-  const isOpen = options.isOpen ?? ideaFriendPickerOpen;
-  const search = options.search ?? ideaFriendSearch;
-  const togglePickerFn = options.togglePickerFn || "toggleIdeaFriendPicker";
-  const toggleSelectionFn = options.toggleSelectionFn || "toggleIdeaFriendSelection";
-  const refreshFn = options.refreshFn || "ideaFormRefresh";
-  const selectedFriends = selectedIds
-    .map(id => socialData.friends.find(friend => friend.id === id))
-    .filter(Boolean);
-  const searchValue = String(search).trim().toLowerCase();
-  const availableFriends = socialData.friends.filter(friend => !searchValue || friend.name.toLowerCase().includes(searchValue));
-  return `<div class="friend-picker">
-    <button type="button" class="friend-picker-toggle secondary-btn" onclick="${togglePickerFn}()">${isOpen ? "▾" : "▸"} Friends${selectedFriends.length ? ` (${selectedFriends.length})` : ""}</button>
-    ${isOpen ? `<div class="friend-picker-panel">
-      ${selectedFriends.length ? `<div class="friend-chips">${selectedFriends.map(friend => `<button type="button" class="friend-chip" onclick="${toggleSelectionFn}('${friend.id}')">${escapeHTML(friend.name)} ×</button>`).join("")}</div>` : ""}
-      <input type="search" placeholder="Search friends" value="${escapeHTML(search)}" oninput="${options.searchField || "ideaFriendSearch"}=this.value; ${refreshFn}();">
-      <div class="friend-picker-list">${availableFriends.length ? availableFriends.map(friend => {
-        const isSelected = selectedIds.includes(friend.id);
-        return `<button type="button" class="friend-picker-option ${isSelected ? "is-selected" : ""}" onclick="${toggleSelectionFn}('${friend.id}')">${escapeHTML(friend.name)}${isSelected ? " ✓" : ""}</button>`;
-      }).join("") : `<p class="muted-text small">${socialData.friends.length ? "No friends match this search." : "Add friends first in the Friends tab."}</p>`}</div>
-    </div>` : ""}
-  </div>`;
+  return renderFriendPicker({ pickerId: "idea-form", ...options });
 }
 
 function renderIdeaEditForm(idea) {
@@ -4163,14 +4263,13 @@ function renderIdeaEditForm(idea) {
       <input name="editIdeaCategory" placeholder="Category" value="${escapeHTML(idea.category || "")}">
       <input name="editIdeaCost" placeholder="Cost" value="${escapeHTML(idea.cost || "")}">
     </div>
-    ${renderIdeaFriendPicker({
+    ${renderFriendPicker({
+      pickerId: `idea-edit-${idea.id}`,
       selectedIds: editIdeaFriendIds,
       isOpen: editIdeaFriendPickerOpen,
       search: editIdeaFriendSearch,
       togglePickerFn: "toggleEditIdeaFriendPicker",
-      toggleSelectionFn: "toggleEditIdeaFriendSelection",
-      refreshFn: "renderIdeas",
-      searchField: "editIdeaFriendSearch"
+      toggleSelectionFn: "toggleEditIdeaFriendSelection"
     })}
     <textarea name="editIdeaNotes" placeholder="Notes">${escapeHTML(idea.notes || "")}</textarea>
     <label class="toggle-row"><input name="editIdeaFavorite" type="checkbox" ${idea.favorite ? "checked" : ""}>Favorite</label>
