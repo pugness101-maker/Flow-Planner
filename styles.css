@@ -41,10 +41,12 @@ p { line-height: 1.45; }
 .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .stats-grid-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.stats-grid-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .stats-grid div { background: var(--soft); border-radius: 8px; padding: 12px; display: grid; gap: 2px; }
 .stats-grid strong { font-size: 22px; }
 .stats-grid span { color: var(--muted); font-size: 12px; }
-.task-stats-card { padding: 12px; }
+.task-stats-card,
+.social-stats-card { padding: 12px; margin-bottom: 12px; }
 .collapsible-card .collapse-trigger { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; background: transparent; color: var(--text); min-height: auto; padding: 0; }
 .collapsible-card.is-open .collapse-trigger { margin-bottom: 10px; }
 .collapse-caret { color: var(--muted); font-size: 14px; line-height: 1; }
@@ -167,7 +169,7 @@ button { min-height: 42px; width: 100%; border: 0; border-radius: 8px; padding: 
 .social-bulk-check { display: flex; align-items: flex-start; padding-top: 4px; }
 .social-bulk-check input { width: auto; min-height: 0; }
 .social-body { padding-bottom: 120px; }
-.page-social #pageRoot { padding-bottom: 32px; }
+.page-social #pageRoot { padding-bottom: 100px; }
 .page-calendar { gap: 0; }
 .page-calendar .card { display: none; }
 .calendar-shell { display: grid; gap: 12px; }
@@ -245,7 +247,7 @@ button { min-height: 42px; width: 100%; border: 0; border-radius: 8px; padding: 
   .social-bulk-head button { width: 100%; }
   .item.has-bulk-check { grid-template-columns: auto 1fr; }
   .item.has-bulk-check .mini-actions { grid-column: 1 / -1; }
-  .grid-2, .grid-3, .stats-grid, .stats-grid-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-2, .grid-3, .stats-grid, .stats-grid-5, .stats-grid-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .item { grid-template-columns: 1fr; }
   .mini-actions { width: 100%; }
   .weekday-picker { grid-template-columns: repeat(4, minmax(0, 1fr)); }

@@ -1126,6 +1126,7 @@ function deleteFriendsFromSocial(friendIds = []) {
 }
 
 function refreshUIAfterFriendDeletion() {
+  refreshSocialStats();
   if (activePage === "Social") {
     if (socialTab === "Friends") {
       if (document.getElementById("socialList")) refreshSocialBulkUI();
@@ -1501,6 +1502,38 @@ function exportSocialData() {
   link.download = `flow-social-export-${todayISO()}.json`;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function isHangoutCompletedForStats(hangout = {}) {
+  return parseCompletedFlag(hangout.completed) || String(hangout.status || "").trim().toLowerCase() === "completed";
+}
+
+function isHangoutPlannedForStats(hangout = {}) {
+  return !parseCompletedFlag(hangout.completed) && String(hangout.status || "").trim().toLowerCase() !== "completed";
+}
+
+function getSocialStats() {
+  const hangouts = socialData.hangouts || [];
+  const ideas = socialData.ideas || [];
+  return {
+    friends: socialData.friends.length,
+    hangouts: hangouts.length,
+    ideas: ideas.length,
+    completedHangouts: hangouts.filter(isHangoutCompletedForStats).length,
+    plannedHangouts: hangouts.filter(isHangoutPlannedForStats).length,
+    favoriteIdeas: ideas.filter(idea => Boolean(idea.favorite)).length
+  };
+}
+
+function renderSocialStats() {
+  const stats = getSocialStats();
+  return `<div id="socialStats" class="card social-stats-card"><div class="stats-grid stats-grid-6"><div><strong>${stats.friends}</strong><span>Friends</span></div><div><strong>${stats.hangouts}</strong><span>Hangouts</span></div><div><strong>${stats.ideas}</strong><span>Ideas</span></div><div><strong>${stats.completedHangouts}</strong><span>Completed</span></div><div><strong>${stats.plannedHangouts}</strong><span>Planned</span></div><div><strong>${stats.favoriteIdeas}</strong><span>Favorite Ideas</span></div></div></div>`;
+}
+
+function refreshSocialStats() {
+  const statsEl = document.getElementById("socialStats");
+  if (!statsEl) return;
+  statsEl.outerHTML = renderSocialStats();
 }
 
 function renderSocialToolbar() {
@@ -1926,6 +1959,7 @@ function renderSocialBulkPanel(activeSocialTab) {
 }
 
 function refreshSocialBulkUI() {
+  refreshSocialStats();
   const bulkEl = document.getElementById("socialBulkPanel");
   const listEl = document.getElementById("socialList");
   if (!bulkEl && !listEl) {
@@ -3740,6 +3774,7 @@ function deleteGoalLog(logId, goalId) {
 function renderSocial() {
   document.getElementById("pageRoot").innerHTML = `
     ${renderSocialToolbar()}
+    ${renderSocialStats()}
     <div class="segmented page-tabs">${["Friends", "Hangouts", "Ideas"].map(tab => `<button class="${socialTab === tab ? "active" : ""}" onclick="setSocialTab('${tab}')">${tab}</button>`).join("")}</div>
     ${renderSocialSearchBar()}
     <div id="socialBody" class="social-body"></div>`;
@@ -3790,6 +3825,7 @@ function renderFriendItem(friend) {
 }
 
 function renderFriends() {
+  refreshSocialStats();
   document.getElementById("socialBody").innerHTML = `${card("New Friend", `<form onsubmit="saveFriend(event)" class="stack"><input id="friendName" placeholder="Name" required><select id="friendRelationship">${friendRelationshipOptionList("Friend")}</select><input id="friendReminder" type="date"><textarea id="friendNotes" placeholder="Relationship notes"></textarea><button>Add Friend</button></form>`)}${card("Friends", `${renderSocialBulkPanel("Friends")}<div id="socialList">${renderFriendsListContent()}</div>`)}`;
 }
 
@@ -4264,6 +4300,7 @@ function saveHangoutEdit(event, id) {
 }
 
 function renderHangouts() {
+  refreshSocialStats();
   const draft = hangoutFormDraft || {};
   const durationPreview = draft.startTime && draft.endTime
     ? `${Math.max(0, parseTimeToMinutes(draft.endTime) - parseTimeToMinutes(draft.startTime))} min`
@@ -4482,6 +4519,7 @@ function saveIdeaEdit(event, id) {
 }
 
 function renderIdeas() {
+  refreshSocialStats();
   const draft = ideaFormDraft || {};
   document.getElementById("socialBody").innerHTML = `${card("New Idea", `<form id="ideaForm" onsubmit="saveIdea(event)" class="stack">
     <input id="ideaTitle" placeholder="Idea" value="${escapeHTML(draft.title || "")}" required>
