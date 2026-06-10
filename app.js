@@ -842,9 +842,23 @@ function parseCompletedFlag(value) {
   if (typeof value === "string") {
     const text = value.trim().toLowerCase();
     if (text === "true" || text === "yes" || text === "1" || text === "completed") return true;
-    if (text === "false" || text === "no" || text === "0" || text === "planned") return false;
+    if (text === "false" || text === "no" || text === "0" || text === "planned" || text === "canceled") return false;
   }
   return Boolean(value);
+}
+
+function getHangoutStatus(hangout = {}) {
+  const status = String(hangout.status || "").trim();
+  if (status.toLowerCase() === "canceled") return "Canceled";
+  if (parseCompletedFlag(hangout.completed) || status.toLowerCase() === "completed") return "Completed";
+  return "Planned";
+}
+
+function applyHangoutStatusFields(hangout, status) {
+  const value = String(status || "Planned");
+  if (value === "Completed") return { ...hangout, status: "Completed", completed: true, updatedAt: nowISO() };
+  if (value === "Canceled") return { ...hangout, status: "Canceled", completed: false, updatedAt: nowISO() };
+  return { ...hangout, status: "Planned", completed: false, updatedAt: nowISO() };
 }
 
 function calculateDurationMinutes(startTime = "", endTime = "") {
@@ -1005,7 +1019,8 @@ function normalizeHangoutFields(hangout = {}) {
     category: timed.category || "",
     followUpReminder: timed.followUpReminder || "",
     sourceIdeaId: timed.sourceIdeaId || "",
-    completed: parseCompletedFlag(timed.completed),
+    status: getHangoutStatus(timed),
+    completed: getHangoutStatus(timed) === "Completed",
     createdAt: timed.createdAt || nowISO(),
     updatedAt: timed.updatedAt || nowISO()
   };
@@ -1382,7 +1397,8 @@ function exportSocialData() {
         completed: Boolean(hangout.completed),
         cost: hangout.cost || "",
         category: hangout.category || "",
-        sourceIdeaId: hangout.sourceIdeaId || ""
+        sourceIdeaId: hangout.sourceIdeaId || "",
+        status: getHangoutStatus(hangout)
       })),
     ideas: socialData.ideas.map(idea => ({
       title: idea.title,
@@ -1747,6 +1763,9 @@ let socialSearch = "";
 let socialFriendsSort = "name-asc";
 let socialHangoutsSort = "date-newest";
 let socialIdeasSort = "recent";
+let socialBulkSelectMode = false;
+let socialBulkSelectedIds = [];
+let bulkHangoutActionFriendIds = [];
 const SOCIAL_FRIENDS_SORT_KEY = "flowPlannerSocialFriendsSort";
 const SOCIAL_HANGOUTS_SORT_KEY = "flowPlannerSocialHangoutsSort";
 const SOCIAL_IDEAS_SORT_KEY = "flowPlannerSocialIdeasSort";
