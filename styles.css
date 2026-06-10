@@ -149,8 +149,21 @@ button { min-height: 42px; width: 100%; border: 0; border-radius: 8px; padding: 
 .friend-edit-form { width: 100%; }
 .social-search-card { padding: 12px; margin-bottom: 12px; }
 .social-search-row { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 8px; align-items: center; }
-.social-body { padding-bottom: 100px; }
-.page-social #pageRoot { padding-bottom: 24px; }
+.social-bulk-card { padding: 12px; margin-bottom: 12px; }
+.social-bulk-panel { display: grid; gap: 10px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.social-bulk-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.social-bulk-count { font-size: 13px; font-weight: 700; color: var(--muted); }
+.social-bulk-actions { display: grid; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.social-bulk-action-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.social-bulk-stack { display: grid; gap: 8px; }
+.social-bulk-stack label { margin: 0; font-size: 12px; }
+.bulk-friend-checklist { display: grid; gap: 6px; max-height: 180px; overflow: auto; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); }
+.bulk-friend-check { justify-content: flex-start; min-height: 34px; }
+.item.has-bulk-check { grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; }
+.social-bulk-check { display: flex; align-items: flex-start; padding-top: 4px; }
+.social-bulk-check input { width: auto; min-height: 0; }
+.social-body { padding-bottom: 120px; }
+.page-social #pageRoot { padding-bottom: 32px; }
 .page-calendar { gap: 0; }
 .page-calendar .card { display: none; }
 .calendar-shell { display: grid; gap: 12px; }
@@ -224,7 +237,10 @@ button { min-height: 42px; width: 100%; border: 0; border-radius: 8px; padding: 
 .duration-tools button { width: auto; min-height: 34px; padding: 7px 10px; }
 
 @media (max-width: 620px) {
-  .social-search-row { grid-template-columns: 1fr; }
+  .social-search-row, .social-bulk-action-row { grid-template-columns: 1fr; }
+  .social-bulk-head button { width: 100%; }
+  .item.has-bulk-check { grid-template-columns: auto 1fr; }
+  .item.has-bulk-check .mini-actions { grid-column: 1 / -1; }
   .grid-2, .grid-3, .stats-grid, .stats-grid-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .item { grid-template-columns: 1fr; }
   .mini-actions { width: 100%; }

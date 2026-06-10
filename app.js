@@ -1443,6 +1443,7 @@ function clearSocialData() {
   hangoutFormFriendIds = [];
   ideaFormDraft = null;
   ideaFormFriendIds = [];
+  clearSocialBulkSelection();
   saveSocialData();
   renderSocial();
   showToast("Social data cleared.");
@@ -1672,19 +1673,431 @@ function renderIdeasListContent() {
 function refreshSocialList() {
   if (socialTab === "Hangouts") captureHangoutFormDraft();
   if (socialTab === "Ideas") captureIdeaFormDraft();
-  const listEl = document.getElementById("socialList");
-  if (!listEl) {
+  if (!document.getElementById("socialList")) {
     renderSocial();
     return;
   }
-  if (socialTab === "Friends") listEl.innerHTML = renderFriendsListContent();
-  if (socialTab === "Hangouts") listEl.innerHTML = renderHangoutsListContent();
-  if (socialTab === "Ideas") listEl.innerHTML = renderIdeasListContent();
+  refreshSocialBulkUI();
+}
+
+function clearSocialBulkSelection() {
+  socialBulkSelectMode = false;
+  socialBulkSelectedIds = [];
+  bulkHangoutActionFriendIds = [];
+}
+
+function getVisibleSocialIds() {
+  const activeSocialTab = getActiveSocialTab();
+  if (activeSocialTab === "Friends") return getFilteredFriends().map(item => item.id);
+  if (activeSocialTab === "Hangouts") return getFilteredHangouts().map(item => item.id);
+  return getFilteredIdeas().map(item => item.id);
+}
+
+function getSelectedFriendIds() {
+  const valid = new Set(socialData.friends.map(item => item.id));
+  return socialBulkSelectedIds.filter(id => valid.has(id));
+}
+
+function getSelectedHangoutIds() {
+  const valid = new Set(socialData.hangouts.map(item => item.id));
+  return socialBulkSelectedIds.filter(id => valid.has(id));
+}
+
+function getSelectedIdeaIds() {
+  const valid = new Set(socialData.ideas.map(item => item.id));
+  return socialBulkSelectedIds.filter(id => valid.has(id));
+}
+
+function toggleSocialBulkSelectMode() {
+  socialBulkSelectMode = !socialBulkSelectMode;
+  if (!socialBulkSelectMode) {
+    socialBulkSelectedIds = [];
+    bulkHangoutActionFriendIds = [];
+  }
+  refreshSocialBulkUI();
+}
+
+function toggleSocialBulkItem(id) {
+  if (socialBulkSelectedIds.includes(id)) {
+    socialBulkSelectedIds = socialBulkSelectedIds.filter(item => item !== id);
+  } else {
+    socialBulkSelectedIds = [...socialBulkSelectedIds, id];
+  }
+  refreshSocialBulkUI();
+}
+
+function selectAllVisibleSocial() {
+  socialBulkSelectedIds = [...new Set(getVisibleSocialIds())];
+  refreshSocialBulkUI();
+}
+
+function clearSocialBulkSelectedOnly() {
+  socialBulkSelectedIds = [];
+  bulkHangoutActionFriendIds = [];
+  refreshSocialBulkUI();
+}
+
+function toggleBulkHangoutFriendId(friendId) {
+  if (bulkHangoutActionFriendIds.includes(friendId)) {
+    bulkHangoutActionFriendIds = bulkHangoutActionFriendIds.filter(id => id !== friendId);
+  } else {
+    bulkHangoutActionFriendIds = [...bulkHangoutActionFriendIds, friendId];
+  }
+  refreshSocialBulkUI();
+}
+
+function renderSocialBulkCheckbox(id) {
+  if (!socialBulkSelectMode || socialTab !== getActiveSocialTab()) return "";
+  const checked = socialBulkSelectedIds.includes(id) ? "checked" : "";
+  return `<label class="social-bulk-check" onclick="event.stopPropagation()"><input type="checkbox" ${checked} onchange="toggleSocialBulkItem('${id}')"></label>`;
+}
+
+function getActiveSocialTab() {
+  return socialTab;
+}
+
+function renderBulkFriendChecklist() {
+  if (!socialData.friends.length) return `<p class="muted-text small">No friends available.</p>`;
+  return `<div class="bulk-friend-checklist">${socialData.friends.map(friend => {
+    const checked = bulkHangoutActionFriendIds.includes(friend.id) ? "checked" : "";
+    return `<label class="toggle-row bulk-friend-check"><input type="checkbox" ${checked} onchange="toggleBulkHangoutFriendId('${friend.id}')">${escapeHTML(friend.name)}</label>`;
+  }).join("")}</div>`;
+}
+
+function renderSocialBulkFriendActions() {
+  return `<div class="social-bulk-actions">
+    <div class="social-bulk-action-row"><button type="button" class="danger-btn secondary-btn" onclick="bulkDeleteFriends()">Delete Selected</button></div>
+    <div class="social-bulk-action-row">
+      <select id="bulkFriendRelationship">${friendRelationshipOptionList("Friend")}</select>
+      <button type="button" class="secondary-btn" onclick="bulkChangeFriendRelationship()">Change Relationship</button>
+    </div>
+    <div class="social-bulk-action-row">
+      <select id="bulkFriendPriority">${optionList(["High", "Medium", "Low"], "Medium")}</select>
+      <button type="button" class="secondary-btn" onclick="bulkChangeFriendPriority()">Change Priority</button>
+    </div>
+    <div class="social-bulk-action-row">
+      <input id="bulkFriendNotesText" placeholder="Notes to append">
+      <button type="button" class="secondary-btn" onclick="bulkAppendFriendNotes()">Add Notes Text</button>
+    </div>
+    <div class="social-bulk-action-row">
+      <input id="bulkFriendFollowUpDate" type="date">
+      <button type="button" class="secondary-btn" onclick="bulkSetFriendFollowUp()">Set Follow-up Date</button>
+    </div>
+  </div>`;
+}
+
+function renderSocialBulkHangoutActions() {
+  return `<div class="social-bulk-actions">
+    <div class="social-bulk-action-row"><button type="button" class="danger-btn secondary-btn" onclick="bulkDeleteHangouts()">Delete Selected</button></div>
+    <div class="social-bulk-action-row">
+      <select id="bulkHangoutStatus">${optionList(["Planned", "Completed", "Canceled"], "Planned")}</select>
+      <button type="button" class="secondary-btn" onclick="bulkChangeHangoutStatus()">Change Status</button>
+    </div>
+    <div class="social-bulk-stack">
+      <label>Add Friend(s) to Selected</label>
+      ${renderBulkFriendChecklist()}
+      <button type="button" class="secondary-btn" onclick="bulkAddFriendsToHangouts()">Add Friend(s)</button>
+    </div>
+    <div class="social-bulk-stack">
+      <label>Remove Friend(s) from Selected</label>
+      ${renderBulkFriendChecklist()}
+      <button type="button" class="secondary-btn" onclick="bulkRemoveFriendsFromHangouts()">Remove Friend(s)</button>
+    </div>
+    <div class="social-bulk-action-row"><button type="button" class="secondary-btn" onclick="bulkAddHangoutsToCalendar()">Add Selected to Calendar</button></div>
+  </div>`;
+}
+
+function renderSocialBulkIdeaActions() {
+  return `<div class="social-bulk-actions">
+    <div class="social-bulk-action-row"><button type="button" class="danger-btn secondary-btn" onclick="bulkDeleteIdeas()">Delete Selected</button></div>
+    <div class="social-bulk-action-row"><button type="button" class="secondary-btn" onclick="bulkAddIdeasToHangouts()">Add Selected to Hangouts</button></div>
+    <div class="social-bulk-action-row">
+      <button type="button" class="secondary-btn" onclick="bulkMarkIdeasFavorite(true)">Mark Favorite</button>
+      <button type="button" class="secondary-btn" onclick="bulkMarkIdeasFavorite(false)">Unmark Favorite</button>
+    </div>
+    <div class="social-bulk-action-row">
+      <input id="bulkIdeaCategory" placeholder="New category">
+      <button type="button" class="secondary-btn" onclick="bulkChangeIdeaCategory()">Change Category</button>
+    </div>
+  </div>`;
+}
+
+function renderSocialBulkActionsForTab(activeSocialTab) {
+  if (activeSocialTab === "Friends") return renderSocialBulkFriendActions();
+  if (activeSocialTab === "Hangouts") return renderSocialBulkHangoutActions();
+  return renderSocialBulkIdeaActions();
+}
+
+function renderSocialBulkPanel(activeSocialTab) {
+  if (socialTab !== activeSocialTab) return "";
+  const count = socialBulkSelectedIds.length;
+  return `<div id="socialBulkPanel" class="social-bulk-panel">
+    <div class="social-bulk-head">
+      <button type="button" class="secondary-btn" onclick="toggleSocialBulkSelectMode()">${socialBulkSelectMode ? "Done" : "Bulk Select"}</button>
+      ${socialBulkSelectMode ? `<span class="social-bulk-count">${count} selected</span>` : ""}
+      ${socialBulkSelectMode ? `<button type="button" class="secondary-btn" onclick="selectAllVisibleSocial()">Select All Visible</button>` : ""}
+      ${socialBulkSelectMode ? `<button type="button" class="secondary-btn" onclick="clearSocialBulkSelectedOnly()">Clear Selection</button>` : ""}
+    </div>
+    ${socialBulkSelectMode ? renderSocialBulkActionsForTab(activeSocialTab) : ""}
+  </div>`;
+}
+
+function refreshSocialBulkUI() {
+  const bulkEl = document.getElementById("socialBulkPanel");
+  const listEl = document.getElementById("socialList");
+  if (!bulkEl && !listEl) {
+    if (socialTab === "Friends") renderFriends();
+    if (socialTab === "Hangouts") renderHangouts();
+    if (socialTab === "Ideas") renderIdeas();
+    return;
+  }
+  if (bulkEl) bulkEl.outerHTML = renderSocialBulkPanel(socialTab);
+  if (listEl) {
+    if (socialTab === "Friends") listEl.innerHTML = renderFriendsListContent();
+    if (socialTab === "Hangouts") listEl.innerHTML = renderHangoutsListContent();
+    if (socialTab === "Ideas") listEl.innerHTML = renderIdeasListContent();
+  }
+}
+
+function bulkDeleteFriends() {
+  const ids = getSelectedFriendIds();
+  if (!ids.length) return showToast("Select friends first.");
+  if (!confirm(`Delete ${ids.length} friend${ids.length === 1 ? "" : "s"}?`)) return;
+  const idSet = new Set(ids);
+  socialData.friends = socialData.friends.filter(friend => !idSet.has(friend.id));
+  if (idSet.has(editingFriendId)) editingFriendId = null;
+  socialBulkSelectedIds = socialBulkSelectedIds.filter(id => !idSet.has(id));
+  saveSocialData();
+  refreshSocialBulkUI();
+  showToast("Friends deleted.");
+}
+
+function bulkChangeFriendRelationship() {
+  const value = document.getElementById("bulkFriendRelationship")?.value;
+  if (!value) return;
+  const idSet = new Set(getSelectedFriendIds());
+  if (!idSet.size) return showToast("Select friends first.");
+  socialData.friends = socialData.friends.map(friend => (idSet.has(friend.id)
+    ? normalizeFriendFields({ ...friend, relationship: value, relationshipType: value, updatedAt: nowISO() })
+    : friend));
+  saveSocialData();
+  refreshSocialBulkUI();
+  showToast("Relationship updated.");
+}
+
+function bulkChangeFriendPriority() {
+  const value = document.getElementById("bulkFriendPriority")?.value;
+  if (!value) return;
+  const idSet = new Set(getSelectedFriendIds());
+  if (!idSet.size) return showToast("Select friends first.");
+  socialData.friends = socialData.friends.map(friend => (idSet.has(friend.id)
+    ? normalizeFriendFields({ ...friend, priority: value, updatedAt: nowISO() })
+    : friend));
+  saveSocialData();
+  refreshSocialBulkUI();
+  showToast("Priority updated.");
+}
+
+function bulkAppendFriendNotes() {
+  const text = document.getElementById("bulkFriendNotesText")?.value?.trim();
+  if (!text) return showToast("Enter notes to append.");
+  const idSet = new Set(getSelectedFriendIds());
+  if (!idSet.size) return showToast("Select friends first.");
+  socialData.friends = socialData.friends.map(friend => {
+    if (!idSet.has(friend.id)) return friend;
+    const existing = String(friend.notes || "").trim();
+    const notes = existing ? `${existing}\n${text}` : text;
+    return normalizeFriendFields({ ...friend, notes, updatedAt: nowISO() });
+  });
+  saveSocialData();
+  refreshSocialBulkUI();
+  showToast("Notes appended.");
+}
+
+function bulkSetFriendFollowUp() {
+  const value = document.getElementById("bulkFriendFollowUpDate")?.value || "";
+  if (!value) return showToast("Choose a follow-up date.");
+  const idSet = new Set(getSelectedFriendIds());
+  if (!idSet.size) return showToast("Select friends first.");
+  socialData.friends = socialData.friends.map(friend => (idSet.has(friend.id)
+    ? normalizeFriendFields({ ...friend, followUpReminder: value, updatedAt: nowISO() })
+    : friend));
+  saveSocialData();
+  refreshSocialBulkUI();
+  showToast("Follow-up date set.");
+}
+
+function bulkClearFriendFollowUp() {
+  const idSet = new Set(getSelectedFriendIds());
+  if (!idSet.size) return showToast("Select friends first.");
+  socialData.friends = socialData.friends.map(friend => (idSet.has(friend.id)
+    ? normalizeFriendFields({ ...friend, followUpReminder: "", updatedAt: nowISO() })
+    : friend));
+  saveSocialData();
+  refreshSocialBulkUI();
+  showToast("Follow-up dates cleared.");
+}
+
+function bulkDeleteHangouts() {
+  const ids = getSelectedHangoutIds();
+  if (!ids.length) return showToast("Select hangouts first.");
+  if (!confirm(`Delete ${ids.length} hangout${ids.length === 1 ? "" : "s"}?`)) return;
+  const idSet = new Set(ids);
+  scheduleData.blocks = scheduleData.blocks.map(block => (idSet.has(block.linkedHangoutId)
+    ? { ...block, linkedHangoutId: "", updatedAt: nowISO() }
+    : block));
+  socialData.hangouts = socialData.hangouts.filter(hangout => !idSet.has(hangout.id));
+  if (idSet.has(editingHangoutId)) editingHangoutId = null;
+  socialBulkSelectedIds = socialBulkSelectedIds.filter(id => !idSet.has(id));
+  saveSocialData();
+  saveScheduleData();
+  refreshSocialBulkUI();
+  showToast("Hangouts deleted.");
+}
+
+function bulkChangeHangoutStatus() {
+  const status = document.getElementById("bulkHangoutStatus")?.value;
+  if (!status) return;
+  const idSet = new Set(getSelectedHangoutIds());
+  if (!idSet.size) return showToast("Select hangouts first.");
+  socialData.hangouts = socialData.hangouts.map(hangout => {
+    if (!idSet.has(hangout.id)) return hangout;
+    const updated = normalizeHangoutFields(applyHangoutStatusFields(hangout, status));
+    syncLinkedHangoutBlock(updated);
+    return updated;
+  });
+  saveSocialData();
+  refreshSocialBulkUI();
+  showToast("Status updated.");
+}
+
+function bulkAddFriendsToHangouts() {
+  const friendIds = [...bulkHangoutActionFriendIds];
+  if (!friendIds.length) return showToast("Select friends to add.");
+  const hangoutIds = new Set(getSelectedHangoutIds());
+  if (!hangoutIds.size) return showToast("Select hangouts first.");
+  socialData.hangouts = socialData.hangouts.map(hangout => {
+    if (!hangoutIds.has(hangout.id)) return hangout;
+    const draft = { ...hangout, people: [...(hangout.people || [])], friendIds: [...(hangout.friendIds || [])] };
+    friendIds.forEach(friendId => {
+      const friend = socialData.friends.find(item => item.id === friendId);
+      if (!friend) return;
+      if (!draft.friendIds.includes(friendId)) draft.friendIds.push(friendId);
+      if (!draft.people.some(name => friendNameKey(name) === friendNameKey(friend.name))) draft.people.push(friend.name);
+    });
+    applyHangoutFriendLinks(draft);
+    const updated = normalizeHangoutFields({ ...draft, updatedAt: nowISO() });
+    syncLinkedHangoutBlock(updated);
+    return updated;
+  });
+  saveSocialData();
+  refreshSocialBulkUI();
+  showToast("Friends added to hangouts.");
+}
+
+function bulkRemoveFriendsFromHangouts() {
+  const friendIds = new Set(bulkHangoutActionFriendIds);
+  if (!friendIds.size) return showToast("Select friends to remove.");
+  const hangoutIds = new Set(getSelectedHangoutIds());
+  if (!hangoutIds.size) return showToast("Select hangouts first.");
+  const removeNames = new Set(socialData.friends.filter(friend => friendIds.has(friend.id)).map(friend => friendNameKey(friend.name)));
+  socialData.hangouts = socialData.hangouts.map(hangout => {
+    if (!hangoutIds.has(hangout.id)) return hangout;
+    const draft = {
+      ...hangout,
+      friendIds: (hangout.friendIds || []).filter(id => !friendIds.has(id)),
+      people: (hangout.people || []).filter(name => !removeNames.has(friendNameKey(name)))
+    };
+    applyHangoutFriendLinks(draft);
+    const updated = normalizeHangoutFields({ ...draft, updatedAt: nowISO() });
+    syncLinkedHangoutBlock(updated);
+    return updated;
+  });
+  saveSocialData();
+  refreshSocialBulkUI();
+  showToast("Friends removed from hangouts.");
+}
+
+function bulkAddHangoutsToCalendar() {
+  const ids = getSelectedHangoutIds();
+  if (!ids.length) return showToast("Select hangouts first.");
+  let added = 0;
+  let skipped = 0;
+  ids.forEach(id => {
+    const result = addHangoutToCalendar(id);
+    if (result.ok) added += 1;
+    else skipped += 1;
+  });
+  refreshSocialBulkUI();
+  showToast(`${added} added to calendar${skipped ? `, ${skipped} skipped` : ""}.`);
+}
+
+function bulkDeleteIdeas() {
+  const ids = getSelectedIdeaIds();
+  if (!ids.length) return showToast("Select ideas first.");
+  if (!confirm(`Delete ${ids.length} idea${ids.length === 1 ? "" : "s"}?`)) return;
+  const idSet = new Set(ids);
+  socialData.ideas = socialData.ideas.filter(idea => !idSet.has(idea.id));
+  if (idSet.has(editingIdeaId)) editingIdeaId = null;
+  socialBulkSelectedIds = socialBulkSelectedIds.filter(id => !idSet.has(id));
+  saveSocialData();
+  refreshSocialBulkUI();
+  showToast("Ideas deleted.");
+}
+
+function bulkAddIdeasToHangouts() {
+  const ids = getSelectedIdeaIds();
+  if (!ids.length) return showToast("Select ideas first.");
+  const newHangouts = [];
+  let skipped = 0;
+  ids.forEach(id => {
+    if (findHangoutBySourceIdeaId(id)) {
+      skipped += 1;
+      return;
+    }
+    const idea = socialData.ideas.find(item => item.id === id);
+    if (!idea) return;
+    newHangouts.push(createHangoutFromIdea(idea));
+  });
+  if (!newHangouts.length) {
+    showToast(skipped ? "All selected ideas are already in Hangouts." : "No ideas to add.");
+    return;
+  }
+  socialData.hangouts = [...socialData.hangouts, ...newHangouts];
+  highlightHangoutId = newHangouts[0]?.id || highlightHangoutId;
+  saveSocialData();
+  refreshSocialBulkUI();
+  showToast(`${newHangouts.length} hangout${newHangouts.length === 1 ? "" : "s"} created${skipped ? `, ${skipped} skipped` : ""}.`);
+}
+
+function bulkMarkIdeasFavorite(isFavorite) {
+  const idSet = new Set(getSelectedIdeaIds());
+  if (!idSet.size) return showToast("Select ideas first.");
+  socialData.ideas = socialData.ideas.map(idea => (idSet.has(idea.id)
+    ? normalizeIdeaFields({ ...idea, favorite: isFavorite, updatedAt: nowISO() }, socialData.friends)
+    : idea));
+  saveSocialData();
+  refreshSocialBulkUI();
+  showToast(isFavorite ? "Marked as favorite." : "Unmarked favorite.");
+}
+
+function bulkChangeIdeaCategory() {
+  const category = document.getElementById("bulkIdeaCategory")?.value?.trim();
+  if (!category) return showToast("Enter a category.");
+  const idSet = new Set(getSelectedIdeaIds());
+  if (!idSet.size) return showToast("Select ideas first.");
+  socialData.ideas = socialData.ideas.map(idea => (idSet.has(idea.id)
+    ? normalizeIdeaFields({ ...idea, category, updatedAt: nowISO() }, socialData.friends)
+    : idea));
+  saveSocialData();
+  refreshSocialBulkUI();
+  showToast("Category updated.");
 }
 
 function setSocialTab(tab) {
   socialTab = tab;
   socialSearch = "";
+  clearSocialBulkSelection();
   renderSocial();
 }
 
@@ -3281,7 +3694,8 @@ function renderFriendItem(friend) {
   if (editingFriendId === friend.id) {
     return `<div class="item friend-card is-editing">${renderFriendEditForm(friend)}</div>`;
   }
-  return `<div class="item friend-card">
+  return `<div class="item friend-card ${socialBulkSelectMode ? "has-bulk-check" : ""}">
+    ${renderSocialBulkCheckbox(friend.id)}
     <div>
       <strong>${escapeHTML(friend.name)}</strong>
       <span>${escapeHTML(getFriendRelationshipType(friend))} · ${escapeHTML(friend.priority || "Medium")} priority</span>
@@ -3296,7 +3710,7 @@ function renderFriendItem(friend) {
 }
 
 function renderFriends() {
-  document.getElementById("socialBody").innerHTML = `${card("New Friend", `<form onsubmit="saveFriend(event)" class="stack"><input id="friendName" placeholder="Name" required><select id="friendRelationship">${friendRelationshipOptionList("Friend")}</select><input id="friendReminder" type="date"><textarea id="friendNotes" placeholder="Relationship notes"></textarea><button>Add Friend</button></form>`)}${card("Friends", `<div id="socialList">${renderFriendsListContent()}</div>`)}`;
+  document.getElementById("socialBody").innerHTML = `${card("New Friend", `<form onsubmit="saveFriend(event)" class="stack"><input id="friendName" placeholder="Name" required><select id="friendRelationship">${friendRelationshipOptionList("Friend")}</select><input id="friendReminder" type="date"><textarea id="friendNotes" placeholder="Relationship notes"></textarea><button>Add Friend</button></form>`)}${card("Friends", `${renderSocialBulkPanel("Friends")}<div id="socialList">${renderFriendsListContent()}</div>`)}`;
 }
 
 function saveFriend(event) {
@@ -3513,15 +3927,16 @@ function renderHangoutItem(hangout) {
   }
   const people = getHangoutPeopleNames(hangout, socialData.friends);
   const schedule = formatHangoutSchedule(hangout);
-  const completed = parseCompletedFlag(hangout.completed);
+  const status = getHangoutStatus(hangout);
   const onCalendar = Boolean(getBlockByLinkedHangoutId(hangout.id));
   const canAdd = canAddHangoutToCalendar(hangout);
-  return `<div class="item hangout-item ${completed ? "is-done" : ""} ${hangout.id === highlightHangoutId ? "is-highlighted" : ""}">
+  return `<div class="item hangout-item ${status === "Completed" ? "is-done" : ""} ${hangout.id === highlightHangoutId ? "is-highlighted" : ""} ${socialBulkSelectMode ? "has-bulk-check" : ""}">
+    ${renderSocialBulkCheckbox(hangout.id)}
     <div>
       <strong>${escapeHTML(hangout.activity || hangout.title)}</strong>
       <span>${escapeHTML(hangout.date || "No date")}${schedule ? ` · ${escapeHTML(schedule)}` : ""}</span>
       <span>${people.length ? `Friends: ${escapeHTML(people.join(", "))}` : "No friends listed"}${hangout.location ? ` · ${escapeHTML(hangout.location)}` : ""}</span>
-      <span>${completed ? "Completed" : "Planned"}${onCalendar ? " · On calendar" : ""}${hangout.sourceIdeaId ? " · From idea" : ""}</span>
+      <span>${escapeHTML(status)}${onCalendar ? " · On calendar" : ""}${hangout.sourceIdeaId ? " · From idea" : ""}</span>
       ${hangout.notes ? `<p>${escapeHTML(hangout.notes)}</p>` : ""}
     </div>
     <div class="mini-actions">
@@ -3602,7 +4017,7 @@ function renderHangouts() {
     <textarea id="hangoutNotes" placeholder="Notes">${escapeHTML(draft.notes || "")}</textarea>
     <label class="toggle-row"><input id="hangoutCompleted" type="checkbox" ${draft.completed ? "checked" : ""}>Completed</label>
     <button type="submit">Add Hangout</button>
-  </form>`)}${card("Import Calendar Events as Hangouts (Date Range)", renderCalendarImportPanel())}${card("Hangout History", `<div class="button-row hangouts-import-row"><button type="button" class="secondary-btn" onclick="handleAddAllHangoutsToCalendar()">Add all dated hangouts to Calendar</button></div><div id="socialList">${renderHangoutsListContent()}</div>`)}`;
+  </form>`)}${card("Import Calendar Events as Hangouts (Date Range)", renderCalendarImportPanel())}${card("Hangout History", `<div class="button-row hangouts-import-row"><button type="button" class="secondary-btn" onclick="handleAddAllHangoutsToCalendar()">Add all dated hangouts to Calendar</button></div>${renderSocialBulkPanel("Hangouts")}<div id="socialList">${renderHangoutsListContent()}</div>`)}`;
   syncHangoutDuration();
 }
 
@@ -3773,7 +4188,8 @@ function renderIdeaItem(idea) {
   }
   const friends = getIdeaLinkedFriendNames(idea, socialData.friends);
   const hasHangout = Boolean(findHangoutBySourceIdeaId(idea.id));
-  return `<div class="item idea-card ${idea.favorite ? "is-favorite" : ""}">
+  return `<div class="item idea-card ${idea.favorite ? "is-favorite" : ""} ${socialBulkSelectMode ? "has-bulk-check" : ""}">
+    ${renderSocialBulkCheckbox(idea.id)}
     <div>
       <strong>${escapeHTML(idea.title)}</strong>
       <span>Category: ${escapeHTML(idea.category || "General")}${idea.cost ? ` · Cost: ${escapeHTML(idea.cost)}` : ""}</span>
@@ -3843,7 +4259,7 @@ function renderIdeas() {
     <textarea id="ideaNotes" placeholder="Notes">${escapeHTML(draft.notes || "")}</textarea>
     <label class="toggle-row"><input id="ideaFavorite" type="checkbox" ${draft.favorite ? "checked" : ""}>Favorite</label>
     <button type="submit">Add Idea</button>
-  </form>`)}${card("Ideas", `<div id="socialList">${renderIdeasListContent()}</div>`)}`;
+  </form>`)}${card("Ideas", `${renderSocialBulkPanel("Ideas")}<div id="socialList">${renderIdeasListContent()}</div>`)}`;
 }
 
 function saveIdea(event) {
