@@ -4389,11 +4389,46 @@ function deleteIdea(id) {
   renderIdeas();
 }
 
+function triggerRestoreBackupFile() {
+  document.getElementById("restoreBackupFile")?.click();
+}
+
+function triggerPlannerImportFile() {
+  document.getElementById("plannerImportFile")?.click();
+}
+
+function loadFileIntoTextarea(event, textareaId, allowedExtensions = []) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const extension = String(file.name.split(".").pop() || "").toLowerCase();
+  if (allowedExtensions.length && !allowedExtensions.includes(extension)) {
+    alert(`Please choose a ${allowedExtensions.join(" or ")} file.`);
+    event.target.value = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const textarea = document.getElementById(textareaId);
+    if (textarea) textarea.value = String(reader.result || "");
+  };
+  reader.onerror = () => alert("Could not read that file.");
+  reader.readAsText(file);
+  event.target.value = "";
+}
+
+function handleRestoreBackupFile(event) {
+  loadFileIntoTextarea(event, "restoreJson", ["json"]);
+}
+
+function handlePlannerImportFile(event) {
+  loadFileIntoTextarea(event, "allZipImportData", ["json", "csv"]);
+}
+
 function renderDataSettings() {
   document.getElementById("pageRoot").innerHTML = `
     ${card("Data Management", `<div class="stats-grid"><div><strong>${systemsData.tasks.length}</strong><span>Tasks</span></div><div><strong>${scheduleData.blocks.length}</strong><span>Blocks</span></div><div><strong>${systemsData.habits.length}</strong><span>Habits</span></div><div><strong>${systemsData.logs.length}</strong><span>Logs</span></div></div><p class="muted-text">Download all Flow Planner data as a JSON backup.</p><div class="button-row"><button onclick="downloadBackup()">Export Full Backup</button><button class="secondary-btn" onclick="downloadBackup()">Download Backup</button></div>`)}
-    ${card("Restore Full Backup", `<p class="muted-text">Paste a full Flow Planner backup JSON to restore your data.</p><textarea id="restoreJson" rows="8" placeholder="Paste full backup JSON"></textarea><button onclick="restoreBackup()">Restore Backup</button>`)}
-    ${card("Import Planner Data", `<p class="muted-text">Paste simple JSON arrays or CSV rows to preview and add tasks, calendar blocks, habits, or goals.</p><textarea id="allZipImportData" rows="5" placeholder="Paste JSON array or CSV"></textarea><button onclick="flowImportExport.handleAllZipImport()">Preview Import</button><div id="importPreview" class="import-preview"></div>`)}
+    ${card("Restore Full Backup", `<p class="muted-text">Paste a full Flow Planner backup JSON to restore your data, or choose a backup file.</p><div class="data-file-row"><button type="button" class="secondary-btn" onclick="triggerRestoreBackupFile()">Choose Backup File</button><input id="restoreBackupFile" type="file" accept=".json,application/json" hidden onchange="handleRestoreBackupFile(event)"></div><textarea id="restoreJson" rows="8" placeholder="Paste full backup JSON"></textarea><button onclick="restoreBackup()">Restore Backup</button>`)}
+    ${card("Import Planner Data", `<p class="muted-text">Paste simple JSON arrays or CSV rows to preview and add tasks, calendar blocks, habits, or goals.</p><div class="data-file-row"><button type="button" class="secondary-btn" onclick="triggerPlannerImportFile()">Choose Import File</button><input id="plannerImportFile" type="file" accept=".json,.csv,application/json,text/csv" hidden onchange="handlePlannerImportFile(event)"></div><textarea id="allZipImportData" rows="5" placeholder="Paste JSON array or CSV"></textarea><button onclick="flowImportExport.handleAllZipImport()">Preview Import</button><div id="importPreview" class="import-preview"></div>`)}
     ${card("Custom Dropdown Options", `<label>Task priorities</label><input id="priorityOptions" value="${escapeHTML((allZipCustomOptions.taskPriorities || []).join(", "))}"><label>Habit categories</label><input id="habitOptions" value="${escapeHTML((allZipCustomOptions.habitCategories || []).join(", "))}"><label>Goal categories</label><input id="goalOptions" value="${escapeHTML((allZipCustomOptions.goalCategories || []).join(", "))}"><label>Goal types</label><input id="goalTypeOptions" value="${escapeHTML((allZipCustomOptions.goalTypes || DEFAULT_GOAL_TYPES).join(", "))}"><label>Goal units</label><input id="goalUnitOptions" value="${escapeHTML((allZipCustomOptions.goalUnits || DEFAULT_GOAL_UNITS).join(", "))}"><label>Log units</label><input id="logUnitOptions" value="${escapeHTML((allZipCustomOptions.logUnits || DEFAULT_LOG_UNITS).join(", "))}"><button onclick="saveCustomOptions()">Save Options</button>`)}
   `;
 }
@@ -4409,7 +4444,7 @@ function downloadBackup() {
 }
 
 function restoreBackup() {
-  if (!restoreJson.value.trim()) return alert("Paste JSON first.");
+  if (!restoreJson.value.trim()) return alert("Paste JSON or choose a backup file first.");
   DataService.importAllData(restoreJson.value.trim());
   alert("Restore complete. Old data was migrated into the simplified structure.");
 }
